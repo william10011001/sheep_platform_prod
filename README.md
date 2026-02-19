@@ -166,3 +166,6 @@ Streamlit 適合「內部工具 / 操作台」，不是理想的「公開網站�
 - Nginx 起不來：通常是 conf 裡 domain 沒改、或 HTTPS 配置啟用但 cert 還沒申請。
 - /api/docs 壞掉：你如果只要 worker 用 API，不需要 docs；要 docs 的話請確保 `SHEEP_API_ROOT_PATH=/api`（compose 已設定）。
 - Streamlit 靜態資源 404：代表 baseUrlPath 或 Nginx proxy_pass 設錯；這包已對齊（Streamlit baseUrlPath=app + Nginx 不剝 prefix）。
+
+Auto deploy test: 2026-02-19T22:22:42
+
