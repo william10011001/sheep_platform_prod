@@ -84,7 +84,7 @@ def verify_password(password: str, pw_hash: str) -> bool:
         return False
 
 
-USERNAME_RE = re.compile(r"^[a-zA-Z0-9_]{3,32}$")
+USERNAME_RE = re.compile(r"^[^\r\n]{1,64}$")
 
 
 def normalize_username(username: str) -> str:
@@ -93,32 +93,47 @@ def normalize_username(username: str) -> str:
 
 def validate_username(username: str) -> Tuple[bool, str]:
     u = normalize_username(username)
+    if not u:
+        return False, "帳號不可為空。"
+    if len(u) > 64:
+        return False, "帳號長度上限為 64 字元。"
     if not USERNAME_RE.fullmatch(u):
-        return False, "帳號格式需為 3-32 字元，僅允許英數與底線。"
+        return False, "帳號格式不支援換行字元。"
     return True, ""
 
 
 def validate_password_strength(password: str) -> Tuple[bool, str]:
     pw = str(password or "")
-    if len(pw) < 10:
-        return False, "密碼長度至少 10 字元。"
-    if pw.lower() == pw or pw.upper() == pw:
-        return False, "密碼需包含大小寫字母。"
-    if not any(ch.isdigit() for ch in pw):
-        return False, "密碼需包含數字。"
+    if len(pw) < 6:
+        return False, "密碼長度至少 6 字元。"
+    has_alpha = any(ch.isalpha() for ch in pw)
+    has_digit = any(ch.isdigit() for ch in pw)
+    if not (has_alpha and has_digit):
+        return False, "密碼需同時包含英文字母與數字。"
     return True, ""
 
 
-def validate_wallet_address(addr: str) -> Tuple[bool, str]:
+def validate_wallet_address(addr: str, chain: str = "") -> Tuple[bool, str]:
     a = str(addr or "").strip()
+    c = str(chain or "").strip().upper()
     if not a:
         return False, "地址不可為空。"
 
-    # Minimal format checks for common USDT networks; do not enforce network correctness here
-    if a.startswith("0x") and len(a) == 42 and re.fullmatch(r"0x[0-9a-fA-F]{40}", a):
+    # TRC20: Tron base58 address, usually starts with 'T'
+    is_trc = bool(a.startswith("T") and 26 <= len(a) <= 36 and re.fullmatch(r"[1-9A-HJ-NP-Za-km-z]+", a))
+    # EVM chains (ERC20/BEP20): 0x + 40 hex chars
+    is_evm = bool(a.startswith("0x") and len(a) == 42 and re.fullmatch(r"0x[0-9a-fA-F]{40}", a))
+
+    if c in ("TRC20", "TRON"):
+        return (True, "") if is_trc else (False, "地址格式與所選鏈不符。")
+    if c in ("BEP20", "BSC", "ERC20", "ETH"):
+        return (True, "") if is_evm else (False, "地址格式與所選鏈不符。")
+
+    # 未指定鏈：允許常見格式
+    if is_trc or is_evm:
         return True, ""
-    if a.startswith("T") and 26 <= len(a) <= 36 and re.fullmatch(r"[1-9A-HJ-NP-Za-km-z]+", a):
-        return True, ""
+
+    # Fallback: basic sanity check for alphanumeric addresses
     if 26 <= len(a) <= 64 and re.fullmatch(r"[0-9A-Za-z]+", a):
         return True, ""
     return False, "地址格式不符合常見規則。"

@@ -163,6 +163,8 @@ def init_db() -> None:
             except Exception as e:
                 raise RuntimeError("db_schema_missing: run `alembic upgrade head` before starting the app") from e
 
+            _ensure_user_run_enabled_column(conn)
+            _ensure_wallet_chain_column(conn)
             _init_defaults(conn)
             _get_or_create_system_user_id(conn)
             conn.commit()
@@ -185,6 +187,7 @@ def init_db() -> None:
                     username TEXT NOT NULL UNIQUE,
                     password_hash TEXT NOT NULL,
                     role TEXT NOT NULL CHECK(role IN ('user','admin')),
+                    wallet_chain TEXT NOT NULL DEFAULT 'TRC20',
                     wallet_address_enc BLOB,
                     created_at TEXT NOT NULL,
                     last_login_at TEXT,
@@ -401,6 +404,7 @@ CREATE INDEX IF NOT EXISTS idx_tasks_user_cycle_status ON tasks(user_id, cycle_i
             )
 
             _ensure_user_run_enabled_column(conn)
+            _ensure_wallet_chain_column(conn)
             _init_defaults(conn)
             _ensure_tasks_columns(conn)
             _get_or_create_system_user_id(conn)
@@ -427,6 +431,25 @@ def _ensure_user_run_enabled_column(conn: Any) -> None:
         return
 
 
+def _ensure_wallet_chain_column(conn: Any) -> None:
+    try:
+        if _DB_KIND == "sqlite":
+            cols = [r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()]
+            if "wallet_chain" not in cols:
+                conn.execute("ALTER TABLE users ADD COLUMN wallet_chain TEXT NOT NULL DEFAULT 'TRC20'")
+                conn.commit()
+            return
+
+        row = conn.execute(
+            "SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'wallet_chain' LIMIT 1"
+        ).fetchone()
+        if not row:
+            conn.execute("ALTER TABLE users ADD COLUMN wallet_chain TEXT NOT NULL DEFAULT 'TRC20'")
+            conn.commit()
+    except Exception:
+        return
+
+
 def _init_db_postgres() -> None:
     conn = _conn()
     try:
@@ -443,6 +466,7 @@ def _init_db_postgres() -> None:
                 username TEXT NOT NULL UNIQUE,
                 password_hash TEXT NOT NULL,
                 role TEXT NOT NULL CHECK(role IN ('user','admin')),
+                wallet_chain TEXT NOT NULL DEFAULT 'TRC20',
                 wallet_address_enc BYTEA,
                 created_at TEXT NOT NULL,
                 last_login_at TEXT,
@@ -638,6 +662,7 @@ CREATE INDEX IF NOT EXISTS idx_tasks_user_cycle_status ON tasks(user_id, cycle_i
             """
         )
         _ensure_user_run_enabled_column(conn)
+        _ensure_wallet_chain_column(conn)
         _init_defaults(conn)
         _ensure_tasks_columns(conn)
         _get_or_create_system_user_id(conn)
@@ -800,12 +825,96 @@ def set_setting(conn: sqlite3.Connection, key: str, value: Any) -> None:
     )
 
 
-def create_user(username: str, password_hash: str, role: str, wallet_address: str) -> int:
+def _user_pref_key_pool_ids(user_id: int) -> str:
+    return f"user_pref_pool_ids:{int(user_id)}"
+
+
+def get_user_pref_pool_ids(user_id: int) -> List[int]:
+    conn = _conn()
+    try:
+        raw = get_setting(conn, _user_pref_key_pool_ids(int(user_id)), [])
+    finally:
+        conn.close()
+
+    out: List[int] = []
+    if isinstance(raw, list):
+        for x in raw:
+            try:
+                out.append(int(x))
+            except Exception:
+                pass
+    seen = set()
+    uniq: List[int] = []
+    for x in out:
+        if x in seen:
+            continue
+        seen.add(x)
+        uniq.append(x)
+    return uniq
+
+
+def set_user_pref_pool_ids(user_id: int, pool_ids: List[int]) -> None:
+    ids: List[int] = []
+    for x in pool_ids or []:
+        try:
+            ids.append(int(x))
+        except Exception:
+            pass
+    seen = set()
+    uniq: List[int] = []
+    for x in ids:
+        if x in seen:
+            continue
+        seen.add(x)
+        uniq.append(x)
+
+    conn = _conn()
+    try:
+        set_setting(conn, _user_pref_key_pool_ids(int(user_id)), uniq)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_assigned_tasks_for_user_not_in_pools(user_id: int, cycle_id: int, keep_pool_ids: List[int]) -> int:
+    user_id = int(user_id)
+    cycle_id = int(cycle_id)
+    keep_ids: List[int] = []
+    for x in keep_pool_ids or []:
+        try:
+            keep_ids.append(int(x))
+        except Exception:
+            pass
+    keep_ids = [x for x in keep_ids if x > 0]
+
+    conn = _conn()
+    try:
+        if keep_ids:
+            placeholders = ",".join(["?"] * len(keep_ids))
+            sql = f"DELETE FROM tasks WHERE user_id = ? AND cycle_id = ? AND status = 'assigned' AND pool_id NOT IN ({placeholders})"
+            params = (int(user_id), int(cycle_id), *[int(x) for x in keep_ids])
+        else:
+            sql = "DELETE FROM tasks WHERE user_id = ? AND cycle_id = ? AND status = 'assigned'"
+            params = (int(user_id), int(cycle_id))
+
+        cur = conn.execute(sql, params)
+        conn.commit()
+        return int(cur.rowcount or 0)
+    finally:
+        conn.close()
+
+
+def create_user(username: str, password_hash: str, role: str, wallet_address: str, wallet_chain: str = "TRC20") -> int:
     now = utc_now_iso()
     conn = _conn()
     try:
-        sql = "INSERT INTO users(username, password_hash, role, wallet_address_enc, created_at) VALUES(?,?,?,?,?)"
-        uid = _insert_id(conn, sql, (username, password_hash, role, encrypt_text(wallet_address), now))
+        chain = str(wallet_chain or "TRC20").strip().upper()[:16] or "TRC20"
+        try:
+            sql = "INSERT INTO users(username, password_hash, role, wallet_chain, wallet_address_enc, created_at) VALUES(?,?,?,?,?,?)"
+            uid = _insert_id(conn, sql, (username, password_hash, role, chain, encrypt_text(wallet_address), now))
+        except Exception:
+            sql = "INSERT INTO users(username, password_hash, role, wallet_address_enc, created_at) VALUES(?,?,?,?,?)"
+            uid = _insert_id(conn, sql, (username, password_hash, role, encrypt_text(wallet_address), now))
         conn.commit()
         return int(uid)
     finally:
@@ -1733,24 +1842,51 @@ def write_audit_log(actor_user_id: Optional[int], action: str, detail: Dict[str,
         conn.close()
 
 
-def get_wallet_address(user_id: int) -> Optional[str]:
+def get_wallet_info(user_id: int) -> Dict[str, str]:
     conn = _conn()
     try:
-        row = conn.execute("SELECT wallet_address_enc FROM users WHERE id = ?", (int(user_id),)).fetchone()
-        if not row:
-            return None
-        return decrypt_text(row["wallet_address_enc"])
+        try:
+            row = conn.execute("SELECT wallet_chain, wallet_address_enc FROM users WHERE id = ?", (int(user_id),)).fetchone()
+            if not row:
+                return {"chain": "TRC20", "address": ""}
+            chain = str(row.get("wallet_chain") or "TRC20").strip().upper() if isinstance(row, dict) else "TRC20"
+            addr = decrypt_text(row["wallet_address_enc"]) if isinstance(row, dict) else decrypt_text(row[1])
+            return {"chain": chain or "TRC20", "address": addr or ""}
+        except Exception:
+            row = conn.execute("SELECT wallet_address_enc FROM users WHERE id = ?", (int(user_id),)).fetchone()
+            if not row:
+                return {"chain": "TRC20", "address": ""}
+            addr = decrypt_text(row["wallet_address_enc"]) if isinstance(row, dict) else decrypt_text(row[0])
+            return {"chain": "TRC20", "address": addr or ""}
     finally:
         conn.close()
 
 
-def set_wallet_address(user_id: int, wallet_address: str) -> None:
+def get_wallet_address(user_id: int) -> Optional[str]:
+    info = get_wallet_info(int(user_id))
+    return info.get("address") or None
+
+
+def set_wallet_address(user_id: int, wallet_address: str, wallet_chain: str = "") -> None:
+    chain = str(wallet_chain or "").strip().upper()[:16]
     conn = _conn()
     try:
-        conn.execute(
-            "UPDATE users SET wallet_address_enc = ? WHERE id = ?",
-            (encrypt_text(wallet_address), int(user_id)),
-        )
+        if chain:
+            try:
+                conn.execute(
+                    "UPDATE users SET wallet_chain = ?, wallet_address_enc = ? WHERE id = ?",
+                    (chain, encrypt_text(wallet_address), int(user_id)),
+                )
+            except Exception:
+                conn.execute(
+                    "UPDATE users SET wallet_address_enc = ? WHERE id = ?",
+                    (encrypt_text(wallet_address), int(user_id)),
+                )
+        else:
+            conn.execute(
+                "UPDATE users SET wallet_address_enc = ? WHERE id = ?",
+                (encrypt_text(wallet_address), int(user_id)),
+            )
         conn.commit()
     finally:
         conn.close()
