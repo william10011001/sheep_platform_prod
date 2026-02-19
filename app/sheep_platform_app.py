@@ -1,7 +1,9 @@
 import json
 import os
 import random
+import re
 import time
+import math
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -77,7 +79,7 @@ from sheep_platform_jobs import JOB_MANAGER, JobManager
 from sheep_platform_audit import audit_candidate
 
 
-APP_TITLE = "羊肉爐挖礦平台"
+APP_TITLE = "羊肉爐挖礦分潤任務平台"
 
 
 def _utc_now() -> datetime:
@@ -89,6 +91,193 @@ def _issue_api_token(user: Dict[str, Any], ttl_seconds: int = 86400, name: str =
     NOTE: Raw token is only shown once; store it securely on the worker side.
     """
     return db.create_api_token(int(user["id"]), ttl_seconds=int(ttl_seconds), name=str(name or "worker"))
+
+
+_REMEMBER_COOKIE_NAME = "sheep_remember"
+_REMEMBER_TOKEN_NAME = "remember"
+_REMEMBER_TTL_DAYS = 90
+
+
+def _get_ws_headers() -> Dict[str, str]:
+    try:
+        from streamlit.web.server.websocket_headers import _get_websocket_headers  # type: ignore
+
+        h = _get_websocket_headers()
+        if not h:
+            return {}
+        return {str(k): str(v) for k, v in dict(h).items()}
+    except Exception:
+        return {}
+
+
+def _parse_cookie_header(cookie_header: str) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    raw = str(cookie_header or "").strip()
+    if not raw:
+        return out
+    parts = raw.split(";")
+    for p in parts:
+        s = p.strip()
+        if not s or "=" not in s:
+            continue
+        k, v = s.split("=", 1)
+        k = k.strip()
+        v = v.strip()
+        if not k:
+            continue
+        out[k] = v
+    return out
+
+
+def _get_cookie(name: str) -> str:
+    headers = _get_ws_headers()
+    ck = headers.get("Cookie") or headers.get("cookie") or ""
+    cookies = _parse_cookie_header(ck)
+    return str(cookies.get(str(name)) or "")
+
+
+def _queue_set_cookie(name: str, value: str, max_age_s: int) -> None:
+    st.session_state["_cookie_op"] = {"op": "set", "name": str(name), "value": str(value), "max_age_s": int(max_age_s)}
+
+
+def _queue_clear_cookie(name: str) -> None:
+    st.session_state["_cookie_op"] = {"op": "clear", "name": str(name)}
+
+
+def _apply_cookie_ops() -> None:
+    op = st.session_state.get("_cookie_op")
+    if not isinstance(op, dict):
+        return
+    try:
+        kind = str(op.get("op") or "")
+        name = str(op.get("name") or "")
+        if not name:
+            return
+
+        if kind == "set":
+            val = str(op.get("value") or "")
+            max_age_s = int(op.get("max_age_s") or 0)
+            js = f"""
+<script>
+(function() {{
+  try {{
+    var name = {json.dumps(name)};
+    var value = {json.dumps(val)};
+    var maxAge = {int(max_age_s)};
+    var cookie = name + "=" + value + "; Path=/; Max-Age=" + maxAge + "; SameSite=Lax";
+    if (window.location && window.location.protocol === "https:") {{
+      cookie += "; Secure";
+    }}
+    document.cookie = cookie;
+  }} catch (e) {{}}
+}})();
+</script>
+"""
+            st.components.v1.html(js, height=0)
+        elif kind == "clear":
+            js = f"""
+<script>
+(function() {{
+  try {{
+    var name = {json.dumps(name)};
+    var cookie = name + "=; Path=/; Max-Age=0; SameSite=Lax";
+    if (window.location && window.location.protocol === "https:") {{
+      cookie += "; Secure";
+    }}
+    document.cookie = cookie;
+  }} catch (e) {{}}
+}})();
+</script>
+"""
+            st.components.v1.html(js, height=0)
+    finally:
+        try:
+            del st.session_state["_cookie_op"]
+        except Exception:
+            pass
+
+
+def _try_auto_login_from_cookie() -> bool:
+    if st.session_state.get("auth_user_id") is not None:
+        return True
+
+    raw = _get_cookie(_REMEMBER_COOKIE_NAME)
+    raw = str(raw or "").strip()
+    if not raw:
+        return False
+
+    try:
+        res = db.verify_api_token(raw)
+    except Exception:
+        res = None
+
+    if not res or not isinstance(res, dict):
+        return False
+
+    u = res.get("user")
+    t = res.get("token")
+    if not isinstance(u, dict) or not isinstance(t, dict):
+        return False
+
+    try:
+        db.touch_api_token(int(t.get("id") or 0))
+    except Exception:
+        pass
+
+    _set_session_user(u)
+    st.session_state["auth_remember_token_id"] = int(t.get("id") or 0)
+    return True
+
+
+def _ua_is_mobile(user_agent: str) -> bool:
+    ua = str(user_agent or "").lower()
+    if not ua:
+        return False
+    keys = ["iphone", "ipad", "android", "mobile", "ipod", "windows phone"]
+    return any(k in ua for k in keys)
+
+
+def _ua_is_inapp_browser(user_agent: str) -> bool:
+    ua = str(user_agent or "").lower()
+    if not ua:
+        return False
+    keys = ["line", "instagram", "fbav", "fb_iab", "fban", "micromessenger"]
+    return any(k in ua for k in keys)
+
+
+def _inject_meta(title: str, description: str) -> None:
+    t = str(title or "").strip()
+    d = str(description or "").strip()
+    if not t:
+        return
+    js = f"""
+<script>
+(function() {{
+  try {{
+    document.title = {json.dumps(t)};
+    var head = document.getElementsByTagName('head')[0];
+    function upsert(name, attr, value) {{
+      var sel = attr + "='" + name + "'";
+      var el = head.querySelector("meta[" + sel + "]");
+      if (!el) {{
+        el = document.createElement('meta');
+        el.setAttribute(attr, name);
+        head.appendChild(el);
+      }}
+      el.setAttribute('content', value);
+    }}
+    if ({json.dumps(d)}.length > 0) {{
+      upsert('description', 'name', {json.dumps(d)});
+      upsert('og:description', 'property', {json.dumps(d)});
+      upsert('twitter:description', 'name', {json.dumps(d)});
+    }}
+    upsert('og:title', 'property', {json.dumps(t)});
+    upsert('twitter:title', 'name', {json.dumps(t)});
+  }} catch (e) {{}}
+}})();
+</script>
+"""
+    st.components.v1.html(js, height=0)
 
 
 
@@ -209,6 +398,28 @@ def _style() -> None:
           border-color: rgba(120,180,255,0.55) !important;
           box-shadow: 0 0 0 2px rgba(120,180,255,0.25) !important;
         }
+
+        div[data-baseweb="input"] input,
+        div[data-baseweb="textarea"] textarea {
+          -webkit-text-fill-color: var(--text) !important;
+          caret-color: var(--text) !important;
+        }
+
+        div[data-baseweb="input"] input::placeholder,
+        div[data-baseweb="textarea"] textarea::placeholder {
+          color: rgba(255,255,255,0.40) !important;
+          -webkit-text-fill-color: rgba(255,255,255,0.40) !important;
+          opacity: 1 !important;
+        }
+
+        input:-webkit-autofill,
+        textarea:-webkit-autofill,
+        select:-webkit-autofill {
+          -webkit-text-fill-color: var(--text) !important;
+          transition: background-color 99999s ease-in-out 0s;
+          box-shadow: 0 0 0px 1000px rgba(255,255,255,0.04) inset !important;
+          border: 1px solid rgba(255,255,255,0.14) !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -312,6 +523,19 @@ def _set_session_user(user: Dict[str, Any]) -> None:
 
 
 def _logout() -> None:
+    # Revoke remember token if present
+    try:
+        tid = int(st.session_state.get("auth_remember_token_id") or 0)
+    except Exception:
+        tid = 0
+    if tid > 0:
+        try:
+            db.revoke_api_token(int(tid))
+        except Exception:
+            pass
+
+    _queue_clear_cookie(_REMEMBER_COOKIE_NAME)
+
     # Clear auth + per-user runtime state
     for k in list(st.session_state.keys()):
         if (
@@ -337,8 +561,6 @@ def _login_form() -> None:
     st.markdown(f"### {APP_TITLE}")
     st.markdown('<div class="small-muted">登入</div>', unsafe_allow_html=True)
 
-    # Slider Captcha (no external dependency, works even without Cloudflare).
-    # This is NOT as strong as Turnstile, but it blocks a lot of low-effort credential stuffing bots.
     captcha_enabled = (os.environ.get("SHEEP_CAPTCHA", "1").strip() != "0")
     try:
         captcha_min_s = float(os.environ.get("SHEEP_CAPTCHA_MIN_S", "0.8") or 0.8)
@@ -356,6 +578,7 @@ def _login_form() -> None:
     with st.form("login_form", clear_on_submit=False):
         username = st.text_input("帳號", value="", autocomplete="username")
         password = st.text_input("密碼", value="", type="password", autocomplete="current-password")
+        remember = st.checkbox("在本裝置記住我", value=False, key="login_remember_me")
 
         if captcha_enabled:
             st.markdown('<div class="small-muted">滑動驗證碼：把滑桿拖到最右邊（100）</div>', unsafe_allow_html=True)
@@ -369,12 +592,12 @@ def _login_form() -> None:
     if captcha_enabled:
         dt = float(time.time() - float(st.session_state.get("captcha_t0") or time.time()))
         if int(st.session_state.get(captcha_key) or 0) != 100:
-            st.error("滑動驗證碼未通過（請拖到 100）。")
+            st.error("滑動驗證碼未通過。")
             st.session_state["captcha_nonce"] = random.randint(1000, 9999)
             st.session_state["captcha_t0"] = time.time()
             return
         if dt < captcha_min_s:
-            st.error("滑動太快了 重新拖一次。")
+            st.error("滑動時間過短。")
             st.session_state["captcha_nonce"] = random.randint(1000, 9999)
             st.session_state["captcha_t0"] = time.time()
             return
@@ -400,6 +623,17 @@ def _login_form() -> None:
 
     db.update_user_login_state(int(user["id"]), success=True)
     _set_session_user(user)
+
+    if bool(remember):
+        ttl_days = int(_REMEMBER_TTL_DAYS)
+        tok = _issue_api_token(user, ttl_seconds=int(ttl_days) * 86400, name=_REMEMBER_TOKEN_NAME)
+        raw = str(tok.get("token") or "")
+        max_age_s = int(ttl_days) * 86400
+        _queue_set_cookie(_REMEMBER_COOKIE_NAME, raw, max_age_s)
+        st.session_state["auth_remember_token_id"] = int(tok.get("token_id") or 0)
+    else:
+        _queue_clear_cookie(_REMEMBER_COOKIE_NAME)
+
     st.success("登入成功。")
     st.rerun()
 
@@ -409,53 +643,173 @@ def _register_form() -> None:
         username = st.text_input("帳號", value="")
         password = st.text_input("密碼", value="", type="password")
         password2 = st.text_input("確認密碼", value="", type="password")
+
+        chain = st.selectbox("分潤鏈", options=["TRC20", "BEP20", "ERC20"], index=0)
         wallet = st.text_input("分潤地址", value="")
-        submitted = st.form_submit_button("建立帳號")
+
+        remember = st.checkbox("在本裝置記住我", value=False, key="register_remember_me")
+        submitted = st.form_submit_button("建立帳號並登入")
 
     if not submitted:
         return
 
-    ok, msg = validate_username(username)
-    if not ok:
-        st.error(msg)
+    uname = normalize_username(username)
+    if not uname:
+        st.error("帳號不可為空。")
+        return
+    if len(uname) > 64:
+        st.error("帳號長度上限為 64 字元。")
+        return
+    if any(ch in uname for ch in ["\r", "\n"]):
+        st.error("帳號不可包含換行字元。")
         return
 
-    ok, msg = validate_password_strength(password)
-    if not ok:
-        st.error(msg)
+    pw = str(password or "")
+    if len(pw) < 6:
+        st.error("密碼長度至少 6 字元。")
         return
-
-    if password != password2:
+    has_alpha = any(ch.isalpha() for ch in pw)
+    has_digit = any(ch.isdigit() for ch in pw)
+    if not (has_alpha and has_digit):
+        st.error("密碼需同時包含英文字母與數字。")
+        return
+    if pw != str(password2 or ""):
         st.error("密碼不一致。")
         return
 
-    ok, msg = validate_wallet_address(wallet)
-    if not ok:
-        st.error(msg)
-        return
+    chain_u = str(chain or "TRC20").strip().upper()
+    wallet_s = str(wallet or "").strip()
 
-    uname = normalize_username(username)
+    if chain_u in ("TRC20", "TRON"):
+        ok = bool(wallet_s.startswith("T") and 26 <= len(wallet_s) <= 36 and re.fullmatch(r"[1-9A-HJ-NP-Za-km-z]+", wallet_s))
+        if not ok:
+            st.error("分潤地址格式與所選鏈不符。")
+            return
+    elif chain_u in ("BEP20", "BSC", "ERC20", "ETH"):
+        ok = bool(wallet_s.startswith("0x") and len(wallet_s) == 42 and re.fullmatch(r"0x[0-9a-fA-F]{40}", wallet_s))
+        if not ok:
+            st.error("分潤地址格式與所選鏈不符。")
+            return
+    else:
+        ok, msg = validate_wallet_address(wallet_s)
+        if not ok:
+            st.error(msg)
+            return
+
     if db.get_user_by_username(uname):
         st.error("帳號已存在。")
         return
 
     try:
-        uid = db.create_user(username=uname, password_hash=hash_password(password), role="user", wallet_address=wallet)
+        uid = db.create_user(username=uname, password_hash=hash_password(pw), role="user", wallet_address=wallet_s)
         db.write_audit_log(uid, "register", {"username": uname})
-        st.success("帳號已建立。")
-    except Exception as e:
+    except Exception:
         st.error("建立失敗。")
+        return
+
+    try:
+        conn = db._conn()
+        try:
+            db.set_setting(conn, f"user_wallet_chain:{int(uid)}", chain_u)
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        pass
+
+    user = db.get_user_by_id(int(uid))
+    if not user:
+        st.success("帳號已建立。")
+        return
+
+    _set_session_user(user)
+
+    if bool(remember):
+        ttl_days = int(_REMEMBER_TTL_DAYS)
+        tok = _issue_api_token(user, ttl_seconds=int(ttl_days) * 86400, name=_REMEMBER_TOKEN_NAME)
+        raw = str(tok.get("token") or "")
+        max_age_s = int(ttl_days) * 86400
+        _queue_set_cookie(_REMEMBER_COOKIE_NAME, raw, max_age_s)
+        st.session_state["auth_remember_token_id"] = int(tok.get("token_id") or 0)
+    else:
+        _queue_clear_cookie(_REMEMBER_COOKIE_NAME)
+
+    st.success("帳號已建立並完成登入。")
+    st.rerun()
 
 
 def _page_auth() -> None:
+    headers = _get_ws_headers()
+    ua = str(headers.get("User-Agent") or headers.get("user-agent") or "")
+
+    if _ua_is_mobile(ua):
+        st.warning("偵測到行動裝置。挖礦計算量大且背景執行不穩定，建議改用電腦。")
+
+    if _ua_is_inapp_browser(ua):
+        st.info("偵測到應用程式內建瀏覽器。若遇到登入框顯示異常，請改用系統瀏覽器開啟。")
+
+    if "auth_onboarding_open" not in st.session_state:
+        st.session_state["auth_onboarding_open"] = True
+
+    st.markdown('<div class="card">', unsafe_allow_html=True)
+    top_l, top_r = st.columns([1.0, 0.25])
+    with top_l:
+        st.markdown("### 流程與操作要點")
+        st.markdown('<div class="small-muted">請先理解合作模式、代價與風險，再決定是否註冊或登入。</div>', unsafe_allow_html=True)
+    with top_r:
+        if bool(st.session_state.get("auth_onboarding_open")):
+            if st.button("隱藏", key="onboarding_hide"):
+                st.session_state["auth_onboarding_open"] = False
+                st.rerun()
+        else:
+            if st.button("顯示", key="onboarding_show"):
+                st.session_state["auth_onboarding_open"] = True
+                st.rerun()
+
+    if bool(st.session_state.get("auth_onboarding_open")):
+        st.markdown("#### 亮點")
+        st.write("以分散算力進行參數搜尋，找到達標的參數組合後提交；平台統一審核、納入策略池，並依規則進行週期結算。")
+
+        st.markdown("#### 合作模式")
+        st.write("平台提供策略框架、任務分割與結果審核。參與者提供本機算力執行任務。任務完成後產生候選結果，提交後進入審核流程。")
+
+        st.markdown("#### 使用代價")
+        st.write("會消耗 CPU 或 GPU、增加耗電與風扇噪音。長時間運行建議使用電腦並保持網路穩定。")
+
+        st.markdown("#### 分潤機制")
+        st.write("結算以 USDT 計算。已核准策略在指定期間的實盤結果，依平台設定的配置比例與結算規則分配。可能出現當週無發放或發放為 0 的情況。")
+
+        st.markdown("#### 風險與注意事項")
+        st.write("實盤有風險，不保證收益。策略可能因市場變化失效而被停用或淘汰。分潤地址填寫錯誤將導致資產無法追回。")
+
+        video_path = ""
+        try:
+            conn = db._conn()
+            try:
+                video_path = str(db.get_setting(conn, "tutorial_video_path", "") or "").strip()
+            finally:
+                conn.close()
+        except Exception:
+            video_path = ""
+
+        if video_path and os.path.exists(video_path):
+            try:
+                data = open(video_path, "rb").read()
+                st.markdown("#### 教學影片")
+                st.video(data)
+            except Exception:
+                pass
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
     col1, col2 = st.columns([1, 1])
     with col1:
         st.markdown('<div class="card">', unsafe_allow_html=True)
-        _login_form()
+        _register_form()
         st.markdown("</div>", unsafe_allow_html=True)
     with col2:
         st.markdown('<div class="card">', unsafe_allow_html=True)
-        _register_form()
+        _login_form()
         st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -1938,6 +2292,11 @@ def main() -> None:
     _style()
     _bootstrap()
 
+    _apply_cookie_ops()
+    _inject_meta(APP_TITLE, "分散算力挖礦與週結算分潤任務平台")
+
+    _try_auto_login_from_cookie()
+
     user = _session_user()
     job_mgr = JOB_MANAGER
 
@@ -1945,17 +2304,35 @@ def main() -> None:
         _page_auth()
         return
 
+    headers = _get_ws_headers()
+    ua = str(headers.get("User-Agent") or headers.get("user-agent") or "")
+    if _ua_is_mobile(ua):
+        st.warning("偵測到行動裝置。挖礦計算量大且背景執行不穩定，建議改用電腦。")
+
     role = str(user.get("role") or "user")
+
+    pages = ["新手教學", "控制台", "任務", "提交", "結算"] + (["管理"] if role == "admin" else [])
+    if "nav_page" not in st.session_state:
+        st.session_state["nav_page"] = pages[0]
 
     with st.sidebar:
         st.markdown(f"### {APP_TITLE}")
         st.markdown(f'<div class="small-muted">{user["username"]} · {role}</div>', unsafe_allow_html=True)
         st.divider()
-        page = st.radio("導航", options=["新手教學", "控制台", "任務", "提交", "結算"] + (["管理"] if role == "admin" else []), index=0)
+
+        st.markdown('<div class="small-muted">導航</div>', unsafe_allow_html=True)
+        for p in pages:
+            if st.button(p, key=f"nav_{p}"):
+                st.session_state["nav_page"] = p
+                st.rerun()
+
         st.divider()
+        st.markdown(f'<div class="small-muted">目前頁面：{st.session_state.get("nav_page")}</div>', unsafe_allow_html=True)
         if st.button("登出"):
             _logout()
             st.rerun()
+
+    page = str(st.session_state.get("nav_page") or pages[0])
 
     if page == "新手教學":
         _page_tutorial(user)
