@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>羊肉爐任務平台</title>
+  <meta name="description" content="羊肉爐團隊的任務發放與回傳平台：FastAPI + Streamlit + PostgreSQL。" />
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="羊肉爐任務平台" />
+  <meta property="og:description" content="FastAPI + Streamlit + PostgreSQL｜安全 · 可擴充 · 可上線" />
+  <!-- IMPORTANT: replace with your real domain for best compatibility -->
+  <meta property="og:url" content="https://YOUR_DOMAIN/" />
+  <meta property="og:image" content="https://YOUR_DOMAIN/og.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+
+  <!-- Twitter -->
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="羊肉爐任務平台" />
+  <meta name="twitter:description" content="FastAPI + Streamlit + PostgreSQL｜安全 · 可擴充 · 可上線" />
+  <meta name="twitter:image" content="https://YOUR_DOMAIN/og.png" />
+
+  <link rel="icon" href="/logo.png" />
+
+  <meta http-equiv="refresh" content="1; url=/app/" />
+
+  <style>
+    body{
+      margin:0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Noto Sans, Arial, "PingFang TC", "Microsoft JhengHei", sans-serif;
+      background: #0b0c10;
+      color: #e6edf3;
+    }
+    .wrap{
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 48px 20px;
+    }
+    .card{
+      display:flex;
+      gap:18px;
+      align-items:center;
+      padding: 18px 18px;
+      border-radius: 16px;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.04);
+    }
+    .logo{
+      width: 76px;
+      height: 76px;
+      border-radius: 18px;
+      border: 1px solid rgba(255,255,255,0.10);
+      overflow: hidden;
+      flex: 0 0 auto;
+    }
+    .logo img{ width:100%; height:100%; object-fit: cover; }
+    h1{ margin:0; font-size: 22px; }
+    .muted{ opacity: .7; margin-top:6px; font-size: 13px; line-height: 1.45; }
+    .btns{ margin-top: 16px; display:flex; gap:10px; flex-wrap:wrap; }
+    a.btn{
+      display:inline-block;
+      padding:10px 14px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.10);
+      background: rgba(255,255,255,0.06);
+      color: #e6edf3;
+      text-decoration:none;
+      font-size: 14px;
+    }
+    a.btn:hover{ background: rgba(255,255,255,0.10); }
+    .note{ margin-top: 12px; opacity: .55; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="logo"><img src="/logo.png" alt="羊肉爐 Logo"/></div>
+      <div>
+        <h1>羊肉爐任務平台</h1>
+        <div class="muted">如果你沒有被自動導向，點下面按鈕進入。</div>
+        <div class="btns">
+          <a class="btn" href="/app/">進入平台</a>
+          <a class="btn" href="/api/healthz">API Health</a>
+        </div>
+        <div class="note">提示：要讓 Discord/LINE 預覽圖正常顯示，請把上方 meta 的 YOUR_DOMAIN 換成真實網域。</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

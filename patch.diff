@@ -1,0 +1,509 @@
+--- original/sheep_platform_app.py+++ prod/sheep_platform_app.py@@ -1,4 +1,6 @@ import json
++import os
++import random
+ import time
+ from datetime import datetime, timedelta, timezone
+ from typing import Any, Dict, List, Optional
+@@ -37,21 +39,18 @@ from sheep_platform_audit import audit_candidate
+ 
+ 
+-APP_TITLE = "sheep123"
++APP_TITLE = "羊肉爐任務平台"
+ 
+ 
+ def _utc_now() -> datetime:
+     return datetime.now(timezone.utc)
+ 
+-def _issue_api_token(user: Dict[str, Any], ttl_seconds: int = 86400) -> str:
+-    payload = {
+-        "user_id": int(user["id"]),
+-        "username": str(user["username"]),
+-        "role": str(user.get("role") or "user"),
+-        "exp": int((_utc_now() + timedelta(seconds=int(ttl_seconds))).timestamp()),
+-    }
+-    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+-    return get_fernet().encrypt(raw).decode("utf-8")
++def _issue_api_token(user: Dict[str, Any], ttl_seconds: int = 86400, name: str = "worker") -> Dict[str, Any]:
++    """Issue an API token stored in DB (compatible with FastAPI Bearer auth).
++
++    NOTE: Raw token is only shown once; store it securely on the worker side.
++    """
++    return db.create_api_token(int(user["id"]), ttl_seconds=int(ttl_seconds), name=str(name or "worker"))
+ 
+ 
+ 
+@@ -134,28 +133,57 @@     )
+ 
+ 
+-def _bootstrap() -> None:
++
++_LAST_ROLLOVER_CHECK = 0.0
++
++
++@st.cache_resource
++def _init_once() -> None:
++    """Initialize DB schema/defaults once per Streamlit process.
++
++    Streamlit 會一直 rerun 腳本；把 init 放在 cache_resource 可以讓每次 rerun 直接略過，
++    讓頁面刷新快很多、DB 壓力也小很多。
++    """
+     db.init_db()
+-    db.ensure_cycle_rollover()
+-
+-    # Bootstrap admin user if none exists
++
++    # Bootstrap admin user if none exists (first boot only).
+     users = db.list_users(limit=1000)
+     has_admin = any(u.get("role") == "admin" for u in users)
+     if not has_admin:
+-        import os
+         from sheep_platform_security import random_token
+ 
+         username = os.environ.get("SHEEP_BOOTSTRAP_ADMIN_USER", "admin").strip()
+         password = os.environ.get("SHEEP_BOOTSTRAP_ADMIN_PASS", "").strip()
+         if not password:
+             password = random_token(18)
+-            (db.DATA_DIR / "bootstrap_admin.txt").write_text(f"{username}\n{password}\n", encoding="utf-8")
++            try:
++                (db.DATA_DIR / "bootstrap_admin.txt").write_text(f"{username}\n{password}\n", encoding="utf-8")
++            except Exception:
++                pass
+ 
+         try:
+             db.create_user(username=username, password_hash=hash_password(password), role="admin", wallet_address="N/A")
+             db.write_audit_log(None, "bootstrap_admin", {"username": username})
+         except Exception:
+             pass
++
++
++def _bootstrap() -> None:
++    """Lightweight bootstrap called every rerun."""
++    _init_once()
++
++    # Cycle rollover isn't required every rerun; throttle it to reduce DB chatter.
++    global _LAST_ROLLOVER_CHECK
++    try:
++        interval_s = float(os.environ.get("SHEEP_ROLLOVER_CHECK_S", "30") or "30")
++    except Exception:
++        interval_s = 30.0
++    interval_s = float(max(5.0, min(300.0, interval_s)))
++
++    now = time.time()
++    if now - float(_LAST_ROLLOVER_CHECK or 0.0) >= interval_s:
++        _LAST_ROLLOVER_CHECK = now
++        db.ensure_cycle_rollover()
+ 
+ 
+ def _session_user() -> Optional[Dict[str, Any]]:
+@@ -174,17 +202,52 @@             del st.session_state[k]
+ 
+ 
++
+ def _login_form() -> None:
+     st.markdown(f"### {APP_TITLE}")
+     st.markdown('<div class="small-muted">登入</div>', unsafe_allow_html=True)
+ 
++    # Slider Captcha (no external dependency, works even without Cloudflare).
++    # This is NOT as strong as Turnstile, but it blocks a lot of low-effort credential stuffing bots.
++    captcha_enabled = (os.environ.get("SHEEP_CAPTCHA", "1").strip() != "0")
++    try:
++        captcha_min_s = float(os.environ.get("SHEEP_CAPTCHA_MIN_S", "0.8") or 0.8)
++    except Exception:
++        captcha_min_s = 0.8
++    captcha_min_s = float(max(0.2, min(10.0, captcha_min_s)))
++
++    if "captcha_nonce" not in st.session_state:
++        st.session_state["captcha_nonce"] = random.randint(1000, 9999)
++        st.session_state["captcha_t0"] = time.time()
++
++    nonce = int(st.session_state.get("captcha_nonce") or 0)
++    captcha_key = f"captcha_slider_{nonce}"
++
+     with st.form("login_form", clear_on_submit=False):
+         username = st.text_input("帳號", value="", autocomplete="username")
+         password = st.text_input("密碼", value="", type="password", autocomplete="current-password")
++
++        if captcha_enabled:
++            st.markdown('<div class="small-muted">滑動驗證碼：把滑桿拖到最右邊（100）</div>', unsafe_allow_html=True)
++            st.slider(" ", min_value=0, max_value=100, value=0, step=1, key=captcha_key)
++
+         submitted = st.form_submit_button("登入")
+ 
+     if not submitted:
+         return
++
++    if captcha_enabled:
++        dt = float(time.time() - float(st.session_state.get("captcha_t0") or time.time()))
++        if int(st.session_state.get(captcha_key) or 0) != 100:
++            st.error("滑動驗證碼未通過（請拖到 100）。")
++            st.session_state["captcha_nonce"] = random.randint(1000, 9999)
++            st.session_state["captcha_t0"] = time.time()
++            return
++        if dt < captcha_min_s:
++            st.error("滑動太快了 🤨 重新拖一次。")
++            st.session_state["captcha_nonce"] = random.randint(1000, 9999)
++            st.session_state["captcha_t0"] = time.time()
++            return
+ 
+     uname = normalize_username(username)
+     user = db.get_user_by_username(uname)
+@@ -206,11 +269,9 @@         return
+ 
+     db.update_user_login_state(int(user["id"]), success=True)
+-    st.session_state["auth_user_id"] = int(user["id"])
+-    st.session_state["auth_username"] = str(user["username"])
+-    st.session_state["auth_role"] = str(user["role"])
++    _set_session_user(user)
++    st.success("登入成功。")
+     st.rerun()
+-
+ 
+ def _register_form() -> None:
+     st.markdown("### 註冊")
+@@ -273,6 +334,80 @@     return f'<div class="metric"><div class="k">{title}</div><div class="v">{v}</div><div class="small-muted">{sub}</div></div>'
+ 
+ 
++
++
++def _page_tutorial(user: Optional[Dict[str, Any]] = None) -> None:
++    st.markdown(f"### {APP_TITLE} · 新手教學")
++    st.markdown('<div class="small-muted">三分鐘上手：少走彎路，少踩坑。</div>', unsafe_allow_html=True)
++
++    st.markdown("")
++
++    # A tiny animated walkthrough using pure HTML/CSS (no extra dependencies).
++    st.components.v1.html(
++        """
++        <div style="padding:16px;border-radius:14px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);">
++          <div style="font-size:14px;opacity:.9;margin-bottom:8px;">流程總覽</div>
++          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
++            <div class="sp-step">登入</div>
++            <div class="sp-arrow">➜</div>
++            <div class="sp-step sp-pulse">開始全部任務</div>
++            <div class="sp-arrow">➜</div>
++            <div class="sp-step">等它跑完</div>
++            <div class="sp-arrow">➜</div>
++            <div class="sp-step">看候選結果</div>
++            <div class="sp-arrow">➜</div>
++            <div class="sp-step">提交策略</div>
++            <div class="sp-arrow">➜</div>
++            <div class="sp-step">結算領獎</div>
++          </div>
++        </div>
++        <style>
++          .sp-step{
++            padding:10px 12px;
++            border-radius:999px;
++            background:rgba(255,255,255,0.06);
++            border:1px solid rgba(255,255,255,0.10);
++            font-size:13px;
++          }
++          .sp-arrow{opacity:.35}
++          .sp-pulse{
++            animation: spPulse 1.3s ease-in-out infinite;
++            border-color: rgba(255,255,255,0.22);
++          }
++          @keyframes spPulse {
++            0% { transform: scale(1); filter: brightness(1); }
++            50% { transform: scale(1.03); filter: brightness(1.15); }
++            100% { transform: scale(1); filter: brightness(1); }
++          }
++        </style>
++        """,
++        height=140,
++    )
++
++    st.markdown("")
++    st.markdown("#### 1) 先登入 / 註冊")
++    st.write("註冊時，帳號只能英數底線，密碼要夠長（至少 10 碼、大小寫 + 數字）。這不是在刁你，是在擋低成本撞庫。")
++
++    st.markdown("#### 2) 到「任務」頁，按一次「開始全部任務」就夠了")
++    st.write(
++        "你只要點一次。系統會："
++        "\n- 自動把目前分配到的任務塞進隊列"
++        "\n- 跑完後自動抓下一批任務"
++        "\n- 不用你再回去點第二次、更不用你雙擊自動刷新"
++    )
++
++    st.markdown("#### 3) 觀察進度與最佳參數")
++    st.write("每個任務會顯示：參數進度、最佳分數、是否達標、速度與 ETA。你只要看「達標」跟「候選結果」就好，其他都是工程師用的 debug 資訊。")
++
++    st.markdown("#### 4) 任務完成後，去「候選結果」挑你要提交的策略")
++    st.write("任務完成後會出現候選列表。提交後會進入策略池，後續結算會用它算獎勵。")
++
++    st.markdown("#### 5) 到「結算」頁填錢包地址")
++    st.write("地址會做基本格式檢查。不要亂填，不然獎勵發不出去只能怪你自己。")
++
++    st.markdown("")
++    st.info("小提醒：如果你只是想『讓它一直跑』，保持「自動刷新」勾著就對了。")
++
+ def _page_dashboard(user: Dict[str, Any]) -> None:
+     cycle = db.get_active_cycle()
+     pools = db.list_factor_pools(cycle_id=int(cycle["id"])) if cycle else []
+@@ -317,7 +452,7 @@             "symbol": t["symbol"],
+             "tf_min": t["timeframe_min"],
+             "family": t["family"],
+-            "partition": f'{t["partition_idx"]}/{int(db.get_pool(int(t["pool_id"]))["num_partitions"])}',
++            "partition": f'{int(t["partition_idx"])+1}/{int(t.get("num_partitions") or 1)}',
+             "status": t["status"],
+             "progress": t.get("progress_json", ""),
+         }
+@@ -407,9 +542,16 @@     col_a, col_b, col_c, col_d = st.columns([1.1, 1.1, 1.0, 1.2])
+ 
+     if exec_mode == "server":
++        run_key = f"server_run_all_{int(user['id'])}"
++        if run_key not in st.session_state:
++            st.session_state[run_key] = False
++        run_all = bool(st.session_state.get(run_key, False))
++
+         with col_a:
+             if st.button("開始全部任務", key="start_all"):
+-                to_queue = []
++                st.session_state[run_key] = True
++                run_all = True
++                to_queue: List[int] = []
+                 for t in tasks:
+                     tid = int(t["id"])
+                     if str(t.get("status") or "") != "assigned":
+@@ -420,11 +562,17 @@                         continue
+                     to_queue.append(tid)
+                 result = job_mgr.enqueue_many(int(user["id"]), to_queue, bt)
+-                db.write_audit_log(int(user["id"]), "task_queue_all", {"queued": int(result.get("queued") or 0), "skipped": int(result.get("skipped") or 0)})
++                db.write_audit_log(
++                    int(user["id"]),
++                    "task_queue_all",
++                    {"queued": int(result.get("queued") or 0), "skipped": int(result.get("skipped") or 0)},
++                )
+                 st.rerun()
+ 
+         with col_b:
+             if st.button("停止全部任務", key="stop_all"):
++                st.session_state[run_key] = False
++                run_all = False
+                 job_mgr.stop_all_for_user(int(user["id"]))
+                 db.write_audit_log(int(user["id"]), "task_stop_all", {})
+                 st.rerun()
+@@ -434,10 +582,16 @@                 st.rerun()
+ 
+         with col_d:
+-            auto_refresh = st.checkbox("自動刷新", value=False, key="tasks_auto_refresh")
+-            refresh_s = st.number_input("刷新間隔秒數", min_value=0.5, max_value=10.0, value=1.0, step=0.5, key="tasks_refresh_s")
+-
+-        st.markdown(f'<div class="small-muted">並行上限 {int(max_concurrent_jobs)}</div>', unsafe_allow_html=True)
++            auto_refresh = st.checkbox("自動刷新", value=True, key="tasks_auto_refresh")
++            refresh_s = st.number_input(
++                "刷新間隔秒數", min_value=0.5, max_value=10.0, value=1.0, step=0.5, key="tasks_refresh_s"
++            )
++
++        st.markdown(
++            f'<div class="small-muted">狀態：{"running" if run_all else "idle"} · 並行上限 {int(max_concurrent_jobs)}</div>',
++            unsafe_allow_html=True,
++        )
++
+ 
+     else:
+         run_enabled = db.get_user_run_enabled(int(user["id"]))
+@@ -457,7 +611,7 @@                 st.rerun()
+ 
+         with col_d:
+-            auto_refresh = st.checkbox("自動刷新", value=False, key="tasks_auto_refresh")
++            auto_refresh = st.checkbox("自動刷新", value=True, key="tasks_auto_refresh")
+             refresh_s = st.number_input("刷新間隔秒數", min_value=0.5, max_value=10.0, value=1.0, step=0.5, key="tasks_refresh_s")
+ 
+         st.markdown(f'<div class="small-muted">狀態：{"running" if run_enabled else "idle"}</div>', unsafe_allow_html=True)
+@@ -481,11 +635,16 @@         token = st.session_state.get("worker_token")
+         ttl_days = st.number_input("Token 有效天數", min_value=1, max_value=180, value=30, step=1)
+         if st.button("產生 Token", key="issue_worker_token"):
+-            st.session_state["worker_token"] = _issue_api_token(user, ttl_seconds=int(ttl_days) * 86400)
++            tok = _issue_api_token(user, ttl_seconds=int(ttl_days) * 86400)
++            st.session_state["worker_token"] = str(tok.get("token") or "")
++            st.session_state["worker_token_meta"] = tok
+             st.rerun()
+ 
+         token = st.session_state.get("worker_token")
+         if token:
++            meta = st.session_state.get("worker_token_meta") or {}
++            if isinstance(meta, dict) and meta.get("expires_at"):
++                st.caption(f"Token expires at: {meta.get('expires_at')}")
+             st.code(token, language="text")
+             cfg = {
+                 "server": api_url,
+@@ -522,6 +681,33 @@ 
+     st.markdown("</div>", unsafe_allow_html=True)
+ 
++    # 無縫銜接模式：使用者只要點一次「開始全部任務」，之後每次刷新都會自動把新的 assigned 任務塞進隊列。
++    # 這樣就不會出現「跑完後還要再手動點一次」的尷尬 UX。
++    if exec_mode == "server":
++        run_key = f"server_run_all_{int(user['id'])}"
++        run_all = bool(st.session_state.get(run_key, False))
++        if run_all:
++            to_queue2: List[int] = []
++            for _t in tasks:
++                _tid = int(_t["id"])
++                if str(_t.get("status") or "") != "assigned":
++                    continue
++                if job_mgr.is_running(_tid):
++                    continue
++                if job_mgr.is_queued(int(user["id"]), _tid):
++                    continue
++                to_queue2.append(_tid)
++
++            if to_queue2:
++                result2 = job_mgr.enqueue_many(int(user["id"]), to_queue2, bt)
++                if int(result2.get("queued") or 0) > 0:
++                    db.write_audit_log(
++                        int(user["id"]),
++                        "task_auto_queue",
++                        {"queued": int(result2.get("queued") or 0), "skipped": int(result2.get("skipped") or 0)},
++                    )
++                st.rerun()
++
+     def _fmt_gap_min(cur: Optional[float], thr: float) -> str:
+         if cur is None:
+             return "-"
+@@ -589,7 +775,7 @@         st.markdown('<div class="card">', unsafe_allow_html=True)
+         st.markdown(f"#### 任務 {t['id']}")
+         st.markdown(
+-            f'<div class="small-muted">{t["pool_name"]} · {t["symbol"]} · {t["timeframe_min"]}m · {t["family"]} · 分割 {t["partition_idx"]}</div>',
++            f'<div class="small-muted">{t["pool_name"]} · {t["symbol"]} · {t["timeframe_min"]}m · {t["family"]} · 分割 {int(t["partition_idx"])+1}/{int(t.get("num_partitions") or 1)}</div>',
+             unsafe_allow_html=True,
+         )
+ 
+@@ -676,7 +862,18 @@ 
+         st.markdown("</div>", unsafe_allow_html=True)
+ 
+-    if auto_refresh and any_active:
++    keep_polling = False
++    if exec_mode == "server":
++        run_key = f"server_run_all_{int(user['id'])}"
++        keep_polling = bool(st.session_state.get(run_key, False))
++    else:
++        keep_polling = bool(run_enabled)
++
++    # 自動刷新：預設永遠勾選。
++    # - any_active=True：有人在跑 / 在隊列 -> 正常刷新
++    # - keep_polling=True：使用者點過「開始全部任務」(server) 或 run_enabled=True(worker)
++    #   即使暫時沒任務，也會持續刷新，才能無縫接新任務。
++    if auto_refresh and (any_active or keep_polling):
+         try:
+             time.sleep(float(refresh_s))
+         except Exception:
+@@ -1497,7 +1694,7 @@ 
+ 
+ def main() -> None:
+-    st.set_page_config(page_title=APP_TITLE, layout="wide")
++    st.set_page_config(page_title=APP_TITLE, page_icon="🐑", layout="wide", initial_sidebar_state="expanded")
+     _style()
+     _bootstrap()
+ 
+@@ -1514,12 +1711,15 @@         st.markdown(f"### {APP_TITLE}")
+         st.markdown(f'<div class="small-muted">{user["username"]} · {role}</div>', unsafe_allow_html=True)
+         st.divider()
+-        page = st.radio("導航", options=["控制台", "任務", "提交", "結算"] + (["管理"] if role == "admin" else []), index=0)
++        page = st.radio("導航", options=["新手教學", "控制台", "任務", "提交", "結算"] + (["管理"] if role == "admin" else []), index=0)
+         st.divider()
+         if st.button("登出"):
+             _logout()
+             st.rerun()
+ 
++    if page == "新手教學":
++        _page_tutorial(user)
++        return
+     if page == "控制台":
+         _page_dashboard(user)
+         return
+--- original/sheep_platform_api.py+++ prod/sheep_platform_api.py@@ -1,4 +1,5 @@ import json
++import os
+ import time
+ import random
+ from datetime import datetime, timezone
+@@ -14,7 +15,9 @@ 
+ db.init_db()
+ 
+-app = FastAPI(title="sheep-platform-api")
++API_ROOT_PATH = os.environ.get("SHEEP_API_ROOT_PATH", "").strip()
++
++app = FastAPI(title="sheep-platform-api", root_path=API_ROOT_PATH)
+ 
+ 
+ # In-memory rate limiters (cheap + good enough for a single API instance)
+@@ -57,15 +60,28 @@ 
+ 
+ def _client_ip(req: Request) -> str:
+-    # If behind reverse proxy you probably want X-Forwarded-For, but keep it simple.
+-    try:
++    """Best-effort client IP.
++
++    In production we sit behind Nginx. Use X-Forwarded-For / X-Real-IP if present,
++    otherwise fall back to req.client.host.
++    """
++    try:
++        xff = req.headers.get("x-forwarded-for") or req.headers.get("X-Forwarded-For") or ""
++        if xff:
++            # First IP is the original client; the rest are proxies.
++            ip = xff.split(",", 1)[0].strip()
++            if ip:
++                return ip
++
++        xri = req.headers.get("x-real-ip") or req.headers.get("X-Real-IP") or ""
++        if xri.strip():
++            return xri.strip()
++
+         if req.client and req.client.host:
+             return str(req.client.host)
+     except Exception:
+         pass
+     return ""
+-
+-
+ def _auth_ctx(req: Request, authorization: Optional[str]) -> Dict[str, Any]:
+     if not authorization:
+         raise HTTPException(status_code=401, detail="missing_authorization")
+@@ -245,6 +261,11 @@     progress: Dict[str, Any]
+ 
+ 
++@app.get("/healthz")
++def healthz() -> Dict[str, Any]:
++    return {"ok": True, "ts": _utc_iso()}
++
++
+ @app.get("/manifest")
+ def manifest():
+     conn = db._conn()
+--- original/sheep_platform_db.py+++ prod/sheep_platform_db.py@@ -29,6 +29,11 @@ 
+ DB_URL = (os.environ.get("SHEEP_DB_URL", "") or os.environ.get("DATABASE_URL", "") or "").strip()
+ _DB_KIND = "postgres" if DB_URL.lower().startswith(("postgresql://", "postgres://")) else "sqlite"
++
++DB_MIGRATION = (os.environ.get("SHEEP_DB_MIGRATION", "") or "").strip().lower()
++if not DB_MIGRATION:
++    DB_MIGRATION = "alembic" if _DB_KIND == "postgres" else "legacy"
++
+ 
+ 
+ def get_db_info() -> Dict[str, Any]:
+@@ -144,7 +149,25 @@ 
+ def init_db() -> None:
+     if _DB_KIND == "postgres":
+-        _init_db_postgres()
++        if DB_MIGRATION == "legacy":
++            _init_db_postgres()
++            return
++
++        # Alembic-managed schema: we do NOT run any CREATE TABLE / ALTER TABLE here.
++        # If schema isn't present, fail fast with a clear error.
++        conn = _conn()
++        try:
++            try:
++                conn.execute("SELECT 1 FROM users LIMIT 1").fetchone()
++                conn.execute("SELECT 1 FROM settings LIMIT 1").fetchone()
++            except Exception as e:
++                raise RuntimeError("db_schema_missing: run `alembic upgrade head` before starting the app") from e
++
++            _init_defaults(conn)
++            _get_or_create_system_user_id(conn)
++            conn.commit()
++        finally:
++            conn.close()
+         return
+     with FileLock(str(DB_LOCK)):
+         conn = _conn()
