@@ -1,9 +1,18 @@
 import argparse
+import hashlib
 from datetime import datetime, timedelta, timezone
 
 import backtest_panel2 as bt
 
 import sheep_platform_db as db
+
+
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def _utc_now() -> datetime:
@@ -100,7 +109,7 @@ def run_weekly_check(week_start_ts: str, week_end_ts: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["init_db", "cycle_rollover", "weekly_check"])
+    parser.add_argument("command", choices=["init_db", "cycle_rollover", "weekly_check", "refresh_data_hashes"])
     parser.add_argument("--week-start", default="")
     parser.add_argument("--week-end", default="")
     args = parser.parse_args()
@@ -122,6 +131,36 @@ def main() -> None:
         else:
             b = week_bounds_last_completed(_utc_now())
             run_weekly_check(b["week_start_ts"], b["week_end_ts"])
+        return
+
+    if args.command == "refresh_data_hashes":
+        db.init_db()
+        db.ensure_cycle_rollover()
+        cycle = db.get_active_cycle()
+        if not cycle:
+            return
+        pools = db.list_factor_pools(cycle_id=int(cycle["id"]))
+        conn = db._conn()
+        try:
+            for p in pools:
+                try:
+                    csv_main, _ = bt.ensure_bitmart_data(
+                        symbol=str(p["symbol"]),
+                        main_step_min=int(p["timeframe_min"]),
+                        years=int(p.get("years") or 3),
+                        auto_sync=True,
+                        force_full=False,
+                    )
+                    h = _sha256_file(str(csv_main))
+                    key = db.data_hash_setting_key(str(p["symbol"]), int(p["timeframe_min"]), int(p.get("years") or 3))
+                    ts_key = db.data_hash_ts_setting_key(str(p["symbol"]), int(p["timeframe_min"]), int(p.get("years") or 3))
+                    db.set_setting(conn, key, h)
+                    db.set_setting(conn, ts_key, db.utc_now_iso())
+                except Exception:
+                    continue
+            conn.commit()
+        finally:
+            conn.close()
         return
 
 

@@ -132,6 +132,27 @@ def _cleanup_stale_running_tasks(conn: Any, cycle_id: int, lease_seconds: int) -
     return int(cur.rowcount or 0)
 
 
+def _cleanup_stale_assigned_tasks(conn: Any, cycle_id: int, reserve_seconds: int) -> int:
+    """Release long-idle reserved tasks back to system.
+
+    A reserved task is: status='assigned' and user_id != system.
+    If it stays reserved for too long without moving to running, it blocks the pool.
+    """
+    reserve_seconds = max(30, int(reserve_seconds))
+    cutoff = _utc_now() - timedelta(seconds=reserve_seconds)
+    cutoff_iso = _iso(cutoff)
+    now_iso = utc_now_iso()
+
+    system_uid = _get_or_create_system_user_id(conn)
+
+    cur = conn.execute(
+        "UPDATE tasks SET user_id = ?, assigned_at = ?, last_heartbeat = ? "
+        "WHERE cycle_id = ? AND status = 'assigned' AND user_id <> ? AND (assigned_at IS NULL OR assigned_at < ?)",
+        (int(system_uid), str(now_iso), str(now_iso), int(cycle_id), int(system_uid), str(cutoff_iso)),
+    )
+    return int(cur.rowcount or 0)
+
+
 def _conn() -> Any:
     if _DB_KIND == "postgres":
         if psycopg is None:
@@ -687,6 +708,8 @@ def _init_defaults(conn: sqlite3.Connection) -> None:
     set_default("max_concurrent_jobs", 2)
     set_default("task_lease_minutes", 180)
     set_default("task_lease_seconds", 600)
+    set_default("task_reserve_minutes", 60)
+    set_default("task_reserve_seconds", 3600)
     set_default("task_target_seconds", 900)
     set_default("default_worker_cps", 50.0)
     set_default("max_active_leases_per_user", 4)
@@ -695,11 +718,49 @@ def _init_defaults(conn: sqlite3.Connection) -> None:
     set_default("api_slow_ms", 800.0)
     set_default("api_log_sample_rate", 0.05)
     set_default("monitor_retention_days", 14)
-    set_default("worker_min_version", "2.0.0")
-    set_default("worker_latest_version", "2.0.0")
+    set_default("worker_min_version", "2.1.0")
+    set_default("worker_latest_version", "2.1.0")
     set_default("worker_min_protocol", 2)
     set_default("worker_download_url", "")
     set_default("candidate_keep_top_n", 30)
+
+    # Worker result verification (anti-cheat)
+    set_default("verify_max_candidates", 10)
+    set_default("verify_tolerance_return_pct", 0.1)
+    set_default("verify_tolerance_drawdown_pct", 0.1)
+    set_default("verify_tolerance_sharpe", 0.05)
+    set_default("verify_tolerance_trades", 1)
+
+    # Tutorial assets
+    set_default("tutorial_video_path", "")
+
+    # Share preview (Open Graph)
+    set_default("og_title", "羊肉爐挖礦分潤平台")
+    set_default("og_description", "分散算力進行參數搜尋，提交達標策略並參與週期結算。")
+    set_default("og_image_url", "")
+    set_default("og_site_name", "羊肉爐")
+    set_default("og_redirect_url", "")
+
+    # Withdrawal display rules
+    set_default("withdraw_min_usdt", 20.0)
+    set_default("withdraw_fee_usdt", 1.0)
+    set_default("withdraw_fee_mode", "deduct")
+
+    # ToS
+    set_default("tos_version", "2026-02-19")
+    set_default(
+        "tos_text",
+        "量化交易與加密貨幣具有高風險，過去績效不代表未來結果。\n\n"
+        "本平台提供參數搜尋、策略審核與結算記錄，不保證任何策略永遠獲利。\n\n"
+        "分潤以實盤結果與平台規則為準，可能出現當週未發放或發放為 0 的情況。\n\n"
+        "平台保留因風控、策略失效、系統維護等因素暫停或終止策略之權利。\n\n"
+        "使用者需自行承擔設備耗電、硬體磨損、網路中斷等成本與風險。\n\n"
+        "分潤地址如填寫錯誤造成資產損失，平台不負任何責任。",
+    )
+
+    # Chat moderation
+    set_default("chat_blocked_words", "")
+    set_default("chat_max_len", 120)
     set_default("capital_usdt", 0.0)
     set_default("payout_rate", 0.0)
     set_default("payout_currency", "USDT")
@@ -823,6 +884,36 @@ def set_setting(conn: sqlite3.Connection, key: str, value: Any) -> None:
         "ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at",
         (key, json_dumps(value), now),
     )
+
+
+def data_hash_setting_key(symbol: str, timeframe_min: int, years: int) -> str:
+    sym = str(symbol or "").strip().upper()
+    tf = int(timeframe_min or 0)
+    yrs = int(years or 0)
+    return f"data_hash:{sym}:{tf}:{yrs}"
+
+
+def data_hash_ts_setting_key(symbol: str, timeframe_min: int, years: int) -> str:
+    sym = str(symbol or "").strip().upper()
+    tf = int(timeframe_min or 0)
+    yrs = int(years or 0)
+    return f"data_hash_ts:{sym}:{tf}:{yrs}"
+
+
+def get_data_hash(symbol: str, timeframe_min: int, years: int) -> Dict[str, str]:
+    """Return data hash metadata stored in settings.
+
+    The actual hash is maintained by a cron job. If not present, returns empty strings.
+    """
+    conn = _conn()
+    try:
+        key = data_hash_setting_key(symbol, timeframe_min, years)
+        ts_key = data_hash_ts_setting_key(symbol, timeframe_min, years)
+        h = str(get_setting(conn, key, "") or "").strip()
+        ts = str(get_setting(conn, ts_key, "") or "").strip()
+        return {"data_hash": h, "data_hash_ts": ts}
+    finally:
+        conn.close()
 
 
 def _user_pref_key_pool_ids(user_id: int) -> str:
@@ -1188,11 +1279,28 @@ def assign_tasks_for_user(
         else:
             cycle_id = int(cycle_id)
 
+        # Make sure pool tasks exist (seeded as system-owned assigned tasks).
+        try:
+            ensure_cycle_tasks(int(cycle_id))
+        except Exception:
+            pass
+
         lease_seconds = int(get_setting(conn, "task_lease_seconds", int(get_setting(conn, "task_lease_minutes", 180)) * 60))
-        _cleanup_stale_running_tasks(conn, cycle_id, lease_seconds)
+        _cleanup_stale_running_tasks(conn, int(cycle_id), int(lease_seconds))
+
+        # Release long-idle reserved tasks back to system so one user can't hoard all partitions.
+        try:
+            reserve_seconds = int(get_setting(conn, "task_reserve_seconds", int(get_setting(conn, "task_reserve_minutes", 60)) * 60))
+            reserve_seconds = max(30, int(reserve_seconds))
+        except Exception:
+            reserve_seconds = 3600
+        try:
+            _cleanup_stale_assigned_tasks(conn, int(cycle_id), int(reserve_seconds))
+        except Exception:
+            pass
 
         pools = conn.execute(
-            "SELECT * FROM factor_pools WHERE cycle_id = ? AND active = 1 ORDER BY id ASC",
+            "SELECT id FROM factor_pools WHERE cycle_id = ? AND active = 1 ORDER BY id ASC",
             (int(cycle_id),),
         ).fetchall()
         if not pools:
@@ -1202,10 +1310,13 @@ def assign_tasks_for_user(
             max_tasks = int(get_setting(conn, "max_tasks_per_user", 6))
         max_tasks = max(min_needed, int(max_tasks))
 
-        active_count = conn.execute(
-            "SELECT COUNT(1) AS c FROM tasks WHERE user_id = ? AND cycle_id = ? AND status IN ('assigned','running')",
-            (int(user_id), int(cycle_id)),
-        ).fetchone()["c"]
+        active_count = int(
+            conn.execute(
+                "SELECT COUNT(1) AS c FROM tasks WHERE user_id = ? AND cycle_id = ? AND status IN ('assigned','running')",
+                (int(user_id), int(cycle_id)),
+            ).fetchone()["c"]
+            or 0
+        )
 
         need = int(min_needed) - int(active_count)
         if need <= 0:
@@ -1214,69 +1325,37 @@ def assign_tasks_for_user(
         if need <= 0:
             return []
 
-        created_ids: List[int] = []
-        for _ in range(int(need)):
-            pool = dict(pools[len(created_ids) % len(pools)])
-            pool_id = int(pool["id"])
-            num_partitions = int(pool["num_partitions"])
+        system_uid = _get_or_create_system_user_id(conn)
+        now_iso = utc_now_iso()
 
-            row = conn.execute(
-                """
-                SELECT p FROM (
-                    WITH RECURSIVE seq(p) AS (
-                        SELECT 0
-                        UNION ALL
-                        SELECT p + 1 FROM seq WHERE p + 1 < ?
-                    )
-                    SELECT p FROM seq
-                )
-                WHERE p NOT IN (
-                    SELECT partition_idx FROM tasks WHERE cycle_id = ? AND pool_id = ?
-                )
-                ORDER BY RANDOM()
-                LIMIT 1
-                """,
-                (int(num_partitions), int(cycle_id), int(pool_id)),
-            ).fetchone()
-            if not row:
-                break
-
-            part_idx = int(row["p"])
-            progress = {
-                "combos_total": 0,
-                "combos_done": 0,
-                "best_score": None,
-                "best_candidate_id": None,
-                "best_any_score": None,
-                "best_any_metrics": None,
-                "best_any_params": None,
-                "best_any_passed": False,
-                "phase": "idle",
-                "phase_progress": 0.0,
-                "phase_msg": "",
-                "last_error": None,
-                "elapsed_s": 0.0,
-                "speed_cps": 0.0,
-                "eta_s": None,
-                "updated_at": utc_now_iso(),
-            }
-            est = _estimate_task_work(pool, num_partitions, part_idx)
-
-            sql = """
-                INSERT INTO tasks(
-                    cycle_id, pool_id, user_id, partition_idx, partition_total,
-                    status, assigned_at, estimated_combos, priority, progress_json
-                ) VALUES(?,?,?,?,?,?,?,?,?,?)
+        # Claim system-owned assigned tasks.
+        rows = conn.execute(
             """
-            tid = _insert_id(
-                conn,
-                sql,
-                (int(cycle_id), int(pool_id), int(user_id), int(part_idx), int(num_partitions), "assigned", utc_now_iso(), int(est), 0, json_dumps(progress)),
+            SELECT id
+            FROM tasks
+            WHERE cycle_id = ? AND status = 'assigned' AND user_id = ?
+            ORDER BY priority DESC, assigned_at ASC, id ASC
+            LIMIT ?
+            """,
+            (int(cycle_id), int(system_uid), int(need)),
+        ).fetchall()
+
+        claimed_ids: List[int] = []
+        for r in rows:
+            tid = int(r["id"] if isinstance(r, dict) else r[0])
+            cur = conn.execute(
+                """
+                UPDATE tasks
+                SET user_id = ?, assigned_at = ?
+                WHERE id = ? AND cycle_id = ? AND status = 'assigned' AND user_id = ?
+                """,
+                (int(user_id), str(now_iso), int(tid), int(cycle_id), int(system_uid)),
             )
-            created_ids.append(int(tid))
+            if int(cur.rowcount or 0) == 1:
+                claimed_ids.append(int(tid))
 
         conn.commit()
-        return created_ids
+        return claimed_ids
     finally:
         conn.close()
 
@@ -1310,7 +1389,7 @@ def get_task(task_id: int) -> Optional[Dict[str, Any]]:
     try:
         row = conn.execute(
             """
-            SELECT t.*, p.name AS pool_name, p.symbol, p.timeframe_min, p.family, p.grid_spec_json, p.risk_spec_json, t.partition_total AS num_partitions, p.seed
+            SELECT t.*, p.name AS pool_name, p.symbol, p.timeframe_min, p.years, p.family, p.grid_spec_json, p.risk_spec_json, t.partition_total AS num_partitions, p.seed
             FROM tasks t
             JOIN factor_pools p ON p.id = t.pool_id
             WHERE t.id = ?
@@ -1987,6 +2066,93 @@ def list_task_overview(limit: int = 500) -> List[Dict[str, Any]]:
         conn.close()
 
 
+def get_global_progress_snapshot(cycle_id: int) -> Dict[str, Any]:
+    """Return a global snapshot for progress visualization.
+
+    This is intentionally read-only and optimized for UI. It aggregates tasks by pool and
+    includes per-partition status so the UI can render a partition map.
+    """
+    conn = _conn()
+    try:
+        system_uid = _get_or_create_system_user_id(conn)
+        rows = conn.execute(
+            """
+            SELECT
+                t.id,
+                t.cycle_id,
+                t.pool_id,
+                p.name AS pool_name,
+                p.symbol,
+                p.timeframe_min,
+                p.years,
+                p.family,
+                t.partition_idx,
+                t.partition_total AS num_partitions,
+                t.status,
+                t.user_id,
+                u.username,
+                t.assigned_at,
+                t.started_at,
+                t.finished_at,
+                t.last_heartbeat,
+                t.estimated_combos,
+                t.progress_json
+            FROM tasks t
+            JOIN factor_pools p ON p.id = t.pool_id
+            LEFT JOIN users u ON u.id = t.user_id
+            WHERE t.cycle_id = ? AND p.active = 1
+            ORDER BY p.id ASC, t.partition_idx ASC
+            """,
+            (int(cycle_id),),
+        ).fetchall()
+
+        by_pool: Dict[int, Dict[str, Any]] = {}
+        for r in rows:
+            d = dict(r)
+            pid = int(d.get("pool_id") or 0)
+            if pid not in by_pool:
+                by_pool[pid] = {
+                    "pool_id": pid,
+                    "pool_name": str(d.get("pool_name") or ""),
+                    "symbol": str(d.get("symbol") or ""),
+                    "timeframe_min": int(d.get("timeframe_min") or 0),
+                    "years": int(d.get("years") or 0),
+                    "family": str(d.get("family") or ""),
+                    "num_partitions": int(d.get("num_partitions") or 1),
+                    "tasks": [],
+                }
+            try:
+                prog = json.loads(d.get("progress_json") or "{}")
+            except Exception:
+                prog = {}
+            by_pool[pid]["tasks"].append(
+                {
+                    "task_id": int(d.get("id") or 0),
+                    "partition_idx": int(d.get("partition_idx") or 0),
+                    "num_partitions": int(d.get("num_partitions") or 1),
+                    "status": str(d.get("status") or ""),
+                    "user_id": int(d.get("user_id") or 0),
+                    "username": str(d.get("username") or ""),
+                    "assigned_at": str(d.get("assigned_at") or ""),
+                    "started_at": str(d.get("started_at") or ""),
+                    "finished_at": str(d.get("finished_at") or ""),
+                    "last_heartbeat": str(d.get("last_heartbeat") or ""),
+                    "estimated_combos": int(d.get("estimated_combos") or 0),
+                    "progress": prog,
+                }
+            )
+
+        pools = list(by_pool.values())
+        return {
+            "cycle_id": int(cycle_id),
+            "system_user_id": int(system_uid),
+            "pools": pools,
+            "ts": utc_now_iso(),
+        }
+    finally:
+        conn.close()
+
+
 
 # ---- Worker orchestration, API tokens, and monitoring ----
 
@@ -2466,6 +2632,44 @@ def list_worker_events(limit: int = 200) -> List[Dict[str, Any]]:
         limit = int(max(1, min(2000, int(limit))))
         rows = conn.execute("SELECT * FROM worker_events ORDER BY ts DESC LIMIT ?", (int(limit),)).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def list_chat_messages(limit: int = 50) -> List[Dict[str, Any]]:
+    conn = _conn()
+    try:
+        limit = int(max(1, min(200, int(limit))))
+        rows = conn.execute(
+            """
+            SELECT we.ts, we.user_id, u.username, we.detail_json
+            FROM worker_events we
+            LEFT JOIN users u ON u.id = we.user_id
+            WHERE we.event = 'chat_message'
+            ORDER BY we.ts DESC
+            LIMIT ?
+            """,
+            (int(limit),),
+        ).fetchall()
+
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            d = dict(r)
+            detail = {}
+            try:
+                detail = json.loads(d.get("detail_json") or "{}")
+            except Exception:
+                detail = {}
+            out.append(
+                {
+                    "ts": str(d.get("ts") or ""),
+                    "user_id": int(d.get("user_id") or 0),
+                    "username": str(d.get("username") or ""),
+                    "text": str(detail.get("text") or ""),
+                }
+            )
+        out.reverse()
+        return out
     finally:
         conn.close()
 

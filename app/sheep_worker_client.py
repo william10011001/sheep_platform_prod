@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import random
+import hashlib
 import sys
 import time
 import uuid
@@ -13,7 +14,7 @@ import requests
 import backtest_panel2 as bt
 
 
-WORKER_VERSION = "2.0.0"
+WORKER_VERSION = "2.1.0"
 WORKER_PROTOCOL = 2
 
 
@@ -29,6 +30,32 @@ def parse_semver(v: str) -> Tuple[int, int, int]:
 
 def semver_gte(a: str, b: str) -> bool:
     return parse_semver(a) >= parse_semver(b)
+
+
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+_DATA_HASH_CACHE: Dict[str, Tuple[int, int, str]] = {}
+
+
+def _sha256_file_cached(path: str) -> str:
+    try:
+        st = os.stat(path)
+        size = int(st.st_size)
+        mtime = int(st.st_mtime)
+        cached = _DATA_HASH_CACHE.get(path)
+        if cached and cached[0] == size and cached[1] == mtime:
+            return cached[2]
+        h = _sha256_file(path)
+        _DATA_HASH_CACHE[path] = (size, mtime, h)
+        return h
+    except Exception:
+        return ""
 
 
 @dataclass
@@ -225,6 +252,25 @@ def _passes_thresholds(metrics: Dict[str, Any], thr: Thresholds) -> bool:
     return True
 
 
+def _metrics_from_bt_result(res: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "total_return_pct": float(res.get("total_return_pct", 0.0)),
+        "max_drawdown_pct": float(res.get("max_drawdown_pct", 0.0)),
+        "sharpe": float(res.get("sharpe", 0.0)),
+        "trades": int(res.get("trades", 0)),
+        "win_rate_pct": float(res.get("win_rate_pct", 0.0)),
+        "profit_factor": float(res.get("profit_factor", 0.0)),
+        "cagr_pct": float(res.get("cagr_pct", 0.0)),
+    }
+
+
+def _score(metrics: Dict[str, Any]) -> float:
+    ret = float(metrics.get("total_return_pct", 0.0))
+    dd = float(metrics.get("max_drawdown_pct", 0.0))
+    sh = float(metrics.get("sharpe", 0.0))
+    return ret + 5.0 * sh - 0.6 * dd
+
+
 def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s: float, commit_every: int) -> None:
     task_id = int(task["task_id"])
     lease_id = str(task.get("lease_id") or "")
@@ -314,15 +360,52 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
     api.progress(task_id, lease_id, progress)
 
     try:
+        years = int(task.get("years") or 0) or 3
         csv_main, _ = bt.ensure_bitmart_data(
             symbol=str(task["symbol"]),
             main_step_min=int(task["timeframe_min"]),
-            years=int(task.get("years") or 3),
+            years=int(years),
             auto_sync=True,
             force_full=False,
             progress_cb=_progress_cb,
         )
         df = bt.load_and_validate_csv(csv_main)
+
+        expected_hash = str(task.get("data_hash") or "").strip()
+        local_hash = ""
+        try:
+            local_hash = _sha256_file_cached(csv_main)
+        except Exception:
+            local_hash = ""
+        progress["data_hash"] = local_hash
+
+        if expected_hash and local_hash and expected_hash != local_hash:
+            progress["phase"] = "sync_data"
+            progress["phase_progress"] = 0.0
+            progress["phase_msg"] = "資料版本不同，重新同步"
+            api.progress(task_id, lease_id, progress)
+
+            csv_main, _ = bt.ensure_bitmart_data(
+                symbol=str(task["symbol"]),
+                main_step_min=int(task["timeframe_min"]),
+                years=int(years),
+                auto_sync=True,
+                force_full=True,
+                progress_cb=_progress_cb,
+            )
+            df = bt.load_and_validate_csv(csv_main)
+
+            try:
+                local_hash = _sha256_file_cached(csv_main)
+            except Exception:
+                local_hash = ""
+            progress["data_hash"] = local_hash
+
+            if local_hash and expected_hash != local_hash:
+                progress["phase"] = "error"
+                progress["last_error"] = "data_hash_mismatch"
+                api.release(task_id, lease_id, progress)
+                return
 
         if _should_stop():
             progress["phase"] = "stopped"
@@ -457,10 +540,15 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
                         reverse_mode=reverse_mode,
                     )
 
-                    metrics = dict(res.get("metrics") or {})
-                    score = float(metrics.get("total_return_pct") or -1e9)
-                    params = dict(family_params)
-                    params.update({"tp": float(tp), "sl": float(sl), "max_hold": int(mh)})
+                    metrics = _metrics_from_bt_result(res)
+                    score = float(_score(metrics))
+                    params = {
+                        "family": family,
+                        "family_params": dict(family_params),
+                        "tp": float(tp),
+                        "sl": float(sl),
+                        "max_hold": int(mh),
+                    }
 
                     passed = _passes_thresholds(metrics, thr)
                     _consider_candidate(score, params, metrics, passed)
@@ -487,23 +575,28 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
                         return
 
                     tp, sl, mh = risk_grid[j]
-                    res = bt.run_one(
+                    res = bt.run_backtest(
                         df,
-                        family=family,
-                        family_params=family_params,
-                        tp=float(tp),
-                        sl=float(sl),
-                        max_hold=int(mh),
+                        family,
+                        dict(family_params),
+                        float(tp),
+                        float(sl),
+                        int(mh),
                         fee_side=fee_side,
                         slippage=slippage,
                         worst_case=worst_case,
                         reverse_mode=reverse_mode,
                     )
 
-                    metrics = dict(res.get("metrics") or {})
-                    score = float(metrics.get("total_return_pct") or -1e9)
-                    params = dict(family_params)
-                    params.update({"tp": float(tp), "sl": float(sl), "max_hold": int(mh)})
+                    metrics = _metrics_from_bt_result(res)
+                    score = float(_score(metrics))
+                    params = {
+                        "family": family,
+                        "family_params": dict(family_params),
+                        "tp": float(tp),
+                        "sl": float(sl),
+                        "max_hold": int(mh),
+                    }
 
                     passed = _passes_thresholds(metrics, thr)
                     _consider_candidate(score, params, metrics, passed)
