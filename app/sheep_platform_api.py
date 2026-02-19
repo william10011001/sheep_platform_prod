@@ -262,8 +262,12 @@ class ReleaseIn(BaseModel):
 
 
 @app.get("/healthz")
-def healthz() -> Dict[str, Any]:
-    return {"ok": True, "ts": _utc_iso()}
+def healthz():
+    return {
+        "ok": True,
+        "ts": _utc_iso(),
+        "git_sha": os.getenv("SHEEP_GIT_SHA", ""),
+    }
 
 
 @app.get("/manifest")
