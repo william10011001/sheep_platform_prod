@@ -1,4 +1,5 @@
 import json
+import re
 import random
 import threading
 import time
@@ -289,12 +290,43 @@ class JobManager:
             )
             db.update_task_progress(task_id, progress)
 
+            _SYNC_RE = re.compile(r"^\s*(\S+)\s+已寫入\s+(\d+)\s*/\s*(\d+)\s*$")
+
             def _progress_cb(frac: float, msg: str) -> None:
                 if stop_flag.is_set():
                     return
                 progress["phase"] = "sync_data"
                 progress["phase_progress"] = float(frac)
                 progress["phase_msg"] = str(msg)
+
+                m = _SYNC_RE.match(str(msg))
+                if m:
+                    label = str(m.group(1))
+                    done_i = int(m.group(2))
+                    total_i = int(m.group(3))
+
+                    sync = progress.get("sync")
+                    if not isinstance(sync, dict):
+                        sync = {"items": {}, "current": ""}
+                    items = sync.get("items")
+                    if not isinstance(items, dict):
+                        items = {}
+                    items[label] = {"done": int(done_i), "total": int(total_i)}
+                    sync["items"] = items
+                    sync["current"] = label
+
+                    od = 0
+                    ot = 0
+                    for v in items.values():
+                        try:
+                            od += int(v.get("done") or 0)
+                            ot += int(v.get("total") or 0)
+                        except Exception:
+                            pass
+                    sync["overall_done"] = int(od)
+                    sync["overall_total"] = int(ot)
+                    progress["sync"] = sync
+
                 progress["updated_at"] = db.utc_now_iso()
                 db.update_task_progress(task_id, progress)
 

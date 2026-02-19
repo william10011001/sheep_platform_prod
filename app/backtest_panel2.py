@@ -5085,7 +5085,7 @@ def recompute_best_detail(df: pd.DataFrame, best: Dict) -> Dict:
         target_ob_data = None  # 用於儲存 OB_FVG 的陣列資料
 
         for f, prm in cfg["families"].items():
-            # [專家修正] 注入時間戳
+            # 注入時間戳
             prm = prm.copy()
             prm["_ts"] = df["ts"].values
             
@@ -5124,7 +5124,7 @@ def recompute_best_detail(df: pd.DataFrame, best: Dict) -> Dict:
                 is_fvg = np.isfinite(fvg_top_val)
                 zone_form_idx = int(ob_idx_arr[base_idx]) if base_idx < len(ob_idx_arr) else -1
 
-                # 倒查 OB 形成 index (專家級回溯邏輯)
+                # 倒查 OB 形成 index（回溯）
                 ob_form_idx = -1
                 if np.isfinite(ob_top_val) and np.isfinite(ob_bottom_val):
                     search_end = zone_form_idx if zone_form_idx >= 0 else base_idx
@@ -5326,7 +5326,7 @@ def run_grid_gpu(df: pd.DataFrame,
 
     # ----------------- 單家族模式 -----------------
     if not multi_mode:
-        # [教授修正] 若外部有傳入明確的參數列表(來自JSON)，則優先使用，否則從UI生成
+        # 若外部有傳入明確的參數列表（JSON），則優先使用；否則從 UI 生成
         if explicit_combos is not None:
             plist = explicit_combos
         else:
@@ -5350,7 +5350,7 @@ def run_grid_gpu(df: pd.DataFrame,
 
             total = max(1, len(plist) * len(current_tp_list) * len(current_sl_list))
 
-            # [專家修正] 準備時間戳
+            # 準備時間戳
             ts_vals = df["ts"].values
 
             if single_family == "TEMA_RSI":
@@ -5433,7 +5433,7 @@ def run_grid_gpu(df: pd.DataFrame,
                         so = sortino_ratio(perbar, bpy)
                         cal = calmar_ratio(cagr, maxdd_pct)
 
-                        # ---- [專家修正] TEMA_RSI 進場策略細分統計 (Grid Mode) ----
+                        # ---- TEMA_RSI 進場策略細分統計（格點模式） ----
                         # 在格點掃描時直接計算各策略的細項，寫入 stats_breakdown
                         entry_map_tema = {1: "Pullback", 2: "Momentum", 3: "Cross", 4: "RSI_Revert", 0: "Unknown"}
                         stats_by_entry = {}
@@ -5507,7 +5507,7 @@ def run_grid_gpu(df: pd.DataFrame,
                 for prm in plist:
                     if single_family == "LaguerreRSI_TEMA":
                         # Numba Call for Laguerre
-                        # [專家修正] 注入時間戳
+                        # 注入時間戳
                         prm = prm.copy()
                         prm["_ts"] = ts_vals
                         
@@ -6067,7 +6067,7 @@ def build_cache_for_family(df: pd.DataFrame,
                            fam: str,
                            plist: List[Dict],
                            logger=None) -> List[np.ndarray]:
-    """依家族與參數清單，批量產生 entry signal（布林陣列），含專家級記憶體快取。"""
+    """依家族與參數清單，批量產生 entry signal（布林陣列），含記憶體快取。"""
     _log = logger if callable(logger) else (lambda msg: None)
 
     # 0. 檢查通用快取 (Expert Cache Check)
@@ -7746,7 +7746,7 @@ def app():
             ui_params["obfvg_reverse"] = st.checkbox("啟用反向開倉 (Short)", value=False, help="若勾選，遇到做多訊號時將改為做空 (Entry Short)，TP/SL 方向亦會反轉。", key="obfvg_reverse")
 
         elif family == "SMC":
-            st.markdown("##### Expert SMC Fusion 參數")
+            st.markdown("##### SMC Fusion 參數")
             col1, col2, col3 = st.columns(3)
             with col1:
                 ui_params["smc_len_min"] = st.number_input("Pivot Lookback 最小", 5, 50, 14)
@@ -8558,7 +8558,7 @@ def app():
                         logger=ui_logger,
                         signal_mode=signal_mode,
                         use_torch_compile=bool(use_torch_compile),
-                        explicit_combos=combos_family if not multi_mode else None,  # [教授修正] 傳入解析後的參數列表
+                        explicit_combos=combos_family if not multi_mode else None,  # 傳入解析後的參數列表
                         micro_ctx=st.session_state.get("microfill_ctx", None)
                     )
                     results.extend(_part)

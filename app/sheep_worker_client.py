@@ -567,7 +567,7 @@ def main():
     if args.username and args.password:
         token = _issue_token(base_url, str(args.username), str(args.password), int(args.ttl_seconds), str(args.token_name))
         # Print once so you can paste into config if you want long-running workers.
-        print(f"[info] issued token (save it to config if you want): {token[:6]}...{token[-6:]}")
+        print(f"token_issued: {token[:6]}...{token[-6:]}")
 
     if not token:
         raise SystemExit("Missing token. Provide it in worker_config.json or use --username/--password to issue one.")
@@ -580,11 +580,11 @@ def main():
     latest_ver = str(mf.get("worker_latest_version", min_ver))
 
     if WORKER_PROTOCOL < min_proto:
-        raise SystemExit(f"Worker protocol too old. Need >= {min_proto}. You have {WORKER_PROTOCOL}.")
+        raise SystemExit(f"worker_protocol_too_old: required>={min_proto} current={WORKER_PROTOCOL}")
 
     if not semver_gte(WORKER_VERSION, min_ver):
         dl = mf.get("worker_download_url") or ""
-        raise SystemExit(f"Worker version too old. Need >= {min_ver}. You have {WORKER_VERSION}. Latest is {latest_ver}. {dl}")
+        raise SystemExit(f"worker_version_too_old: required>={min_ver} current={WORKER_VERSION} latest={latest_ver} download={dl}")
 
     if semver_gte(latest_ver, WORKER_VERSION) and parse_semver(latest_ver) > parse_semver(WORKER_VERSION):
         dl = mf.get("worker_download_url") or ""

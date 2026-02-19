@@ -946,43 +946,124 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
             except Exception:
                 pass
 
-        top_a, top_b, top_c, top_d = st.columns([1.1, 1.3, 1.3, 1.3])
-        with top_a:
-            st.write("狀態", view_status)
-        with top_b:
-            st.write("參數進度", f"{combos_done}/{combos_total}")
-        with top_c:
-            st.write("最佳分數", "-" if best_any_score is None else round(float(best_any_score), 6))
-        with top_d:
-            st.write("達標", bool(best_any_passed))
+        status_map = {
+            "assigned": "待執行",
+            "queued": "隊列中",
+            "running": "執行中",
+            "completed": "已完成",
+            "expired": "已過期",
+            "revoked": "已撤銷",
+        }
+        phase_map = {
+            "idle": "待命",
+            "sync_data": "資料同步",
+            "build_grid": "建立參數",
+            "grid_search": "參數搜尋",
+            "stopped": "已停止",
+            "error": "錯誤",
+        }
 
-        elapsed_s = prog.get("elapsed_s")
-        speed_cps = prog.get("speed_cps")
-        eta_s = prog.get("eta_s")
-        if isinstance(elapsed_s, (int, float)) or isinstance(speed_cps, (int, float)) or isinstance(eta_s, (int, float)):
+        status_label = status_map.get(str(view_status), str(view_status) or "-")
+        phase_label = phase_map.get(str(phase), str(phase) or "-")
+        passed_label = "是" if bool(best_any_passed) else "否"
+
+        def _pill_class(kind: str) -> str:
+            k = str(kind or "")
+            if k in ("completed",):
+                return "ok"
+            if k in ("running",):
+                return "info"
+            if k in ("queued", "assigned"):
+                return "warn"
+            if k in ("expired", "revoked", "error"):
+                return "bad"
+            return "neutral"
+
+        top_a, top_b, top_c, top_d, top_e = st.columns([1.0, 1.1, 1.5, 1.3, 1.0])
+        with top_a:
+            st.markdown(
+                f'<span class="pill pill-{_pill_class(view_status)}">{status_label}</span>',
+                unsafe_allow_html=True,
+            )
+        with top_b:
+            st.markdown(f'<div class="small-muted">階段</div><div class="kpi">{phase_label}</div>', unsafe_allow_html=True)
+        with top_c:
+            prog_text = "-"
+            sync = prog.get("sync")
+            if int(combos_total) > 0:
+                prog_text = f"{int(combos_done)}/{int(combos_total)}"
+            elif str(phase) == "sync_data" and isinstance(sync, dict):
+                items = sync.get("items")
+                cur = str(sync.get("current") or "")
+                if isinstance(items, dict) and cur in items:
+                    try:
+                        done_i = int(items[cur].get("done") or 0)
+                        total_i = int(items[cur].get("total") or 0)
+                        if total_i > 0:
+                            prog_text = f"{cur} {done_i}/{total_i}"
+                    except Exception:
+                        prog_text = "-"
+            st.markdown(f'<div class="small-muted">進度</div><div class="kpi">{prog_text}</div>', unsafe_allow_html=True)
+        with top_d:
+            sc_txt = "-" if best_any_score is None else str(round(float(best_any_score), 6))
+            st.markdown(f'<div class="small-muted">最佳分數</div><div class="kpi">{sc_txt}</div>', unsafe_allow_html=True)
+        with top_e:
+            st.markdown(
+                f'<span class="pill pill-{"ok" if bool(best_any_passed) else "neutral"}">達標 {passed_label}</span>',
+                unsafe_allow_html=True,
+            )
+
+        # Only show speed indicators when in grid_search.
+        if str(phase) == "grid_search":
+            elapsed_s = prog.get("elapsed_s")
+            speed_cps = prog.get("speed_cps")
+            eta_s = prog.get("eta_s")
             es = "-" if elapsed_s is None else f"{float(elapsed_s):.2f}s"
             sp = "-" if speed_cps is None else f"{float(speed_cps):.3f} cps"
             et = "-" if eta_s is None else f"{float(eta_s):.1f}s"
             st.markdown(f'<div class="small-muted">耗時 {es} · 速度 {sp} · ETA {et}</div>', unsafe_allow_html=True)
 
         if last_error:
-            st.caption(last_error[:160])
+            st.error(last_error[:220])
 
+        # Progress visualization
+        sync = prog.get("sync")
         if combos_total > 0:
             st.progress(min(1.0, float(combos_done) / float(combos_total)))
-        elif phase == "sync_data" and isinstance(phase_progress, (int, float)):
-            st.progress(float(phase_progress))
+        elif str(phase) == "sync_data":
+            items = sync.get("items") if isinstance(sync, dict) else None
+            if isinstance(items, dict) and items:
+                order = []
+                if "1m" in items:
+                    order.append("1m")
+                cur = str(sync.get("current") or "") if isinstance(sync, dict) else ""
+                if cur and cur in items and cur not in order:
+                    order.append(cur)
+                for k in sorted(items.keys()):
+                    if k not in order:
+                        order.append(k)
+                for k in order:
+                    try:
+                        d = int(items[k].get("done") or 0)
+                        tot = int(items[k].get("total") or 0)
+                    except Exception:
+                        d, tot = 0, 0
+                    if tot > 0:
+                        st.markdown(f'<div class="small-muted">資料同步 {k}：{d}/{tot}</div>', unsafe_allow_html=True)
+                        st.progress(min(1.0, float(d) / float(tot)))
+            elif isinstance(phase_progress, (int, float)):
+                st.progress(float(phase_progress))
 
-        if phase_msg:
+        if phase_msg and (str(phase) != "sync_data" or not (isinstance(sync, dict) and isinstance(sync.get("items"), dict) and sync.get("items"))):
             st.caption(phase_msg)
 
         grid_a, grid_b = st.columns([1.2, 1.0])
         with grid_a:
             rows = []
-            rows.append({"metric": "trades", "value": "-" if trades is None else int(trades), "threshold": int(min_trades), "gap": _fmt_gap_min(float(trades) if trades is not None else None, float(min_trades))})
-            rows.append({"metric": "return_pct", "value": "-" if ret_pct is None else round(float(ret_pct), 4), "threshold": float(min_total_return_pct), "gap": _fmt_gap_min(ret_pct, float(min_total_return_pct))})
-            rows.append({"metric": "max_drawdown_pct", "value": "-" if dd_pct is None else round(float(dd_pct), 4), "threshold": float(max_drawdown_pct), "gap": _fmt_gap_max(dd_pct, float(max_drawdown_pct))})
-            rows.append({"metric": "sharpe", "value": "-" if sharpe is None else round(float(sharpe), 4), "threshold": float(min_sharpe), "gap": _fmt_gap_min(sharpe, float(min_sharpe))})
+            rows.append({"指標": "交易筆數", "目前": "-" if trades is None else int(trades), "門檻": int(min_trades), "差距": _fmt_gap_min(float(trades) if trades is not None else None, float(min_trades))})
+            rows.append({"指標": "總報酬", "目前": "-" if ret_pct is None else round(float(ret_pct), 4), "門檻": float(min_total_return_pct), "差距": _fmt_gap_min(ret_pct, float(min_total_return_pct))})
+            rows.append({"指標": "最大回撤", "目前": "-" if dd_pct is None else round(float(dd_pct), 4), "門檻": float(max_drawdown_pct), "差距": _fmt_gap_max(dd_pct, float(max_drawdown_pct))})
+            rows.append({"指標": "Sharpe", "目前": "-" if sharpe is None else round(float(sharpe), 4), "門檻": float(min_sharpe), "差距": _fmt_gap_min(sharpe, float(min_sharpe))})
             st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
 
         with grid_b:
