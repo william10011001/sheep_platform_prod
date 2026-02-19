@@ -7,21 +7,59 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import streamlit as st
-_st_dataframe = st.dataframe
+
+def _get_orig_dataframe():
+    orig = getattr(st, "_sheep_orig_dataframe", None)
+    if orig is not None and getattr(orig, "__name__", "") != "_dataframe_compat":
+        return orig
+
+    cur = getattr(st, "dataframe", None)
+    if cur is None:
+        return None
+
+    inner = getattr(cur, "_sheep_orig", None)
+    if inner is not None and getattr(inner, "__name__", "") != "_dataframe_compat":
+        try:
+            st._sheep_orig_dataframe = inner
+        except Exception:
+            pass
+        return inner
+
+    return cur
+
 
 def _dataframe_compat(data=None, **kwargs):
     if "use_container_width" in kwargs:
         u = kwargs.pop("use_container_width")
         kwargs.setdefault("width", "stretch" if bool(u) else "content")
+
+    orig = _get_orig_dataframe()
+    if orig is None:
+        orig = st.dataframe
+
     try:
-        return _st_dataframe(data, **kwargs)
+        return orig(data, **kwargs)
     except TypeError:
         if "width" in kwargs:
             w = kwargs.pop("width")
             kwargs["use_container_width"] = (str(w) == "stretch")
-        return _st_dataframe(data, **kwargs)
+        try:
+            return orig(data, **kwargs)
+        except TypeError:
+            kwargs.pop("hide_index", None)
+            return orig(data, **kwargs)
 
-st.dataframe = _dataframe_compat
+
+if getattr(st.dataframe, "__name__", "") != "_dataframe_compat":
+    try:
+        st._sheep_orig_dataframe = _get_orig_dataframe()
+    except Exception:
+        pass
+    try:
+        _dataframe_compat._sheep_orig = _get_orig_dataframe()
+    except Exception:
+        pass
+    st.dataframe = _dataframe_compat
 
 import backtest_panel2 as bt
 
@@ -75,11 +113,14 @@ def _style() -> None:
         <style>
         :root {
           --bg: #0b0f19;
-          --card: rgba(255,255,255,0.04);
-          --border: rgba(255,255,255,0.12);
+          --card: rgba(255,255,255,0.045);
+          --card2: rgba(255,255,255,0.06);
+          --border: rgba(255,255,255,0.14);
           --text: rgba(255,255,255,0.92);
           --muted: rgba(255,255,255,0.66);
           --accent: rgba(120, 180, 255, 0.95);
+          --accent2: rgba(255, 120, 180, 0.65);
+          --shadow: 0 12px 30px rgba(0,0,0,0.35);
         }
 
         .stApp {
@@ -87,6 +128,10 @@ def _style() -> None:
                       radial-gradient(900px 500px at 110% 20%, rgba(255,120,180,0.14), transparent 55%),
                       var(--bg);
           color: var(--text);
+        }
+
+        html, body, [class*="css"]  {
+          font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial, "Apple Color Emoji", "Segoe UI Emoji";
         }
 
         div[data-testid="stSidebar"] {
@@ -101,10 +146,11 @@ def _style() -> None:
         }
 
         .card {
-          background: var(--card);
+          background: linear-gradient(180deg, rgba(255,255,255,0.055), rgba(255,255,255,0.03));
           border: 1px solid var(--border);
-          border-radius: 14px;
-          padding: 16px 16px 10px 16px;
+          border-radius: 16px;
+          padding: 16px 16px 12px 16px;
+          box-shadow: var(--shadow);
         }
 
         .metric-row {
@@ -116,7 +162,7 @@ def _style() -> None:
           padding: 10px 12px;
           border-radius: 12px;
           border: 1px solid var(--border);
-          background: rgba(255,255,255,0.03);
+          background: rgba(255,255,255,0.035);
           min-width: 160px;
         }
         .metric .k { color: var(--muted); font-size: 12px; }
@@ -127,6 +173,42 @@ def _style() -> None:
         header[data-testid="stHeader"] { background: rgba(0,0,0,0); }
         footer { visibility: hidden; }
         #MainMenu { visibility: hidden; }
+
+        .stButton > button, .stDownloadButton > button {
+          width: 100%;
+          border-radius: 12px;
+          border: 1px solid rgba(255,255,255,0.14);
+          background: rgba(255,255,255,0.06);
+          color: var(--text);
+          box-shadow: 0 8px 22px rgba(0,0,0,0.25);
+          transition: transform 120ms ease, border-color 120ms ease, filter 120ms ease;
+        }
+
+        .stButton > button:hover, .stDownloadButton > button:hover {
+          transform: translateY(-1px);
+          border-color: rgba(120,180,255,0.55);
+          filter: brightness(1.05);
+        }
+
+        .stButton > button:focus, .stDownloadButton > button:focus {
+          outline: none;
+          box-shadow: 0 0 0 2px rgba(120,180,255,0.35);
+        }
+
+        div[data-baseweb="input"] input,
+        div[data-baseweb="textarea"] textarea,
+        div[data-baseweb="select"] > div {
+          background: rgba(255,255,255,0.04) !important;
+          border: 1px solid rgba(255,255,255,0.14) !important;
+          border-radius: 12px !important;
+          color: var(--text) !important;
+        }
+
+        div[data-baseweb="input"] input:focus,
+        div[data-baseweb="textarea"] textarea:focus {
+          border-color: rgba(120,180,255,0.55) !important;
+          box-shadow: 0 0 0 2px rgba(120,180,255,0.25) !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -385,31 +467,31 @@ def _render_kpi(title: str, value: Any, sub: str = "") -> str:
 
 
 def _page_tutorial(user: Optional[Dict[str, Any]] = None) -> None:
-    st.markdown(f"### {APP_TITLE} · 新手教學")
-    st.markdown('<div class="small-muted">新手建議詳讀以下教學</div>', unsafe_allow_html=True)
+    st.markdown(f"### {APP_TITLE} · 使用指引")
+    st.markdown('<div class="small-muted">流程與操作要點</div>', unsafe_allow_html=True)
 
     st.markdown("")
 
-    # A tiny animated walkthrough using pure HTML/CSS (no extra dependencies).
     st.components.v1.html(
         """
         <div style="padding:16px;border-radius:14px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);">
-          <div style="font-size:14px;opacity:.9;margin-bottom:8px;">流程總覽</div>
-          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-            <div class="sp-step">登入</div>
-            <div class="sp-arrow">➜</div>
-            <div class="sp-step sp-pulse">開始全部任務</div>
-            <div class="sp-arrow">➜</div>
-            <div class="sp-step">等它跑完</div>
-            <div class="sp-arrow">➜</div>
-            <div class="sp-step">看候選結果</div>
-            <div class="sp-arrow">➜</div>
-            <div class="sp-step">提交策略</div>
-            <div class="sp-arrow">➜</div>
-            <div class="sp-step">結算領獎金</div>
+          <div style="font-size:14px;opacity:.9;margin-bottom:10px;">流程</div>
+          <div class="sp-flow">
+            <span class="sp-step">登入</span>
+            <span class="sp-sep">></span>
+            <span class="sp-step sp-focus">開始全部任務</span>
+            <span class="sp-sep">></span>
+            <span class="sp-step">候選結果</span>
+            <span class="sp-sep">></span>
+            <span class="sp-step">提交策略</span>
+            <span class="sp-sep">></span>
+            <span class="sp-step">結算</span>
           </div>
         </div>
         <style>
+          .sp-flow{
+            display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+          }
           .sp-step{
             padding:10px 12px;
             border-radius:999px;
@@ -417,15 +499,10 @@ def _page_tutorial(user: Optional[Dict[str, Any]] = None) -> None:
             border:1px solid rgba(255,255,255,0.10);
             font-size:13px;
           }
-          .sp-arrow{opacity:.35}
-          .sp-pulse{
-            animation: spPulse 1.3s ease-in-out infinite;
-            border-color: rgba(255,255,255,0.22);
-          }
-          @keyframes spPulse {
-            0% { transform: scale(1); filter: brightness(1); }
-            50% { transform: scale(1.03); filter: brightness(1.15); }
-            100% { transform: scale(1); filter: brightness(1); }
+          .sp-sep{opacity:.35}
+          .sp-focus{
+            border-color: rgba(120,180,255,0.55);
+            background: rgba(120,180,255,0.10);
           }
         </style>
         """,
@@ -433,28 +510,26 @@ def _page_tutorial(user: Optional[Dict[str, Any]] = None) -> None:
     )
 
     st.markdown("")
-    st.markdown("#### 1) 先登入 / 註冊")
-    st.write("註冊時，帳號只能英數底線（大小寫 + 數字）")
+    st.markdown("#### 1) 登入或建立帳號")
+    st.write("帳號格式限制為英數與底線，長度 3 到 32 字元。")
 
-    st.markdown("#### 2) 到「任務」頁，按一次「開始全部任務」就好了")
+    st.markdown("#### 2) 任務執行")
     st.write(
-        "你只要點一次。系統會："
-        "\n- 自動把目前分配到的任務塞進隊列"
-        "\n- 跑完後自動抓下一批任務"
-        "\n- 剩下的系統會幫你排程並挖礦"
+        "在任務頁點擊開始全部任務後，系統會自動排隊並依序執行。\n"
+        "若採用自動刷新，任務完成後會自動接續下一批。"
     )
 
-    st.markdown("#### 3) 觀察進度與最佳參數")
-    st.write("每個任務會顯示：參數進度、最佳分數、是否達標、速度與 ETA。你只要看「達標」跟「候選結果」就好。")
+    st.markdown("#### 3) 進度與最佳參數")
+    st.write("任務卡片會顯示參數進度、最佳分數、達標狀態、速度與預估剩餘時間。")
 
-    st.markdown("#### 4) 任務完成後，去「候選結果」挑你要提交的策略")
-    st.write("任務完成後會出現候選列表。提交後會進入策略池，後續結算會用它算獎勵。")
+    st.markdown("#### 4) 候選結果與提交")
+    st.write("任務完成後會產生候選列表。提交後會進入策略池並參與後續結算。")
 
-    st.markdown("#### 5) 到「結算」頁填錢包地址")
-    st.write("地址會做基本格式檢查。不要亂填(獎勵是系統自動發送)。")
+    st.markdown("#### 5) 結算資料")
+    st.write("結算頁可更新分潤地址。地址會做基本格式檢查。")
 
     st.markdown("")
-    st.info("小提醒：如果你只是想『讓它一直跑』，保持「自動刷新」勾著就對了。")
+    st.info("提示：若需持續自動接續任務，啟用自動刷新。")
 
 def _page_dashboard(user: Dict[str, Any]) -> None:
     cycle = db.get_active_cycle()
@@ -493,19 +568,55 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
         st.info("無任務。")
         return
 
-    df = pd.DataFrame([
-        {
-            "task_id": t["id"],
-            "pool": t["pool_name"],
-            "symbol": t["symbol"],
-            "tf_min": t["timeframe_min"],
-            "family": t["family"],
-            "partition": f'{int(t["partition_idx"])+1}/{int(t.get("num_partitions") or 1)}',
-            "status": t["status"],
-            "progress": t.get("progress_json", ""),
-        }
-        for t in tasks
-    ])
+    rows = []
+    for t in tasks:
+        try:
+            prog = json.loads(t.get("progress_json") or "{}")
+        except Exception:
+            prog = {}
+
+        combos_done = int(prog.get("combos_done") or 0)
+        combos_total = int(prog.get("combos_total") or 0)
+        pct = (100.0 * float(combos_done) / float(combos_total)) if combos_total > 0 else 0.0
+
+        best_score = prog.get("best_any_score")
+        passed = bool(prog.get("best_any_passed") or False)
+
+        eta_s = prog.get("eta_s")
+        speed_cps = prog.get("speed_cps")
+        phase = str(prog.get("phase") or "")
+        updated_at = str(prog.get("updated_at") or "")
+
+        rows.append(
+            {
+                "task_id": int(t["id"]),
+                "pool": str(t.get("pool_name") or ""),
+                "symbol": str(t.get("symbol") or ""),
+                "tf_min": int(t.get("timeframe_min") or 0),
+                "family": str(t.get("family") or ""),
+                "partition": f'{int(t.get("partition_idx") or 0) + 1}/{int(t.get("num_partitions") or 1)}',
+                "status": str(t.get("status") or ""),
+                "phase": phase,
+                "progress_pct": round(float(pct), 2),
+                "combos_done": int(combos_done),
+                "combos_total": int(combos_total),
+                "best_score": None if best_score is None else round(float(best_score), 6),
+                "passed": bool(passed),
+                "speed_cps": None if speed_cps is None else round(float(speed_cps), 3),
+                "eta_s": None if eta_s is None else round(float(eta_s), 1),
+                "updated_at": updated_at,
+            }
+        )
+
+    df = pd.DataFrame(rows)
+
+    order = {"running": 0, "assigned": 1, "completed": 2, "expired": 3, "revoked": 4}
+    try:
+        df["_ord"] = df["status"].map(order).fillna(9)
+        df = df.sort_values(["_ord", "task_id"], ascending=[True, False]).drop(columns=["_ord"])
+    except Exception:
+        pass
+
     st.dataframe(df, use_container_width=True, hide_index=True)
 
 
@@ -1742,7 +1853,7 @@ def _run_weekly_check(week_start_ts: str, week_end_ts: str) -> None:
 
 
 def main() -> None:
-    st.set_page_config(page_title=APP_TITLE, page_icon="🐑", layout="wide", initial_sidebar_state="expanded")
+    st.set_page_config(page_title=APP_TITLE, layout="wide", initial_sidebar_state="expanded")
     _style()
     _bootstrap()
 

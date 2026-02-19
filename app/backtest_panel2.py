@@ -188,6 +188,34 @@ def _csv_quick_status(symbol: str, step_min: int) -> Dict[str, object]:
     return out
 
 
+# ----------------------------- BitMart 公共端點節流（程序內） ----------------------------- #
+
+_BM_THROTTLE_LOCK = threading.Lock()
+_BM_NEXT_REQUEST_TS = 0.0
+_BM_MIN_INTERVAL_S = 0.08
+
+
+def _bm_wait_request_slot() -> None:
+    """避免多執行緒同時拉 K 線導致 429/30013。"""
+    global _BM_NEXT_REQUEST_TS
+    now = time.time()
+    with _BM_THROTTLE_LOCK:
+        wait_s = float(_BM_NEXT_REQUEST_TS - now)
+        if wait_s < 0.0:
+            wait_s = 0.0
+        _BM_NEXT_REQUEST_TS = max(float(_BM_NEXT_REQUEST_TS), now) + float(_BM_MIN_INTERVAL_S)
+    if wait_s > 0.0:
+        time.sleep(wait_s)
+
+
+def _bm_bump_cooldown(seconds: float) -> None:
+    global _BM_NEXT_REQUEST_TS
+    s = float(max(0.0, seconds))
+    now = time.time()
+    with _BM_THROTTLE_LOCK:
+        _BM_NEXT_REQUEST_TS = max(float(_BM_NEXT_REQUEST_TS), now + s)
+
+
 class BitMartRestClient:
     def __init__(self, base_url: str = BITMART_BASE_URL, timeout: Tuple[float, float] = (3.05, 30.0)):
         self.base_url = base_url.rstrip("/")
@@ -203,6 +231,45 @@ class BitMartRestClient:
         if int(step_min) not in BITMART_KLINE_STEP_MINUTES:
             raise ValueError(f"BitMart step 不支援：{step_min}")
 
+        def _parse_reset_seconds(headers: Dict[str, str]) -> float:
+            v = headers.get("X-BM-RateLimit-Reset")
+            if v is None:
+                return 0.0
+            try:
+                x = float(v)
+            except Exception:
+                return 0.0
+
+            now = time.time()
+            if x > 1e12:
+                return float(max(0.0, (x / 1000.0) - now))
+            if x > 1e9:
+                return float(max(0.0, x - now))
+            return float(max(0.0, x))
+
+        def _sleep_backoff(attempt: int, headers: Optional[Dict[str, str]] = None) -> None:
+            wait_s = 0.0
+            if headers:
+                ra = headers.get("Retry-After") or headers.get("retry-after")
+                if ra is not None:
+                    try:
+                        wait_s = float(ra)
+                    except Exception:
+                        wait_s = 0.0
+                if wait_s <= 0.0:
+                    wait_s = _parse_reset_seconds(headers)
+
+            if wait_s <= 0.0:
+                base = 0.6 * (2.0 ** float(min(6, max(0, int(attempt)))))
+                wait_s = float(min(8.0, base))
+
+            frac = float(time.time() - math.floor(time.time()))
+            jitter = float(min(0.25, 0.05 + frac * 0.18))
+            wait_s = float(max(0.05, wait_s + jitter))
+
+            _bm_bump_cooldown(wait_s)
+            time.sleep(wait_s)
+
         params: Dict[str, object] = {
             "symbol": str(symbol).strip(),
             "step": int(step_min),
@@ -214,39 +281,88 @@ class BitMartRestClient:
             params["after"] = int(after)
 
         url = f"{self.base_url}{BITMART_SPOT_KLINES_ENDPOINT}"
-        resp = self._session.get(url, params=params, timeout=self.timeout)
-        headers = {k: str(v) for k, v in resp.headers.items()}
 
-        if resp.status_code != 200:
-            raise BitMartApiError(f"HTTP {resp.status_code}: {resp.text[:300]}")
+        last_err: Optional[str] = None
+        max_attempts = 8
 
-        try:
-            payload = resp.json()
-        except Exception as e:
-            raise BitMartApiError(f"JSON 解析失敗：{e}") from e
+        for attempt in range(max_attempts):
+            _bm_wait_request_slot()
+            try:
+                resp = self._session.get(url, params=params, timeout=self.timeout)
+            except Exception as e:
+                last_err = f"network_error: {e}"
+                _sleep_backoff(attempt)
+                continue
 
-        code = payload.get("code")
-        if code != 1000:
-            raise BitMartApiError(f"BitMart 回應 code={code}, message={payload.get('message')}, data={payload.get('data')}")
+            headers = {k: str(v) for k, v in resp.headers.items()}
 
-        data = payload.get("data") or []
-        if not isinstance(data, list):
-            data = []
-        self._apply_rate_limit(headers)
-        return data, headers
+            if int(resp.status_code) in (429, 418, 503, 502, 504):
+                self._apply_rate_limit(headers, force_sleep=False)
+                last_err = f"http_{int(resp.status_code)}"
+                _sleep_backoff(attempt, headers)
+                continue
 
-    def _apply_rate_limit(self, headers: Dict[str, str]) -> None:
-        used_s = headers.get("X-BM-RateLimit-Remaining")
+            if resp.status_code != 200:
+                raise BitMartApiError(f"HTTP {resp.status_code}: {resp.text[:300]}")
+
+            try:
+                payload = resp.json()
+            except Exception as e:
+                raise BitMartApiError(f"JSON 解析失敗：{e}") from e
+
+            code = payload.get("code")
+            if int(code or 0) == 1000:
+                data = payload.get("data") or []
+                if not isinstance(data, list):
+                    data = []
+                self._apply_rate_limit(headers, force_sleep=False)
+                return data, headers
+
+            msg = str(payload.get("message") or "")
+
+            if int(code or 0) == 30013:
+                self._apply_rate_limit(headers, force_sleep=False)
+                last_err = f"code_30013: {msg}"
+                _sleep_backoff(attempt, headers)
+                continue
+
+            if int(code or 0) in (70002, 71001, 71002, 71003, 71004, 71005):
+                raise BitMartApiError(f"BitMart 回應 code={code}, message={msg}")
+
+            last_err = f"code_{code}: {msg}"
+            if attempt < max_attempts - 1:
+                _sleep_backoff(attempt, headers)
+                continue
+            raise BitMartApiError(f"BitMart 回應 code={code}, message={msg}, data={payload.get('data')}")
+
+        raise BitMartApiError(f"BitMart 請求失敗：{last_err or 'unknown'}")
+
+    def _apply_rate_limit(self, headers: Dict[str, str], force_sleep: bool = False) -> None:
+        remaining_s = headers.get("X-BM-RateLimit-Remaining")
         limit_s = headers.get("X-BM-RateLimit-Limit")
         reset_s = headers.get("X-BM-RateLimit-Reset")
+
         try:
-            used = int(used_s) if used_s is not None else 0
-            limit = int(limit_s) if limit_s is not None else 0
-            reset = int(reset_s) if reset_s is not None else 0
+            remaining = int(float(remaining_s)) if remaining_s is not None else -1
+            limit = int(float(limit_s)) if limit_s is not None else -1
+            reset_raw = float(reset_s) if reset_s is not None else 0.0
         except Exception:
             return
-        if limit > 0 and reset > 0 and used >= limit:
-            time.sleep(float(reset) + 0.25)
+
+        now = time.time()
+        reset_wait = 0.0
+        if reset_raw > 1e12:
+            reset_wait = max(0.0, (reset_raw / 1000.0) - now)
+        elif reset_raw > 1e9:
+            reset_wait = max(0.0, reset_raw - now)
+        else:
+            reset_wait = max(0.0, reset_raw)
+
+        if limit > 0 and remaining >= 0 and remaining <= 0 and reset_wait > 0.0:
+            wait_s = float(min(30.0, reset_wait + 0.25))
+            _bm_bump_cooldown(wait_s)
+            if force_sleep:
+                time.sleep(wait_s)
 
 
 def _bitmart_rows_to_df(rows: List[List[str]]) -> pd.DataFrame:
@@ -255,7 +371,9 @@ def _bitmart_rows_to_df(rows: List[List[str]]) -> pd.DataFrame:
         if not isinstance(r, (list, tuple)) or len(r) < 6:
             continue
         try:
-            ts_sec = int(float(r[0]))
+            ts_raw = int(float(r[0]))
+            # 部分端點/節點可能回傳毫秒 timestamp
+            ts_sec = int(ts_raw // 1000) if ts_raw > 1000000000000 else int(ts_raw)
         except Exception:
             continue
         out_rows.append({
@@ -293,46 +411,55 @@ def _full_sync_bitmart_csv(symbol: str,
     start_ts = _floor_to_step(int(start_dt.timestamp()), step_sec)
     end_ts = _last_closed_open_ts(step_min, int(now_utc.timestamp()))
 
-    client = BitMartRestClient()
-
-    tmp_csv = csv_path.with_suffix(csv_path.suffix + ".tmp")
-    with tmp_csv.open("w", encoding="utf-8", newline="") as f:
-        f.write("ts,open,high,low,close,volume\n")
-
     after = int(start_ts - step_sec)
     expected_total = int((end_ts - start_ts) // step_sec) + 1
     written = 0
     guard = 0
 
-    while True:
-        guard += 1
-        if guard > 1000000:
-            raise RuntimeError("同步迴圈超過限制次數")
+    fetch_lock_path = Path(str(csv_path) + ".net.lock")
+    fetch_timeout = 60.0 if not csv_path.exists() else 2.0
 
-        rows, _hdr = client.get_klines(symbol=symbol, step_min=step_min, limit=200, after=after)
-        df = _bitmart_rows_to_df(rows)
-        if df.empty:
-            break
+    try:
+        with FileLock(str(fetch_lock_path), timeout=float(fetch_timeout)):
+            client = BitMartRestClient()
 
-        df = df[df["_ts_sec"] > after]
-        df = df[(df["_ts_sec"] >= start_ts) & (df["_ts_sec"] <= end_ts)]
-        if df.empty:
-            if after >= end_ts:
-                break
-            after = int(after + 200 * step_sec)
-            continue
+            tmp_csv = csv_path.with_suffix(csv_path.suffix + ".tmp")
+            with tmp_csv.open("w", encoding="utf-8", newline="") as f:
+                f.write("ts,open,high,low,close,volume\n")
 
-        with tmp_csv.open("a", encoding="utf-8", newline="") as f:
-            df.drop(columns=["_ts_sec"]).to_csv(f, index=False, header=False)
+            while True:
+                guard += 1
+                if guard > 1000000:
+                    raise RuntimeError("同步迴圈超過限制次數")
 
-        written += int(len(df))
-        after = int(df["_ts_sec"].max())
+                rows, _hdr = client.get_klines(symbol=symbol, step_min=step_min, limit=200, after=after)
+                df = _bitmart_rows_to_df(rows)
+                if df.empty:
+                    break
 
-        if progress_cb is not None and expected_total > 0:
-            progress_cb(min(1.0, written / expected_total), f"{_step_min_to_label(step_min)} 已寫入 {written} / {expected_total}")
+                df = df[df["_ts_sec"] > after]
+                df = df[(df["_ts_sec"] >= start_ts) & (df["_ts_sec"] <= end_ts)]
+                if df.empty:
+                    if after >= end_ts:
+                        break
+                    after = int(after + 200 * step_sec)
+                    continue
 
-        if after >= end_ts:
-            break
+                with tmp_csv.open("a", encoding="utf-8", newline="") as f:
+                    df.drop(columns=["_ts_sec"]).to_csv(f, index=False, header=False)
+
+                written += int(len(df))
+                after = int(df["_ts_sec"].max())
+
+                if progress_cb is not None and expected_total > 0:
+                    progress_cb(min(1.0, written / expected_total), f"{_step_min_to_label(step_min)} 已寫入 {written} / {expected_total}")
+
+                if after >= end_ts:
+                    break
+    except Timeout:
+        if csv_path.exists():
+            return str(csv_path)
+        raise RuntimeError("資料同步鎖定超時，請稍後重試。")
 
     if written <= 0:
         raise RuntimeError("同步結果為空，請確認交易對與時間級別是否有資料")
@@ -407,41 +534,46 @@ def _append_update_bitmart_csv(symbol: str,
     if last_ts >= end_closed:
         return str(csv_path)
 
-    client = BitMartRestClient()
-
-    status = _csv_quick_status(symbol, step_min)
-    last_ts2 = status.get("end_ts_sec")
-    if last_ts2 is not None and int(last_ts2) >= end_closed:
-        return str(csv_path)
-    if last_ts2 is None:
-        return _full_sync_bitmart_csv(symbol=symbol, step_min=step_min, years=years, progress_cb=None)
-
-    after = int(last_ts2)
     dfs = []
     fetched = 0
     guard = 0
 
-    while True:
-        guard += 1
-        if guard > 1000000:
-            raise RuntimeError("更新迴圈超過限制次數")
+    fetch_lock_path = Path(str(csv_path) + ".net.lock")
+    try:
+        with FileLock(str(fetch_lock_path), timeout=1.0):
+            client = BitMartRestClient()
 
-        rows, _hdr = client.get_klines(symbol=symbol, step_min=step_min, limit=200, after=after)
-        df = _bitmart_rows_to_df(rows)
-        if df.empty:
-            break
+            status = _csv_quick_status(symbol, step_min)
+            last_ts2 = status.get("end_ts_sec")
+            if last_ts2 is not None and int(last_ts2) >= end_closed:
+                return str(csv_path)
+            if last_ts2 is None:
+                return _full_sync_bitmart_csv(symbol=symbol, step_min=step_min, years=years, progress_cb=None)
 
-        df = df[df["_ts_sec"] > after]
-        df = df[df["_ts_sec"] <= end_closed]
-        if df.empty:
-            break
+            after = int(last_ts2)
+            while True:
+                guard += 1
+                if guard > 1000000:
+                    raise RuntimeError("更新迴圈超過限制次數")
 
-        dfs.append(df)
-        fetched += int(len(df))
-        after = int(df["_ts_sec"].max())
+                rows, _hdr = client.get_klines(symbol=symbol, step_min=step_min, limit=200, after=after)
+                df = _bitmart_rows_to_df(rows)
+                if df.empty:
+                    break
 
-        if after >= end_closed:
-            break
+                df = df[df["_ts_sec"] > after]
+                df = df[df["_ts_sec"] <= end_closed]
+                if df.empty:
+                    break
+
+                dfs.append(df)
+                fetched += int(len(df))
+                after = int(df["_ts_sec"].max())
+
+                if after >= end_closed:
+                    break
+    except Timeout:
+        return str(csv_path)
 
     if fetched <= 0:
         try:
