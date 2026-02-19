@@ -292,7 +292,7 @@ def _login_form() -> None:
             st.session_state["captcha_t0"] = time.time()
             return
         if dt < captcha_min_s:
-            st.error("滑動太快了 🤨 重新拖一次。")
+            st.error("滑動太快了 重新拖一次。")
             st.session_state["captcha_nonce"] = random.randint(1000, 9999)
             st.session_state["captcha_t0"] = time.time()
             return
@@ -386,7 +386,7 @@ def _render_kpi(title: str, value: Any, sub: str = "") -> str:
 
 def _page_tutorial(user: Optional[Dict[str, Any]] = None) -> None:
     st.markdown(f"### {APP_TITLE} · 新手教學")
-    st.markdown('<div class="small-muted">三分鐘上手：少走彎路，少踩坑。</div>', unsafe_allow_html=True)
+    st.markdown('<div class="small-muted">新手建議詳讀以下教學</div>', unsafe_allow_html=True)
 
     st.markdown("")
 
@@ -406,7 +406,7 @@ def _page_tutorial(user: Optional[Dict[str, Any]] = None) -> None:
             <div class="sp-arrow">➜</div>
             <div class="sp-step">提交策略</div>
             <div class="sp-arrow">➜</div>
-            <div class="sp-step">結算領獎</div>
+            <div class="sp-step">結算領獎金</div>
           </div>
         </div>
         <style>
@@ -434,24 +434,24 @@ def _page_tutorial(user: Optional[Dict[str, Any]] = None) -> None:
 
     st.markdown("")
     st.markdown("#### 1) 先登入 / 註冊")
-    st.write("註冊時，帳號只能英數底線，密碼要夠長（至少 10 碼、大小寫 + 數字）。這不是在刁你，是在擋低成本撞庫。")
+    st.write("註冊時，帳號只能英數底線（大小寫 + 數字）")
 
-    st.markdown("#### 2) 到「任務」頁，按一次「開始全部任務」就夠了")
+    st.markdown("#### 2) 到「任務」頁，按一次「開始全部任務」就好了")
     st.write(
         "你只要點一次。系統會："
         "\n- 自動把目前分配到的任務塞進隊列"
         "\n- 跑完後自動抓下一批任務"
-        "\n- 不用你再回去點第二次、更不用你雙擊自動刷新"
+        "\n- 剩下的系統會幫你排程並挖礦"
     )
 
     st.markdown("#### 3) 觀察進度與最佳參數")
-    st.write("每個任務會顯示：參數進度、最佳分數、是否達標、速度與 ETA。你只要看「達標」跟「候選結果」就好，其他都是工程師用的 debug 資訊。")
+    st.write("每個任務會顯示：參數進度、最佳分數、是否達標、速度與 ETA。你只要看「達標」跟「候選結果」就好。")
 
     st.markdown("#### 4) 任務完成後，去「候選結果」挑你要提交的策略")
     st.write("任務完成後會出現候選列表。提交後會進入策略池，後續結算會用它算獎勵。")
 
     st.markdown("#### 5) 到「結算」頁填錢包地址")
-    st.write("地址會做基本格式檢查。不要亂填，不然獎勵發不出去只能怪你自己。")
+    st.write("地址會做基本格式檢查。不要亂填(獎勵是系統自動發送)。")
 
     st.markdown("")
     st.info("小提醒：如果你只是想『讓它一直跑』，保持「自動刷新」勾著就對了。")
