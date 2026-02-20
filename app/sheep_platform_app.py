@@ -134,14 +134,14 @@ iframe[title="st.components.v1.html"] {
   top: 0 !important;
   left: 0 !important;
   width: 100% !important;
-  height: 86px !important;
+  height: 98px !important;
   border: 0 !important;
   z-index: 2147483000 !important;
 }
 
 /* 讓主內容往下避開頂部品牌列 */
 div[data-testid="stAppViewContainer"] > .main {
-  padding-top: 92px !important;
+  padding-top: 106px !important;
 }
 </style>
 """,
@@ -160,7 +160,7 @@ div[data-testid="stAppViewContainer"] > .main {
 <meta charset="utf-8" />
 <style>
   :root {{
-    --bh: 86px;
+    --bh: 98px;
     --fg: rgba(255,255,255,0.92);
     --muted: rgba(255,255,255,0.65);
     --glass: rgba(18,18,22,0.58);
@@ -204,20 +204,23 @@ div[data-testid="stAppViewContainer"] > .main {
     100% {{ opacity: 1; transform: translateY(0) scale(1.00); filter: blur(0px); }}
   }}
   .logoBox {{
-    width: 44px;
-    height: 44px;
-    border-radius: 12px;
+    width: 68px;
+    height: 68px;
+    border-radius: 14px;
     overflow: hidden;
-    background: rgba(255,255,255,0.06);
-    border: 1px solid rgba(255,255,255,0.10);
+    background: #ffffff;
+    border: 1px solid rgba(0,0,0,0.10);
     position: relative;
     flex: 0 0 auto;
+    padding: 6px;
+    box-sizing: border-box;
   }}
   video {{
     width: 100%;
     height: 100%;
     object-fit: contain;
     display: none;
+    background: #ffffff;
   }}
   video.active {{ display: block; }}
   .fallback {{
@@ -317,7 +320,7 @@ div[data-testid="stAppViewContainer"] > .main {
 </body>
 </html>
 """
-    st.components.v1.html(html_block, height=86, scrolling=False)
+    st.components.v1.html(html_block, height=98, scrolling=False)
 
 _EXEC_MODE_LABEL = {
     "server": "伺服器",
