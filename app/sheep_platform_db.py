@@ -1264,6 +1264,8 @@ def assign_tasks_for_user(
     cycle_id: Optional[int] = None,
     min_tasks: Optional[int] = None,
     max_tasks: Optional[int] = None,
+    preferred_family: Optional[str] = None,
+    preferred_pool_id: Optional[int] = None,
 ) -> List[int]:
     if min_tasks is not None:
         min_needed = int(min_tasks)
@@ -1279,7 +1281,6 @@ def assign_tasks_for_user(
         else:
             cycle_id = int(cycle_id)
 
-        # Make sure pool tasks exist (seeded as system-owned assigned tasks).
         try:
             ensure_cycle_tasks(int(cycle_id))
         except Exception:
@@ -1288,7 +1289,6 @@ def assign_tasks_for_user(
         lease_seconds = int(get_setting(conn, "task_lease_seconds", int(get_setting(conn, "task_lease_minutes", 180)) * 60))
         _cleanup_stale_running_tasks(conn, int(cycle_id), int(lease_seconds))
 
-        # Release long-idle reserved tasks back to system so one user can't hoard all partitions.
         try:
             reserve_seconds = int(get_setting(conn, "task_reserve_seconds", int(get_setting(conn, "task_reserve_minutes", 60)) * 60))
             reserve_seconds = max(30, int(reserve_seconds))
@@ -1299,24 +1299,40 @@ def assign_tasks_for_user(
         except Exception:
             pass
 
-        pools = conn.execute(
-            "SELECT id FROM factor_pools WHERE cycle_id = ? AND active = 1 ORDER BY id ASC",
-            (int(cycle_id),),
-        ).fetchall()
-        if not pools:
+        # 允許依策略或策略池過濾可領取任務來源
+        allowed_pool_ids: List[int] = []
+        fam = str(preferred_family or "").strip()
+        if preferred_pool_id is not None:
+            allowed_pool_ids = [int(preferred_pool_id)]
+        elif fam:
+            rows = conn.execute(
+                "SELECT id FROM factor_pools WHERE cycle_id = ? AND active = 1 AND family = ? ORDER BY id ASC",
+                (int(cycle_id), str(fam)),
+            ).fetchall()
+            allowed_pool_ids = [int(r["id"] if isinstance(r, dict) else r[0]) for r in rows]
+
+        # 若有策略過濾但找不到池，直接不分配
+        if fam and not allowed_pool_ids:
             return []
 
         if max_tasks is None:
             max_tasks = int(get_setting(conn, "max_tasks_per_user", 6))
         max_tasks = max(min_needed, int(max_tasks))
 
-        active_count = int(
-            conn.execute(
+        # active_count 只計算選定策略範圍內（避免其他策略的任務把你卡死）
+        if allowed_pool_ids:
+            ph = ",".join(["?"] * len(allowed_pool_ids))
+            row = conn.execute(
+                f"SELECT COUNT(1) AS c FROM tasks WHERE user_id = ? AND cycle_id = ? AND status IN ('assigned','running') AND pool_id IN ({ph})",
+                (int(user_id), int(cycle_id), *[int(x) for x in allowed_pool_ids]),
+            ).fetchone()
+            active_count = int((row["c"] if isinstance(row, dict) else row[0]) or 0)
+        else:
+            row = conn.execute(
                 "SELECT COUNT(1) AS c FROM tasks WHERE user_id = ? AND cycle_id = ? AND status IN ('assigned','running')",
                 (int(user_id), int(cycle_id)),
-            ).fetchone()["c"]
-            or 0
-        )
+            ).fetchone()
+            active_count = int((row["c"] if isinstance(row, dict) else row[0]) or 0)
 
         need = int(min_needed) - int(active_count)
         if need <= 0:
@@ -1328,17 +1344,30 @@ def assign_tasks_for_user(
         system_uid = _get_or_create_system_user_id(conn)
         now_iso = utc_now_iso()
 
-        # Claim system-owned assigned tasks.
-        rows = conn.execute(
-            """
-            SELECT id
-            FROM tasks
-            WHERE cycle_id = ? AND status = 'assigned' AND user_id = ?
-            ORDER BY priority DESC, assigned_at ASC, id ASC
-            LIMIT ?
-            """,
-            (int(cycle_id), int(system_uid), int(need)),
-        ).fetchall()
+        # Claim system-owned assigned tasks (可依 pool 過濾)
+        if allowed_pool_ids:
+            ph = ",".join(["?"] * len(allowed_pool_ids))
+            rows = conn.execute(
+                f"""
+                SELECT id
+                FROM tasks
+                WHERE cycle_id = ? AND status = 'assigned' AND user_id = ? AND pool_id IN ({ph})
+                ORDER BY priority DESC, assigned_at ASC, id ASC
+                LIMIT ?
+                """,
+                (int(cycle_id), int(system_uid), *[int(x) for x in allowed_pool_ids], int(need)),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT id
+                FROM tasks
+                WHERE cycle_id = ? AND status = 'assigned' AND user_id = ?
+                ORDER BY priority DESC, assigned_at ASC, id ASC
+                LIMIT ?
+                """,
+                (int(cycle_id), int(system_uid), int(need)),
+            ).fetchall()
 
         claimed_ids: List[int] = []
         for r in rows:
@@ -1358,8 +1387,25 @@ def assign_tasks_for_user(
         return claimed_ids
     finally:
         conn.close()
+def release_assigned_tasks_for_user_not_in_pools(user_id: int, cycle_id: int, allowed_pool_ids: List[int]) -> int:
+    allowed_pool_ids = [int(x) for x in (allowed_pool_ids or []) if int(x) > 0]
+    if not allowed_pool_ids:
+        return 0
 
-
+    conn = _conn()
+    try:
+        system_uid = _get_or_create_system_user_id(conn)
+        now_iso = utc_now_iso()
+        ph = ",".join(["?"] * len(allowed_pool_ids))
+        cur = conn.execute(
+            f"UPDATE tasks SET user_id = ?, assigned_at = ?, last_heartbeat = ? "
+            f"WHERE cycle_id = ? AND status = 'assigned' AND user_id = ? AND pool_id NOT IN ({ph})",
+            (int(system_uid), str(now_iso), str(now_iso), int(cycle_id), int(user_id), *allowed_pool_ids),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)
+    finally:
+        conn.close()
 
 def list_tasks_for_user(user_id: int, cycle_id: Optional[int] = None) -> List[Dict[str, Any]]:
     conn = _conn()

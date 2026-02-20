@@ -912,17 +912,13 @@ def _render_auth_onboarding_dialog() -> None:
             </div>
 
             <div class="sp-flow-track" id="spFlowTrack">
-                <button class="sp-step" data-step="login" type="button">註冊 / 登入</button>
-                <span class="sp-sep">></span>
-                <button class="sp-step" data-step="start" type="button">開始任務</button>
-                <span class="sp-sep">></span>
-                <button class="sp-step" data-step="cand" type="button">候選結果</button>
-                <span class="sp-sep">></span>
-                <button class="sp-step" data-step="verify" type="button">伺服器複驗</button>
-                <span class="sp-sep">></span>
-                <button class="sp-step" data-step="submit" type="button">提交策略池</button>
-                <span class="sp-sep">></span>
-                <button class="sp-step" data-step="settle" type="button">週期結算</button>
+                <button class="sp-step" data-step="login" type="button" onclick="spFlowPick('login')" onmouseover="spFlowPick('login')" ontouchstart="spFlowPick('login')">註冊 / 登入</button>
+                <button class="sp-step" data-step="start" type="button" onclick="spFlowPick('start')" onmouseover="spFlowPick('start')" ontouchstart="spFlowPick('start')">開始任務</button>
+                <button class="sp-step" data-step="cand" type="button" onclick="spFlowPick('cand')" onmouseover="spFlowPick('cand')" ontouchstart="spFlowPick('cand')">候選結果</button>
+                <button class="sp-step" data-step="verify" type="button" onclick="spFlowPick('verify')" onmouseover="spFlowPick('verify')" ontouchstart="spFlowPick('verify')">伺服器複驗</button>
+                <button class="sp-step" data-step="submit" type="button" onclick="spFlowPick('submit')" onmouseover="spFlowPick('submit')" ontouchstart="spFlowPick('submit')">提交策略池</button>
+                <button class="sp-step" data-step="settle" type="button" onclick="spFlowPick('settle')" onmouseover="spFlowPick('settle')" ontouchstart="spFlowPick('settle')">週期結算</button>
+
             </div>
 
             <div class="sp-flow-detail" id="spFlowDetail">
@@ -1039,7 +1035,14 @@ def _render_auth_onboarding_dialog() -> None:
                 line-height:1.6;
                 opacity:.92;
                 color:rgba(255,255,255,0.90);
+                max-height:140px;
+                overflow-y:auto;
+                padding-right:4px;
             }
+
+            .sp-flow-detail-body::-webkit-scrollbar{width:10px}
+            .sp-flow-detail-body::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.12);border-radius:999px}
+            .sp-flow-detail-body::-webkit-scrollbar-track{background:rgba(255,255,255,0.04);border-radius:999px}
 
             .sp-flow-detail-meta{
                 display:flex;
@@ -1152,6 +1155,10 @@ def _render_auth_onboarding_dialog() -> None:
                 }
             }
 
+            window.spFlowPick = function(stepKey){
+                try{ setActive(stepKey); }catch(e){}
+            };
+
             const pick = (e) => {
                 const target = e && e.target ? e.target : null;
                 const btn = target && target.closest ? target.closest(".sp-step") : null;
@@ -1168,7 +1175,7 @@ def _render_auth_onboarding_dialog() -> None:
             })();
             </script>
                 """,
-                height=320,
+                height=460,
                 scrolling=False,
             )
 
@@ -1337,61 +1344,122 @@ def _render_global_progress(cycle_id: int) -> None:
         return
 
     system_uid = int(snap.get("system_user_id") or 0)
-    pools = list(snap.get("pools") or [])
-    if not pools:
+    pools_all = list(snap.get("pools") or [])
+    if not pools_all:
         st.markdown('<div class="small-muted">目前沒有可用的進度資料。</div>', unsafe_allow_html=True)
         return
+
+    families = sorted({str(p.get("family") or "").strip() for p in pools_all if str(p.get("family") or "").strip()})
+    family_opts = ["全部策略"] + families
+    sel_family = st.selectbox("查看策略全域進度", options=family_opts, index=0, key=f"gp_family_{int(cycle_id)}")
+
+    pools = pools_all
+    if sel_family != "全部策略":
+        pools = [p for p in pools_all if str(p.get("family") or "").strip() == sel_family]
 
     total_est = 0.0
     total_done = 0.0
     total_speed = 0.0
     total_running = 0
+    total_assigned = 0
+    total_completed = 0
+    total_reserved = 0
+
     for p in pools:
         for t in p.get("tasks") or []:
             est = float(t.get("estimated_combos") or 0.0)
             prog = t.get("progress_json") or {}
             done = float(prog.get("combos_done") or 0.0)
             speed = float(prog.get("speed_cps") or 0.0)
+            status = str(t.get("status") or "")
+
             total_est += est
             total_done += done
-            if str(t.get("status") or "") == "running":
+
+            if status == "running":
                 total_speed += speed
                 total_running += 1
+            elif status == "completed":
+                total_completed += 1
+            elif status == "assigned":
+                total_assigned += 1
+                if int(t.get("user_id") or 0) != int(system_uid):
+                    total_reserved += 1
+
+    ratio = (total_done / total_est) if total_est > 0 else 0.0
 
     st.markdown("#### 全域挖掘進度")
-    ratio = (total_done / total_est) if total_est > 0 else 0.0
     st.progress(min(1.0, max(0.0, float(ratio))))
-    cols = st.columns(3)
-    with cols[0]:
+
+    kcols = st.columns(4)
+    with kcols[0]:
         st.markdown(_render_kpi("已跑組合", f"{int(total_done):,}", f"預估總量 {int(total_est):,}"), unsafe_allow_html=True)
-    with cols[1]:
-        st.markdown(_render_kpi("全域進度", f"{ratio*100:.1f}%", "以預估工作量計算"), unsafe_allow_html=True)
-    with cols[2]:
+    with kcols[1]:
+        st.markdown(_render_kpi("全域進度", f"{ratio*100:.1f}%", f"策略範圍 {sel_family}"), unsafe_allow_html=True)
+    with kcols[2]:
         st.markdown(_render_kpi("全域速度", f"{total_speed:.1f} 組合/秒", f"執行中任務 {total_running}"), unsafe_allow_html=True)
+    with kcols[3]:
+        st.markdown(_render_kpi("任務狀態", f"{total_completed} 完成", f"{total_reserved} 預訂 · {max(0,total_assigned-total_reserved)} 待挖掘"), unsafe_allow_html=True)
 
     recs: List[Dict[str, Any]] = []
+    pool_rows: List[Dict[str, Any]] = []
     for p in pools:
         pool_name = str(p.get("pool_name") or "") or f"Pool {p.get('pool_id')}"
         tasks = list(p.get("tasks") or [])
+
+        est_sum = 0.0
+        done_sum = 0.0
+        running = 0
+        speed_sum = 0.0
+
         by_bucket: Dict[str, float] = {}
         for t in tasks:
+            est = float(t.get("estimated_combos") or 0.0)
+            prog = t.get("progress_json") or {}
+            done = float(prog.get("combos_done") or 0.0)
+            status = str(t.get("status") or "")
+
+            est_sum += est
+            done_sum += done
+            if status == "running":
+                running += 1
+                speed_sum += float(prog.get("speed_cps") or 0.0)
+
             b = _partition_bucket(t, system_uid)
-            by_bucket[b] = by_bucket.get(b, 0.0) + float(t.get("estimated_combos") or 0.0)
+            by_bucket[b] = by_bucket.get(b, 0.0) + est
+
+        r = (done_sum / est_sum) if est_sum > 0 else 0.0
+        pool_rows.append(
+            {
+                "策略池": pool_name,
+                "標的": str(p.get("symbol") or ""),
+                "週期": f"{int(p.get('timeframe_min') or 0)}m",
+                "策略": str(p.get("family") or ""),
+                "進度": f"{r*100:.1f}%",
+                "速度(組合/秒)": round(speed_sum, 2),
+                "執行中": running,
+            }
+        )
+
         for b, v in by_bucket.items():
-            recs.append({"策略池": pool_name, "狀態": b, "預估組合": v})
+            recs.append({"策略池": f"{pool_name}", "狀態": b, "預估組合": v})
 
     if recs:
         df = pd.DataFrame(recs)
-        fig = px.bar(df, x="策略池", y="預估組合", color="狀態", barmode="stack", height=320)
+        fig = px.bar(df, x="策略池", y="預估組合", color="狀態", barmode="stack", height=340)
         st.plotly_chart(fig, use_container_width=True)
 
+    if pool_rows:
+        st.markdown("#### 策略池概覽")
+        st.dataframe(pd.DataFrame(pool_rows), use_container_width=True, hide_index=True)
+
+    st.markdown("#### 分割分佈")
     for p in pools:
         pool_name = str(p.get("pool_name") or "") or f"Pool {p.get('pool_id')}"
         meta = f"{p.get('symbol')} · {p.get('timeframe_min')}m · {p.get('family')}"
         with st.expander(f"{pool_name}（{meta}）", expanded=False):
             tasks = list(p.get("tasks") or [])
             st.markdown(_partition_map_html(tasks, system_uid), unsafe_allow_html=True)
-            # Lightweight legend
             st.markdown(
                 '<div class="pm_legend">'
                 '<span class="pm_key"><span class="pm_cell pm_available"></span>待挖掘</span>'
@@ -1402,73 +1470,55 @@ def _render_global_progress(cycle_id: int) -> None:
                 unsafe_allow_html=True,
             )
 
-
-
-
 def _page_tutorial(user: Optional[Dict[str, Any]] = None) -> None:
     st.markdown(f"### {APP_TITLE} · 使用指引")
-    st.markdown('<div class="small-muted">流程與操作要點</div>', unsafe_allow_html=True)
 
-    st.markdown("")
-
-    st.components.v1.html(
+    st.markdown(
         """
-        <div style="padding:16px;border-radius:14px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);">
-          <div style="font-size:14px;opacity:.9;margin-bottom:10px;">流程</div>
-          <div class="sp-flow">
-            <span class="sp-step">登入</span>
-            <span class="sp-sep">></span>
-            <span class="sp-step sp-focus">開始全部任務</span>
-            <span class="sp-sep">></span>
-            <span class="sp-step">候選結果</span>
-            <span class="sp-sep">></span>
-            <span class="sp-step">提交策略</span>
-            <span class="sp-sep">></span>
-            <span class="sp-step">結算</span>
-          </div>
-        </div>
-        <style>
-          .sp-flow{
-            display:flex;gap:10px;align-items:center;flex-wrap:wrap;
-          }
-          .sp-step{
-            padding:10px 12px;
-            border-radius:999px;
-            background:rgba(255,255,255,0.06);
-            border:1px solid rgba(255,255,255,0.10);
-            font-size:13px;
-          }
-          .sp-sep{opacity:.35}
-          .sp-focus{
-            border-color: rgba(120,180,255,0.55);
-            background: rgba(120,180,255,0.10);
-          }
-        </style>
+<style>
+.tut_card{
+  border-radius:16px;
+  border:1px solid rgba(255,255,255,0.10);
+  background:rgba(255,255,255,0.04);
+  padding:14px 14px 12px 14px;
+  margin-bottom:12px;
+}
+.tut_kicker{font-size:12px;opacity:.70;margin-bottom:4px;}
+.tut_title{font-size:16px;font-weight:800;opacity:.96;margin-bottom:6px;}
+.tut_body{font-size:13px;line-height:1.65;opacity:.82;}
+.tut_anim{animation: tutFade .25s ease-out 1;}
+@keyframes tutFade{from{transform:translateY(6px);opacity:.0}to{transform:translateY(0);opacity:1}}
+</style>
         """,
-        height=140,
+        unsafe_allow_html=True,
     )
 
-    st.markdown("")
-    st.markdown("#### 1) 登入或建立帳號")
-    st.write("帳號可使用一般文字（不建議空白與換行）。")
+    tabs = st.tabs(["總覽", "任務執行", "策略選擇", "候選與提交", "結算"])
 
-    st.markdown("#### 2) 任務執行")
-    st.write(
-        "在任務頁點擊開始全部任務後，系統會自動排隊並依序執行。\n"
-        "若採用自動刷新，任務完成後會自動接續下一批。"
-    )
+    with tabs[0]:
+        st.markdown('<div class="tut_card tut_anim"><div class="tut_kicker">快速理解</div><div class="tut_title">這不是傳統挖礦，是參數搜尋</div><div class="tut_body">平台把一個策略的參數空間切成分割任務。用戶端提供算力跑回測，產出候選參數。候選需要通過伺服器複驗後才會進入策略池並參與結算。</div></div>', unsafe_allow_html=True)
+        st.markdown("#### 使用流程")
+        st.markdown("- 選擇策略並開始任務\n- 產生候選結果\n- 提交候選並等待複驗\n- 複驗通過後進入策略池\n- 依結算週期產出明細")
 
-    st.markdown("#### 3) 進度與最佳參數")
-    st.write("任務卡片會顯示參數進度、最佳分數、達標狀態、速度與預估剩餘時間。")
+    with tabs[1]:
+        st.markdown('<div class="tut_card tut_anim"><div class="tut_kicker">任務頁</div><div class="tut_title">如何穩定跑任務</div><div class="tut_body">建議使用電腦長時間運行並保持網路穩定。任務頁可一鍵開始全部任務，系統會自動排程並依序執行。</div></div>', unsafe_allow_html=True)
+        st.markdown("#### 建議操作")
+        st.markdown("- 先選擇策略\n- 點擊開始全部任務\n- 觀察執行中數量與速度\n- 任務完成後檢視候選結果")
 
-    st.markdown("#### 4) 候選結果與提交")
-    st.write("任務完成後會產生候選列表。提交後會進入策略池並參與後續結算。")
+    with tabs[2]:
+        st.markdown('<div class="tut_card tut_anim"><div class="tut_kicker">策略選擇</div><div class="tut_title">用戶可自行選擇要跑的策略</div><div class="tut_body">策略選擇會影響你領取的分割任務來源。切換策略時，系統會釋回未開始的已分配任務，避免卡住新的任務分配。</div></div>', unsafe_allow_html=True)
+        st.markdown("#### 選擇原則")
+        st.markdown("- 依社群共識或個人偏好選擇策略\n- 建議固定策略以累積有效貢獻\n- 透過控制台查看各策略全域進度")
 
-    st.markdown("#### 5) 結算資料")
-    st.write("結算頁可更新分潤地址。地址會做基本格式檢查。")
+    with tabs[3]:
+        st.markdown('<div class="tut_card tut_anim"><div class="tut_kicker">候選與提交</div><div class="tut_title">候選不是最終成果</div><div class="tut_body">候選需要通過伺服器複驗。複驗通過後才會進入策略池並參與後續規則與結算。</div></div>', unsafe_allow_html=True)
+        st.markdown("#### 提交建議")
+        st.markdown("- 優先提交交易數達標且風險可控的候選\n- 避免提交大量低品質候選\n- 觀察複驗結果並調整後續投入策略")
 
-    st.markdown("")
-    st.info("提示：若需持續自動接續任務，啟用自動刷新。")
+    with tabs[4]:
+        st.markdown('<div class="tut_card tut_anim"><div class="tut_kicker">結算</div><div class="tut_title">提現門檻與手續費規則</div><div class="tut_body">結算頁可設定分潤地址與鏈別。提現需滿足最低門檻，並依平台規則處理手續費。</div></div>', unsafe_allow_html=True)
+        st.markdown("#### 注意事項")
+        st.markdown("- 分潤地址請自行確認正確\n- 鏈別需與地址對應\n- 提現規則以平台設定為準")
 
 def _page_dashboard(user: Dict[str, Any]) -> None:
     cycle = db.get_active_cycle()
@@ -1590,11 +1640,35 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
     if exec_mode not in ("server", "worker"):
         exec_mode = "server"
 
-    db.assign_tasks_for_user(int(user["id"]), cycle_id=int(cycle["id"]), min_tasks=int(min_tasks), max_tasks=int(max_tasks))
-
     st.markdown("### 任務")
 
+    pools_meta = db.list_factor_pools(int(cycle["id"]))
+    fams = sorted({str(p.get("family") or "").strip() for p in pools_meta if str(p.get("family") or "").strip()})
+    fam_opts = ["全部策略"] + fams
+    sel_family = st.selectbox("策略", options=fam_opts, index=0, key=f"task_family_{int(cycle['id'])}")
+
+    allowed_pool_ids: List[int] = []
+    if sel_family != "全部策略":
+        allowed_pool_ids = [int(p.get("id") or 0) for p in pools_meta if str(p.get("family") or "").strip() == sel_family and int(p.get("id") or 0) > 0]
+        # 切換策略時釋回未開始的已分配任務，避免卡住新策略分配
+        try:
+            db.release_assigned_tasks_for_user_not_in_pools(int(user["id"]), int(cycle["id"]), allowed_pool_ids)
+        except Exception:
+            pass
+        db.assign_tasks_for_user(
+            int(user["id"]),
+            cycle_id=int(cycle["id"]),
+            min_tasks=int(min_tasks),
+            max_tasks=int(max_tasks),
+            preferred_family=str(sel_family),
+        )
+    else:
+        db.assign_tasks_for_user(int(user["id"]), cycle_id=int(cycle["id"]), min_tasks=int(min_tasks), max_tasks=int(max_tasks))
+
     tasks = db.list_tasks_for_user(int(user["id"]), cycle_id=int(cycle["id"]))
+    if sel_family != "全部策略" and allowed_pool_ids:
+        tasks = [t for t in tasks if int(t.get("pool_id") or 0) in set(allowed_pool_ids)]
+
     if not tasks:
         st.info("無任務。")
         return
