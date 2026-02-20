@@ -2557,7 +2557,13 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
 
         # 教學影片：上傳 MP4 後會顯示在登入頁的「流程與操作要點」中。
         st.markdown("#### 教學影片")
-        tutorial_path = str(db.get_setting(conn, "tutorial_video_path", "") or "").strip()
+
+        conn_v = db._conn()
+        try:
+            tutorial_path = str(db.get_setting(conn_v, "tutorial_video_path", "") or "").strip()
+        finally:
+            conn_v.close()
+
         uploaded_video = st.file_uploader("上傳 MP4", type=["mp4"], accept_multiple_files=False, key="admin_tutorial_mp4")
         if uploaded_video is not None:
             base_dir = os.path.join(os.path.dirname(__file__), "data")
@@ -2565,19 +2571,37 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
             save_path = os.path.join(base_dir, "tutorial.mp4")
             with open(save_path, "wb") as f:
                 f.write(uploaded_video.getbuffer())
-            db.set_setting(conn, "tutorial_video_path", save_path)
+
+            conn_w = db._conn()
+            try:
+                db.set_setting(conn_w, "tutorial_video_path", save_path)
+                conn_w.commit()
+            finally:
+                conn_w.close()
+
             db.write_audit_log(int(user["id"]), "tutorial_video_update", {"path": save_path})
             st.success("已更新教學影片")
             st.rerun()
 
         if tutorial_path and os.path.exists(tutorial_path):
-            st.video(tutorial_path)
+            try:
+                st.video(tutorial_path)
+            except Exception:
+                st.markdown('<div class="small-muted">教學影片載入失敗。</div>', unsafe_allow_html=True)
+
             if st.button("移除教學影片", key="remove_tutorial_video"):
                 try:
                     os.remove(tutorial_path)
                 except Exception:
                     pass
-                db.set_setting(conn, "tutorial_video_path", "")
+
+                conn_w = db._conn()
+                try:
+                    db.set_setting(conn_w, "tutorial_video_path", "")
+                    conn_w.commit()
+                finally:
+                    conn_w.close()
+
                 db.write_audit_log(int(user["id"]), "tutorial_video_remove", {})
                 st.rerun()
         else:
