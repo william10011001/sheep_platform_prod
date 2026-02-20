@@ -1700,6 +1700,7 @@ def _render_global_progress(cycle_id: int) -> None:
             {
                 "策略池": pool_name,
                 "標的": str(p.get("symbol") or ""),
+                "週期": f"{int(p.get('timeframe_min') or 0)}m",
                 "策略": str(p.get("family") or ""),
                 "進度": f"{r*100:.1f}%",
                 "速度(組合/秒)": round(speed_sum, 2),
@@ -1815,8 +1816,6 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
     pools = db.list_factor_pools(cycle_id=int(cycle["id"])) if cycle else []
 
     st.markdown("### 控制台")
-    st.markdown('<div class="small-muted">週期：' + str(cycle.get("name") or "-") + '</div>', unsafe_allow_html=True)
-
     # Ensure tasks quota
     conn = db._conn()
     try:
