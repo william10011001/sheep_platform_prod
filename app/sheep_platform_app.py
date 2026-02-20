@@ -788,20 +788,8 @@ def _register_form() -> None:
         tos_version = ""
 
     if st.button("查看服務條款", key="open_tos_dialog"):
-        st.session_state["tos_dialog_open"] = True
-
-    if bool(st.session_state.get("tos_dialog_open")):
-        @st.dialog("服務條款與分潤風險協議")
-        def _tos_dialog() -> None:
-            if tos_text.strip():
-                st.markdown(tos_text)
-            else:
-                st.markdown("服務條款暫未設定。")
-            if st.button("關閉", key="close_tos_dialog"):
-                st.session_state["tos_dialog_open"] = False
-                st.rerun()
-
-        _tos_dialog()
+        st.session_state["auth_dialog"] = "tos"
+        st.rerun()
 
     with st.form("register_form", clear_on_submit=False):
         username = st.text_input("帳號", value="")
@@ -878,6 +866,36 @@ def _register_form() -> None:
     st.success("帳號已建立並完成登入。")
     st.session_state["nav_page_pending"] = "控制台"
     st.rerun()
+
+
+def _render_tos_dialog() -> None:
+    tos_text = ""
+    tos_version = ""
+    try:
+        conn = db._conn()
+        try:
+            tos_text = str(db.get_setting(conn, "tos_text", "") or "")
+            tos_version = str(db.get_setting(conn, "tos_version", "") or "")
+        finally:
+            conn.close()
+    except Exception:
+        tos_text = ""
+        tos_version = ""
+
+    @st.dialog("服務條款與分潤風險協議")
+    def _run() -> None:
+        if tos_version.strip():
+            st.markdown(f"**條款版本：{tos_version.strip()}**")
+        if tos_text.strip():
+            st.markdown(tos_text)
+        else:
+            st.markdown("服務條款暫未設定。")
+
+        if st.button("關閉", key="close_tos_dialog"):
+            st.session_state["auth_dialog"] = ""
+            st.rerun()
+
+    _run()
 
 
 def _render_auth_onboarding_dialog() -> None:
@@ -1223,6 +1241,7 @@ def _render_auth_onboarding_dialog() -> None:
                     st.warning("教學影片載入失敗。")
 
         if st.button("我已了解", key="auth_onboarding_close"):
+            st.session_state["auth_dialog"] = ""
             st.session_state["auth_onboarding_open"] = False
             st.rerun()
 
@@ -1260,12 +1279,12 @@ def _page_auth() -> None:
 
     if "auth_onboarding_seen" not in st.session_state:
         st.session_state["auth_onboarding_seen"] = False
-    if "auth_onboarding_open" not in st.session_state:
-        st.session_state["auth_onboarding_open"] = False
+    if "auth_dialog" not in st.session_state:
+        st.session_state["auth_dialog"] = ""
 
     if not bool(st.session_state.get("auth_onboarding_seen")):
         st.session_state["auth_onboarding_seen"] = True
-        st.session_state["auth_onboarding_open"] = True
+        st.session_state["auth_dialog"] = "onboarding"
 
     top_l, top_r = st.columns([1.0, 0.28])
     with top_l:
@@ -1273,11 +1292,8 @@ def _page_auth() -> None:
         st.markdown('<div class="small-muted">登入或註冊後即可開始參與運算任務。</div>', unsafe_allow_html=True)
     with top_r:
         if st.button("流程與操作要點", key="auth_open_onboarding"):
-            st.session_state["auth_onboarding_open"] = True
+            st.session_state["auth_dialog"] = "onboarding"
             st.rerun()
-
-    if bool(st.session_state.get("auth_onboarding_open")):
-        _render_auth_onboarding_dialog()
 
     col1, col2 = st.columns([1, 1])
     with col1:
@@ -1288,6 +1304,12 @@ def _page_auth() -> None:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         _login_form()
         st.markdown("</div>", unsafe_allow_html=True)
+
+    dlg_name = str(st.session_state.get("auth_dialog") or "").strip()
+    if dlg_name == "onboarding":
+        _render_auth_onboarding_dialog()
+    elif dlg_name == "tos":
+        _render_tos_dialog()
 
 
 def _render_kpi(title: str, value: Any, sub: str = "") -> str:
