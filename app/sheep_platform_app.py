@@ -1816,6 +1816,8 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
     pools = db.list_factor_pools(cycle_id=int(cycle["id"])) if cycle else []
 
     st.markdown("### 控制台")
+    st.markdown('<div class="small-muted">週期：' + str(cycle.get("name") or "-") + '</div>', unsafe_allow_html=True)
+
     # Ensure tasks quota
     conn = db._conn()
     try:
