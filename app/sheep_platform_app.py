@@ -137,19 +137,33 @@ iframe[srcdoc*="SHEEP_BRAND_HDR_V2"]{
     st.markdown(
         f"""
 <style>
+/* 只佔左上角，不再蓋滿整頁 */
 iframe[data-sheep-brand="1"],
-iframe[srcdoc*="SHEEP_BRAND_HDR_V2"] {{
+iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
   position: fixed !important;
   top: 0 !important;
   left: 0 !important;
-  width: 100% !important;
-  height: 92px !important;
+  width: 360px !important;
+  height: 84px !important;
   border: 0 !important;
   z-index: 2147483000 !important;
+  background: transparent !important;
 }}
+
+/* 小螢幕縮小占用 */
+@media (max-width: 720px) {{
+  iframe[data-sheep-brand="1"],
+  iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
+    width: 270px !important;
+    height: 78px !important;
+  }}
+}}
+
+/* 取消把整頁往下推，避免排版變形 */
 div[data-testid="stAppViewContainer"] > .main {{
-  padding-top: 100px !important;
+  padding-top: 0 !important;
 }}
+
 {dim_css}
 </style>
 """,
@@ -161,324 +175,231 @@ div[data-testid="stAppViewContainer"] > .main {{
     data_v2 = f"data:video/webm;base64,{v2}" if v2 else ""
 
     html_block = f"""
-<!doctype html>
-<!-- SHEEP_BRAND_HDR_V2 -->
-<html>
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<style>
-  :root {{
-    --h: 92px;
-    --fg: rgba(255,255,255,0.92);
-    --muted: rgba(255,255,255,0.62);
-
-    --barA: rgba(10,12,16,0.92);
-    --barB: rgba(10,12,16,0.72);
-
-    --cardA: rgba(18,18,22,0.44);
-    --cardB: rgba(18,18,22,0.26);
-    --bd: rgba(255,255,255,0.10);
-  }}
-
-  html, body {{
-    height: 100%;
-    margin: 0;
-    background: transparent;
-    overflow: hidden;
-    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", Arial;
-  }}
-
-  .bar {{
-    height: var(--h);
-    background: linear-gradient(180deg, var(--barA), var(--barB));
-    border-bottom: 1px solid rgba(255,255,255,0.08);
-  }}
-
-  .inner {{
-    height: 100%;
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 10px 16px;
-    box-sizing: border-box;
-    display: flex;
-    align-items: center;
-  }}
-
-  .brand {{
-    --mx: 50%;
-    --my: 50%;
-    --rx: 0deg;
-    --ry: 0deg;
-
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    padding: 10px 12px;
-    border-radius: 18px;
-
-    background: linear-gradient(180deg, var(--cardA), var(--cardB));
-    border: 1px solid var(--bd);
-    box-shadow:
-      0 16px 38px rgba(0,0,0,0.42),
-      inset 0 1px 0 rgba(255,255,255,0.08);
-
-    transform-origin: left center;
-    transform: translateY(0) rotateX(var(--rx)) rotateY(var(--ry));
-    transition:
-      transform 160ms ease,
-      box-shadow 200ms ease,
-      border-color 200ms ease,
-      filter 200ms ease;
-    position: relative;
-    overflow: hidden;
-    cursor: default;
-  }}
-
-  .brand::before {{
-    content: "";
-    position: absolute;
-    inset: -2px;
-    background: radial-gradient(420px 260px at var(--mx) var(--my), rgba(255,255,255,0.11), rgba(255,255,255,0) 55%);
-    opacity: 0;
-    transition: opacity 180ms ease;
-    pointer-events: none;
-  }}
-
-  .brand:hover {{
-    border-color: rgba(255,255,255,0.18);
-    box-shadow:
-      0 20px 52px rgba(0,0,0,0.48),
-      inset 0 1px 0 rgba(255,255,255,0.10);
-    filter: saturate(1.04);
-  }}
-  .brand:hover::before {{ opacity: 1; }}
-
-  .brand.pulse {{
-    animation: breatheGlow 1550ms ease-in-out infinite;
-  }}
-  @keyframes breatheGlow {{
-    0% {{
-      box-shadow:
-        0 16px 38px rgba(0,0,0,0.42),
-        inset 0 1px 0 rgba(255,255,255,0.08);
-      filter: saturate(1.00);
+    <!doctype html>
+    <!-- SHEEP_BRAND_HDR_V3 -->
+    <html>
+    <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <style>
+    html, body {{
+        height: 100%;
+        margin: 0;
+        background: transparent;
+        overflow: hidden;
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", Arial;
     }}
-    50% {{
-      box-shadow:
-        0 20px 54px rgba(0,0,0,0.50),
-        0 0 0 1px rgba(255,255,255,0.12),
-        0 0 18px rgba(255,255,255,0.06),
-        inset 0 1px 0 rgba(255,255,255,0.10);
-      filter: saturate(1.06);
+
+    /* 不要任何黑灰框：整個 header 只有左上角一組元件 */
+    .brandWrap {{
+        position: absolute;
+        top: 6px;
+        left: 6px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
     }}
-    100% {{
-      box-shadow:
-        0 16px 38px rgba(0,0,0,0.42),
-        inset 0 1px 0 rgba(255,255,255,0.08);
-      filter: saturate(1.00);
+
+    /* 圓形白底外框 */
+    .logoCircle {{
+        width: 66px;
+        height: 66px;
+        border-radius: 9999px;
+        background: #ffffff;
+        border: 1px solid rgba(0,0,0,0.10);
+        box-shadow: 0 12px 28px rgba(0,0,0,0.20);
+        overflow: hidden;
+        position: relative;
+        flex: 0 0 auto;
     }}
-  }}
 
-  .brand.brand-enter {{
-    animation: brandIn 520ms cubic-bezier(0.16, 1, 0.3, 1) 20ms both;
-  }}
-  @keyframes brandIn {{
-    0%   {{ opacity: 0; transform: translateY(-6px) scale(0.99); }}
-    100% {{ opacity: 1; transform: translateY(0) scale(1.00); }}
-  }}
+    /* 內圈細節（更像品牌標章，不像貼紙） */
+    .logoCircle::after {{
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: 9999px;
+        box-shadow: inset 0 0 0 1px rgba(0,0,0,0.06);
+        pointer-events: none;
+    }}
 
-  .logoBox {{
-    width: 78px;
-    height: 78px;
-    border-radius: 18px;
-    background: #ffffff;
-    border: 1px solid rgba(0,0,0,0.10);
-    box-shadow: 0 12px 28px rgba(0,0,0,0.18);
-    overflow: hidden;
-    position: relative;
-    flex: 0 0 auto;
-    padding: 8px;
-    box-sizing: border-box;
-  }}
-  video {{
-    width: 100%;
-    height: 100%;
-    object-fit: contain;
-    display: none;
-    background: #ffffff;
-    filter: drop-shadow(0 6px 10px rgba(0,0,0,0.16));
-  }}
-  video.active {{ display: block; }}
+    /* 影片：固定裁切方式，避免切換時看起來忽大忽小 */
+    video {{
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        transform: scale(1.18);
+        opacity: 0;
+        transition: opacity 140ms ease;
+        background: #ffffff;
+    }}
+    video.active {{
+        opacity: 1;
+    }}
 
-  .fallback {{
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: rgba(0,0,0,0.60);
-    font-size: 12px;
-    letter-spacing: 0.2px;
-  }}
+    .fallback {{
+        position: absolute;
+        inset: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        color: rgba(0,0,0,0.62);
+        font-weight: 800;
+        letter-spacing: 0.6px;
+        font-size: 14px;
+    }}
 
-  .title {{
-    color: var(--fg);
-    font-weight: 760;
-    font-size: 16px;
-    line-height: 1.15;
-    letter-spacing: 0.2px;
-    white-space: nowrap;
-  }}
-  .sub {{
-    color: var(--muted);
-    font-size: 12px;
-    margin-top: 4px;
-    white-space: nowrap;
-  }}
+    /* SouperSheep 字樣：做成漂亮且不浮誇的品牌字 */
+    .name {{
+        font-size: 20px;
+        font-weight: 900;
+        letter-spacing: 0.4px;
+        line-height: 1;
+        background: linear-gradient(90deg, rgba(255,255,255,0.98), rgba(185,215,255,0.92));
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+        text-shadow: 0 10px 24px rgba(0,0,0,0.55);
+        user-select: none;
+        white-space: nowrap;
+    }}
+    .name .souper {{
+        font-weight: 850;
+    }}
+    .name .sheep {{
+        font-weight: 950;
+    }}
 
-  @media (max-width: 720px) {{
-    :root {{ --h: 86px; }}
-    .inner {{ padding: 10px 12px; }}
-    .logoBox {{ width: 70px; height: 70px; padding: 7px; border-radius: 16px; }}
-    .brand {{ padding: 9px 10px; border-radius: 16px; }}
-  }}
-</style>
-</head>
-<body>
-  <div class="bar">
-    <div class="inner">
-      <div class="brand {anim_class}" id="brandCard">
-        <div class="logoBox">
-          <video id="v1" muted playsinline preload="auto"></video>
-          <video id="v2" muted playsinline preload="auto"></video>
-          <div id="fb" class="fallback" style="display:none;">LOGO</div>
+    /* hover：只做細緻變化，不做縮放，避免你說的忽大忽小感 */
+    .brandWrap:hover .logoCircle {{
+        box-shadow: 0 16px 34px rgba(0,0,0,0.24);
+    }}
+    .brandWrap:hover .name {{
+        filter: brightness(1.06);
+    }}
+
+    /* pulse：給登入/註冊卡片 hover 同步時用的微弱呼吸光暈 */
+    .brandWrap.pulse .logoCircle {{
+        animation: ringPulse 1550ms ease-in-out infinite;
+    }}
+    @keyframes ringPulse {{
+        0%   {{ box-shadow: 0 12px 28px rgba(0,0,0,0.20); }}
+        50%  {{ box-shadow: 0 18px 44px rgba(0,0,0,0.26), 0 0 18px rgba(255,255,255,0.06); }}
+        100% {{ box-shadow: 0 12px 28px rgba(0,0,0,0.20); }}
+    }}
+
+    /* 小螢幕縮放 */
+    @media (max-width: 720px) {{
+        .brandWrap {{ top: 6px; left: 6px; gap: 10px; }}
+        .logoCircle {{ width: 58px; height: 58px; }}
+        .name {{ font-size: 18px; }}
+    }}
+
+    /* 尊重減少動效的系統設定 */
+    @media (prefers-reduced-motion: reduce) {{
+        video {{ transition: none; }}
+        .brandWrap.pulse .logoCircle {{ animation: none; }}
+    }}
+    </style>
+    </head>
+    <body>
+    <div class="brandWrap" id="brand">
+        <div class="logoCircle" aria-hidden="true">
+        <video id="v1" muted playsinline preload="auto"></video>
+        <video id="v2" muted playsinline preload="auto"></video>
+        <div id="fb" class="fallback">SS</div>
         </div>
-        <div class="txt">
-          <div class="title">{APP_TITLE}</div>
-          <div class="sub">登入 / 註冊</div>
+        <div class="name" aria-label="SouperSheep">
+        <span class="souper">Souper</span><span class="sheep">Sheep</span>
         </div>
-      </div>
     </div>
-  </div>
 
-<script>
-(function() {{
-  try {{
-    if (window.frameElement) {{
-      window.frameElement.setAttribute("data-sheep-brand", "1");
-    }}
-  }} catch (e) {{ }}
-
-  const brand = document.getElementById("brandCard");
-  const hasV1 = { "true" if v1 else "false" };
-  const hasV2 = { "true" if v2 else "false" };
-  const v1 = document.getElementById("v1");
-  const v2 = document.getElementById("v2");
-  const fb = document.getElementById("fb");
-
-  function showFallback() {{
-    fb.style.display = "flex";
-    v1.style.display = "none";
-    v2.style.display = "none";
-  }}
-
-  function playSafe(v) {{
+    <script>
+    (function() {{
     try {{
-      const p = v.play();
-      if (p && typeof p.catch === "function") p.catch(() => {{ }});
-    }} catch (e) {{ }}
-  }}
+        if (window.frameElement) {{
+        window.frameElement.setAttribute("data-sheep-brand", "1");
+        }}
+    }} catch (e) {{}}
 
-  function setRate(r) {{
-    try {{ v1.playbackRate = r; }} catch (e) {{ }}
-    try {{ v2.playbackRate = r; }} catch (e) {{ }}
-  }}
+    const brand = document.getElementById("brand");
+    const v1 = document.getElementById("v1");
+    const v2 = document.getElementById("v2");
+    const fb = document.getElementById("fb");
 
-  function bindTiltAndSpeed() {{
-    if (!brand) return;
-    const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+    const hasV1 = { "true" if v1 else "false" };
+    const hasV2 = { "true" if v2 else "false" };
 
-    brand.addEventListener("mousemove", (e) => {{
-      const r = brand.getBoundingClientRect();
-      const x = (e.clientX - r.left) / r.width;
-      const y = (e.clientY - r.top) / r.height;
+    function showFallback() {{
+        fb.style.display = "flex";
+        try {{ v1.style.display = "none"; }} catch(e) {{}}
+        try {{ v2.style.display = "none"; }} catch(e) {{}}
+    }}
 
-      const mx = (x * 100).toFixed(2) + "%";
-      const my = (y * 100).toFixed(2) + "%";
+    function playSafe(v) {{
+        try {{
+        const p = v.play();
+        if (p && typeof p.catch === "function") p.catch(() => {{}});
+        }} catch(e) {{}}
+    }}
 
-      const ry = clamp((x - 0.5) * 10, -6, 6);
-      const rx = clamp(-(y - 0.5) * 10, -6, 6);
+    function setRate(r) {{
+        try {{ v1.playbackRate = r; }} catch(e) {{}}
+        try {{ v2.playbackRate = r; }} catch(e) {{}}
+    }}
 
-      brand.style.setProperty("--mx", mx);
-      brand.style.setProperty("--my", my);
-      brand.style.setProperty("--rx", rx.toFixed(2) + "deg");
-      brand.style.setProperty("--ry", ry.toFixed(2) + "deg");
-    }});
+    function activate(to2) {{
+        if (to2) {{
+        v1.classList.remove("active");
+        v2.classList.add("active");
+        try {{ v2.currentTime = 0; }} catch(e) {{}}
+        playSafe(v2);
+        }} else {{
+        v2.classList.remove("active");
+        v1.classList.add("active");
+        try {{ v1.currentTime = 0; }} catch(e) {{}}
+        playSafe(v1);
+        }}
+    }}
 
-    brand.addEventListener("mouseenter", () => {{
-      setRate(1.18);
-    }});
+    // hover 加速 / 離開恢復
+    brand.addEventListener("mouseenter", () => setRate(1.16));
+    brand.addEventListener("mouseleave", () => setRate(1.00));
 
-    brand.addEventListener("mouseleave", () => {{
-      brand.style.setProperty("--rx", "0deg");
-      brand.style.setProperty("--ry", "0deg");
-      brand.style.setProperty("--mx", "50%");
-      brand.style.setProperty("--my", "50%");
-      setRate(1.00);
-    }});
-  }}
-
-  function bindPulseFromParent() {{
+    // 接收登入/註冊 hover 同步光暈
     window.addEventListener("message", (ev) => {{
-      try {{
+        try {{
         const d = ev.data || {{}};
         if (!d || d.type !== "SHEEP_HDR_PULSE") return;
-        if (!brand) return;
         if (d.on) brand.classList.add("pulse");
         else brand.classList.remove("pulse");
-      }} catch (e) {{ }}
+        }} catch(e) {{}}
     }});
-  }}
 
-  bindTiltAndSpeed();
-  bindPulseFromParent();
-
-  if (!hasV1 || !hasV2) {{
-    showFallback();
-    return;
-  }}
-
-  v1.src = "{data_v1}";
-  v2.src = "{data_v2}";
-  v1.classList.add("active");
-  v2.classList.remove("active");
-
-  function swap(to2) {{
-    if (to2) {{
-      v1.classList.remove("active");
-      v2.classList.add("active");
-      try {{ v2.currentTime = 0; }} catch (e) {{ }}
-      playSafe(v2);
-    }} else {{
-      v2.classList.remove("active");
-      v1.classList.add("active");
-      try {{ v1.currentTime = 0; }} catch (e) {{ }}
-      playSafe(v1);
+    if (!hasV1 || !hasV2) {{
+        showFallback();
+        return;
     }}
-  }}
 
-  v1.addEventListener("ended", () => swap(true));
-  v2.addEventListener("ended", () => swap(false));
+    v1.src = "{data_v1}";
+    v2.src = "{data_v2}";
 
-  setRate(1.00);
-  playSafe(v1);
-}})();
-</script>
-</body>
-</html>
-"""
-    st.components.v1.html(html_block, height=92, scrolling=False)
+    v1.classList.add("active");
+    v2.classList.remove("active");
+
+    v1.addEventListener("ended", () => activate(true));
+    v2.addEventListener("ended", () => activate(false));
+
+    setRate(1.00);
+    playSafe(v1);
+    }})();
+    </script>
+    </body>
+    </html>
+    """
+    st.components.v1.html(html_block, height=84, scrolling=False)
 
 _EXEC_MODE_LABEL = {
     "server": "伺服器",
@@ -1749,7 +1670,7 @@ def _page_auth() -> None:
 (function() {
   function findBrandIframe() {
     const d = window.parent.document;
-    return d.querySelector('iframe[data-sheep-brand="1"]') || d.querySelector('iframe[srcdoc*="SHEEP_BRAND_HDR_V2"]');
+    return d.querySelector('iframe[data-sheep-brand="1"]') || d.querySelector('iframe[data-sheep-brand="1"]') || d.querySelector('iframe[srcdoc*="SHEEP_BRAND_HDR_V3"]');
   }
 
   function postPulse(on) {
