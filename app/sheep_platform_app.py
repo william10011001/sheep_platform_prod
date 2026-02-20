@@ -787,10 +787,6 @@ def _register_form() -> None:
         tos_text = ""
         tos_version = ""
 
-    if st.button("查看服務條款", key="open_tos_dialog"):
-        st.session_state["auth_dialog"] = "tos"
-        st.rerun()
-
     with st.form("register_form", clear_on_submit=False):
         username = st.text_input("帳號", value="")
         password = st.text_input("密碼", value="", type="password", placeholder="至少 6 碼，需包含英文字母與數字")
@@ -1053,7 +1049,7 @@ def _render_auth_onboarding_dialog() -> None:
                 line-height:1.6;
                 opacity:.92;
                 color:rgba(255,255,255,0.90);
-                max-height:140px;
+                max-height:180px;
                 overflow-y:auto;
                 padding-right:4px;
             }
@@ -1087,19 +1083,19 @@ def _render_auth_onboarding_dialog() -> None:
                     text-align:left;
                 }
                 .sp-flow-track{
-                    flex-wrap:wrap;
-                    overflow-x:hidden;
-                    padding:8px 0 10px 0;
+                    flex-wrap:nowrap;
+                    overflow-x:auto;
+                    padding:8px 6px 10px 6px;
                 }
                 .sp-sep{
                     display:none;
                 }
                 .sp-step{
-                    width:100%;
-                    border-radius:14px;
-                    text-align:left;
-                    padding:12px 14px;
-                    font-size:13.5px;
+                    width:auto;
+                    border-radius:999px;
+                    text-align:center;
+                    padding:10px 12px;
+                    font-size:12.5px;
                 }
             }
             </style>
@@ -1193,8 +1189,8 @@ def _render_auth_onboarding_dialog() -> None:
             })();
             </script>
                 """,
-                height=460,
-                scrolling=False,
+                height=560,
+                scrolling=True,
             )
 
 
@@ -1286,14 +1282,20 @@ def _page_auth() -> None:
         st.session_state["auth_onboarding_seen"] = True
         st.session_state["auth_dialog"] = "onboarding"
 
-    top_l, top_r = st.columns([1.0, 0.28])
+    top_l, top_r = st.columns([1.0, 0.48])
     with top_l:
         st.markdown(f"## {APP_TITLE}")
         st.markdown('<div class="small-muted">登入或註冊後即可開始參與運算任務。</div>', unsafe_allow_html=True)
     with top_r:
-        if st.button("流程與操作要點", key="auth_open_onboarding"):
-            st.session_state["auth_dialog"] = "onboarding"
-            st.rerun()
+        b1, b2 = st.columns([1, 1])
+        with b1:
+            if st.button("流程與操作要點", key="auth_open_onboarding"):
+                st.session_state["auth_dialog"] = "onboarding"
+                st.rerun()
+        with b2:
+            if st.button("查看服務條款", key="auth_open_tos"):
+                st.session_state["auth_dialog"] = "tos"
+                st.rerun()
 
     col1, col2 = st.columns([1, 1])
     with col1:
@@ -1510,6 +1512,15 @@ def _page_tutorial(user: Optional[Dict[str, Any]] = None) -> None:
 .tut_body{font-size:13px;line-height:1.65;opacity:.82;}
 .tut_anim{animation: tutFade .25s ease-out 1;}
 @keyframes tutFade{from{transform:translateY(6px);opacity:.0}to{transform:translateY(0);opacity:1}}
+.flow_panel{border-radius:16px;border:1px solid rgba(255,255,255,0.12);background:linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.03));padding:14px 14px 10px 14px;margin-top:10px;}
+.flow_header{display:flex;align-items:flex-end;justify-content:space-between;gap:10px;margin-bottom:10px;}
+.flow_title{font-size:14px;font-weight:800;opacity:.96;}
+.flow_hint{font-size:12px;opacity:.70;}
+.flow_items{display:flex;flex-direction:column;gap:8px;}
+.flow_item{display:flex;gap:10px;align-items:flex-start;padding:10px 10px;border-radius:12px;border:1px solid rgba(255,255,255,0.10);background:rgba(255,255,255,0.03);}
+.flow_badge{width:28px;height:28px;border-radius:10px;display:flex;align-items:center;justify-content:center;border:1px solid rgba(120,180,255,0.45);background:rgba(120,180,255,0.12);font-weight:800;font-size:12px;}
+.flow_text{font-size:13px;line-height:1.55;opacity:.88;}
+.flow_sub{font-size:12px;opacity:.70;margin-top:2px;}
 </style>
         """,
         unsafe_allow_html=True,
@@ -1519,9 +1530,24 @@ def _page_tutorial(user: Optional[Dict[str, Any]] = None) -> None:
 
     with tabs[0]:
         st.markdown('<div class="tut_card tut_anim"><div class="tut_kicker">快速理解</div><div class="tut_title">用你們的裝置算出最佳交易策略 賺取獎勵分潤</div><div class="tut_body">平台提供所有策略與參數，讓用戶提供算力自行組合並挖出最佳結果。若該策略獲利達標將獲得平台分潤獎勵。</div></div>', unsafe_allow_html=True)
-        st.markdown("#### 使用流程")
-        st.markdown("- 選擇策略並開始任務\n- 產生候選結果\n- 提交候選並等待複驗\n- 複驗通過後進入策略池\n- 依結算週期產出明細")
-
+        st.markdown(
+            """
+<div class="flow_panel tut_anim">
+  <div class="flow_header">
+    <div class="flow_title">使用流程</div>
+    <div class="flow_hint">共 5 步</div>
+  </div>
+  <div class="flow_items">
+    <div class="flow_item"><div class="flow_badge">1</div><div><div class="flow_text">選擇策略並開始任務</div><div class="flow_sub">任務依策略池切分並自動排程</div></div></div>
+    <div class="flow_item"><div class="flow_badge">2</div><div><div class="flow_text">產生候選結果</div><div class="flow_sub">本機運算產出候選參數與績效指標</div></div></div>
+    <div class="flow_item"><div class="flow_badge">3</div><div><div class="flow_text">提交候選並等待複驗</div><div class="flow_sub">提交後進入伺服器複驗流程</div></div></div>
+    <div class="flow_item"><div class="flow_badge">4</div><div><div class="flow_text">複驗通過後進入策略池</div><div class="flow_sub">候選通過驗證後納入策略池</div></div></div>
+    <div class="flow_item"><div class="flow_badge">5</div><div><div class="flow_text">依結算週期產出明細</div><div class="flow_sub">依週期統計並產出分潤明細</div></div></div>
+  </div>
+</div>
+""",
+            unsafe_allow_html=True,
+        )
     with tabs[1]:
         st.markdown('<div class="tut_card tut_anim"><div class="tut_kicker">任務頁</div><div class="tut_title">如何穩定跑任務</div><div class="tut_body">建議使用電腦長時間運行並保持網路穩定。任務頁可一鍵開始全部任務，系統會自動排程並依序執行。</div></div>', unsafe_allow_html=True)
         st.markdown("#### 建議操作")

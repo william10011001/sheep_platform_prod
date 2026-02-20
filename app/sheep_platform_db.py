@@ -966,7 +966,56 @@ def set_user_pref_pool_ids(user_id: int, pool_ids: List[int]) -> None:
     finally:
         conn.close()
 
+def _user_pref_key_families(user_id: int) -> str:
+    return f"user_pref_families:{int(user_id)}"
 
+
+def get_user_pref_families(user_id: int) -> List[str]:
+    conn = _conn()
+    try:
+        raw = get_setting(conn, _user_pref_key_families(int(user_id)), [])
+    finally:
+        conn.close()
+
+    out: List[str] = []
+    if isinstance(raw, list):
+        for x in raw:
+            s = str(x or "").strip()
+            if s:
+                out.append(s)
+
+    seen = set()
+    uniq: List[str] = []
+    for s in out:
+        if s in seen:
+            continue
+        seen.add(s)
+        uniq.append(s)
+    return uniq
+
+
+def set_user_pref_families(user_id: int, families: List[str]) -> None:
+    vals: List[str] = []
+    for x in families or []:
+        s = str(x or "").strip()
+        if not s:
+            continue
+        vals.append(s)
+
+    seen = set()
+    uniq: List[str] = []
+    for s in vals:
+        if s in seen:
+            continue
+        seen.add(s)
+        uniq.append(s)
+
+    conn = _conn()
+    try:
+        set_setting(conn, _user_pref_key_families(int(user_id)), uniq)
+        conn.commit()
+    finally:
+        conn.close()
 def delete_assigned_tasks_for_user_not_in_pools(user_id: int, cycle_id: int, keep_pool_ids: List[int]) -> int:
     user_id = int(user_id)
     cycle_id = int(cycle_id)
@@ -1266,6 +1315,7 @@ def assign_tasks_for_user(
     max_tasks: Optional[int] = None,
     preferred_family: Optional[str] = None,
     preferred_pool_id: Optional[int] = None,
+    preferred_pool_ids: Optional[List[int]] = None,
 ) -> List[int]:
     if min_tasks is not None:
         min_needed = int(min_tasks)
@@ -1302,14 +1352,31 @@ def assign_tasks_for_user(
         # 允許依策略或策略池過濾可領取任務來源
         allowed_pool_ids: List[int] = []
         fam = str(preferred_family or "").strip()
-        if preferred_pool_id is not None:
+        if preferred_pool_ids:
+            ids: List[int] = []
+            for x in preferred_pool_ids:
+                try:
+                    ids.append(int(x))
+                except Exception:
+                    pass
+            seen = set()
+            uniq_ids: List[int] = []
+            for x in ids:
+                if x <= 0:
+                    continue
+                if x in seen:
+                    continue
+                seen.add(x)
+                uniq_ids.append(x)
+            allowed_pool_ids = uniq_ids
+        elif preferred_pool_id is not None:
             allowed_pool_ids = [int(preferred_pool_id)]
         elif fam:
             rows = conn.execute(
                 "SELECT id FROM factor_pools WHERE cycle_id = ? AND active = 1 AND family = ? ORDER BY id ASC",
                 (int(cycle_id), str(fam)),
             ).fetchall()
-            allowed_pool_ids = [int(r["id"] if isinstance(r, dict) else r[0]) for r in rows]
+            allowed_pool_ids = [int((r["id"] if isinstance(r, dict) else r[0])) for r in rows]
 
         # 若有策略過濾但找不到池，直接不分配
         if fam and not allowed_pool_ids:
