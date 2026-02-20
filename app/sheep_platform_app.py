@@ -918,8 +918,8 @@ def _render_auth_onboarding_dialog() -> None:
         tabs = st.tabs(tab_names)
 
         with tabs[0]:
-            st.markdown("#### 這不是傳統挖礦，是參數搜尋")
-            st.write("平台把一個策略的參數空間切成很多份，每個人拿一份去跑回測。你提供算力，平台提供任務與審核。")
+            st.markdown("#### 用你們的裝置算出最佳交易策略 賺取獎勵分潤")
+            st.write("平台提供所有策略與參數，讓用戶提供算力自行組合並挖出最佳結果。若該策略獲利達標將獲得平台分潤獎勵。")
             st.markdown("#### 流程")
             st.components.v1.html(
                 """
