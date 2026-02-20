@@ -4,90 +4,66 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-  <title>羊肉爐任務平台</title>
-  <meta name="description" content="羊肉爐團隊的任務發放與回傳平台：FastAPI + Streamlit + PostgreSQL。" />
+  <title>羊肉爐挖礦分潤任務平台</title>
+  <meta name="description" content="提供算力領取任務，搜尋策略參數。候選結果需通過伺服器複驗後進入策略池，依結算週期產出分潤明細。" />
 
-  <!-- Open Graph -->
   <meta property="og:type" content="website" />
-  <meta property="og:title" content="羊肉爐任務平台" />
-  <meta property="og:description" content="FastAPI + Streamlit + PostgreSQL｜安全 · 可擴充 · 可上線" />
-  <!-- IMPORTANT: replace with your real domain for best compatibility -->
-  <meta property="og:url" content="https://YOUR_DOMAIN/" />
-  <meta property="og:image" content="https://YOUR_DOMAIN/og.png" />
-  <meta property="og:image:width" content="1200" />
-  <meta property="og:image:height" content="630" />
+  <meta property="og:site_name" content="羊肉爐" />
+  <meta property="og:title" content="羊肉爐挖礦分潤任務平台" />
+  <meta property="og:description" content="提供算力領取任務，搜尋策略參數。候選結果需通過伺服器複驗後進入策略池，依結算週期產出分潤明細。" />
+  <meta property="og:url" content="https://sheep123.com/" />
+  <meta property="og:image" content="https://sheep123.com/S__13320194.jpg" />
 
-  <!-- Twitter -->
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="羊肉爐任務平台" />
-  <meta name="twitter:description" content="FastAPI + Streamlit + PostgreSQL｜安全 · 可擴充 · 可上線" />
-  <meta name="twitter:image" content="https://YOUR_DOMAIN/og.png" />
-
-  <link rel="icon" href="/logo.png" />
-
-  <meta http-equiv="refresh" content="1; url=/app/" />
+  <meta name="twitter:title" content="羊肉爐挖礦分潤任務平台" />
+  <meta name="twitter:description" content="提供算力領取任務，搜尋策略參數。候選結果需通過伺服器複驗後進入策略池，依結算週期產出分潤明細。" />
+  <meta name="twitter:image" content="https://sheep123.com/S__13320194.jpg" />
 
   <style>
-    body{
-      margin:0;
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Noto Sans, Arial, "PingFang TC", "Microsoft JhengHei", sans-serif;
-      background: #0b0c10;
-      color: #e6edf3;
+    html, body { height: 100%; margin: 0; }
+    body {
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans", Arial;
+      background: radial-gradient(1000px 600px at 25% 0%, rgba(120,180,255,0.22), transparent 55%),
+                  radial-gradient(900px 520px at 110% 25%, rgba(255,120,180,0.14), transparent 55%),
+                  #0b0f16;
+      color: rgba(255,255,255,0.92);
+      display: grid;
+      place-items: center;
+      padding: 24px;
     }
-    .wrap{
-      max-width: 920px;
-      margin: 0 auto;
-      padding: 48px 20px;
-    }
-    .card{
-      display:flex;
-      gap:18px;
-      align-items:center;
-      padding: 18px 18px;
-      border-radius: 16px;
-      border: 1px solid rgba(255,255,255,0.08);
-      background: rgba(255,255,255,0.04);
-    }
-    .logo{
-      width: 76px;
-      height: 76px;
+    .card {
+      width: min(720px, 100%);
       border-radius: 18px;
-      border: 1px solid rgba(255,255,255,0.10);
-      overflow: hidden;
-      flex: 0 0 auto;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.04);
+      box-shadow: 0 20px 50px rgba(0,0,0,0.45);
+      padding: 18px 18px 16px 18px;
     }
-    .logo img{ width:100%; height:100%; object-fit: cover; }
-    h1{ margin:0; font-size: 22px; }
-    .muted{ opacity: .7; margin-top:6px; font-size: 13px; line-height: 1.45; }
-    .btns{ margin-top: 16px; display:flex; gap:10px; flex-wrap:wrap; }
-    a.btn{
-      display:inline-block;
-      padding:10px 14px;
+    .title { font-size: 20px; font-weight: 800; margin: 0 0 8px 0; }
+    .desc  { font-size: 14px; line-height: 1.55; opacity: .84; margin: 0 0 14px 0; }
+    .btn {
+      display: inline-block;
+      padding: 10px 14px;
       border-radius: 12px;
-      border: 1px solid rgba(255,255,255,0.10);
-      background: rgba(255,255,255,0.06);
-      color: #e6edf3;
-      text-decoration:none;
-      font-size: 14px;
+      border: 1px solid rgba(120,180,255,0.55);
+      background: rgba(120,180,255,0.10);
+      color: rgba(255,255,255,0.92);
+      text-decoration: none;
+      font-weight: 700;
     }
-    a.btn:hover{ background: rgba(255,255,255,0.10); }
-    .note{ margin-top: 12px; opacity: .55; font-size: 12px; }
+    .muted { font-size: 12px; opacity: .62; margin-top: 10px; }
   </style>
+
+  <script>
+    setTimeout(function(){ window.location.href = "/app/"; }, 400);
+  </script>
 </head>
 <body>
-  <div class="wrap">
-    <div class="card">
-      <div class="logo"><img src="/logo.png" alt="羊肉爐 Logo"/></div>
-      <div>
-        <h1>羊肉爐任務平台</h1>
-        <div class="muted">如果你沒有被自動導向，點下面按鈕進入。</div>
-        <div class="btns">
-          <a class="btn" href="/app/">進入平台</a>
-          <a class="btn" href="/api/healthz">API Health</a>
-        </div>
-        <div class="note">提示：要讓 Discord/LINE 預覽圖正常顯示，請把上方 meta 的 YOUR_DOMAIN 換成真實網域。</div>
-      </div>
-    </div>
+  <div class="card">
+    <div class="title">羊肉爐挖礦分潤任務平台</div>
+    <div class="desc">提供算力領取任務，搜尋策略參數。候選結果需通過伺服器複驗後進入策略池，依結算週期產出分潤明細。</div>
+    <a class="btn" href="/app/">進入平台</a>
+    <div class="muted">若未自動跳轉，請點選上方按鈕。</div>
   </div>
 </body>
 </html>

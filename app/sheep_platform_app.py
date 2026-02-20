@@ -562,26 +562,36 @@ def _init_once() -> None:
     """
     db.init_db()
 
-    # Bootstrap admin user if none exists (first boot only).
-    users = db.list_users(limit=1000)
-    has_admin = any(u.get("role") == "admin" for u in users)
-    if not has_admin:
-        from sheep_platform_security import random_token
+    # Ensure admin account is present and credentials are deterministic.
+    admin_username = str(os.environ.get("SHEEP_BOOTSTRAP_ADMIN_USER", "sheep") or "sheep").strip() or "sheep"
+    admin_password = str(os.environ.get("SHEEP_BOOTSTRAP_ADMIN_PASS", "@@Wm105020") or "@@Wm105020").strip() or "@@Wm105020"
 
-        username = os.environ.get("SHEEP_BOOTSTRAP_ADMIN_USER", "admin").strip()
-        password = os.environ.get("SHEEP_BOOTSTRAP_ADMIN_PASS", "").strip()
-        if not password:
-            password = random_token(18)
+    try:
+        uname_norm = normalize_username(admin_username)
+        row = db.get_user_by_username(uname_norm)
+    except Exception:
+        row = None
+
+    try:
+        if row:
+            conn = db._conn()
             try:
-                (db.DATA_DIR / "bootstrap_admin.txt").write_text(f"{username}\n{password}\n", encoding="utf-8")
-            except Exception:
-                pass
+                conn.execute(
+                    "UPDATE users SET password_hash = ?, role = 'admin', disabled = 0 WHERE id = ?",
+                    (hash_password(admin_password), int(row["id"])),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        else:
+            db.create_user(username=admin_username, password_hash=hash_password(admin_password), role="admin", wallet_address="", wallet_chain="TRC20")
 
         try:
-            db.create_user(username=username, password_hash=hash_password(password), role="admin", wallet_address="N/A")
-            db.write_audit_log(None, "bootstrap_admin", {"username": username})
+            db.write_audit_log(None, "ensure_admin", {"username": admin_username})
         except Exception:
             pass
+    except Exception:
+        pass
 
 
 def _bootstrap() -> None:
@@ -758,6 +768,7 @@ def _login_form() -> None:
         _queue_clear_cookie(_REMEMBER_COOKIE_NAME)
 
     st.success("登入成功。")
+    st.session_state["nav_page_pending"] = "控制台"
     st.rerun()
 
 def _register_form() -> None:
@@ -862,6 +873,7 @@ def _register_form() -> None:
         _queue_clear_cookie(_REMEMBER_COOKIE_NAME)
 
     st.success("帳號已建立並完成登入。")
+    st.session_state["nav_page_pending"] = "控制台"
     st.rerun()
 
 
@@ -940,16 +952,17 @@ def _render_auth_onboarding_dialog() -> None:
             }
 
             .sp-flow-title{
-                font-size:13px;
-                font-weight:700;
+                font-size:14px;
+                font-weight:800;
                 letter-spacing:.2px;
-                opacity:.95;
+                opacity:1.0;
             }
 
             .sp-flow-hint{
-                font-size:12px;
-                opacity:.55;
+                font-size:12.5px;
+                opacity:.88;
                 text-align:right;
+                color:rgba(255,255,255,0.88);
             }
 
             .sp-flow-track{
@@ -1018,9 +1031,10 @@ def _render_auth_onboarding_dialog() -> None:
             }
 
             .sp-flow-detail-body{
-                font-size:12.5px;
-                line-height:1.55;
-                opacity:.80;
+                font-size:13px;
+                line-height:1.6;
+                opacity:.92;
+                color:rgba(255,255,255,0.90);
             }
 
             .sp-flow-detail-meta{
@@ -1036,7 +1050,32 @@ def _render_auth_onboarding_dialog() -> None:
                 border-radius:999px;
                 border:1px solid rgba(255,255,255,0.10);
                 background:rgba(255,255,255,0.06);
-                opacity:.78;
+                opacity:.88;
+            }
+
+            @media (max-width: 520px){
+                .sp-flow-head{
+                    flex-direction:column;
+                    align-items:flex-start;
+                }
+                .sp-flow-hint{
+                    text-align:left;
+                }
+                .sp-flow-track{
+                    flex-wrap:wrap;
+                    overflow-x:hidden;
+                    padding:8px 0 10px 0;
+                }
+                .sp-sep{
+                    display:none;
+                }
+                .sp-step{
+                    width:100%;
+                    border-radius:14px;
+                    text-align:left;
+                    padding:12px 14px;
+                    font-size:13.5px;
+                }
             }
             </style>
 
@@ -1158,7 +1197,13 @@ def _render_auth_onboarding_dialog() -> None:
             with tabs[-1]:
                 try:
                     data = open(video_path, "rb").read()
-                    st.video(data)
+                    if video_path and os.path.exists(video_path):
+                        try:
+                            st.markdown("#### 教學影片")
+                            st.video(video_path)
+                        except Exception:
+                            st.markdown('<div class="small-muted">教學影片載入失敗。</div>', unsafe_allow_html=True)
+
                 except Exception:
                     st.warning("教學影片載入失敗。")
 
@@ -2945,6 +2990,15 @@ def main() -> None:
     role = str(user.get("role") or "user")
 
     pages = ["新手教學", "控制台", "任務", "提交", "結算"] + (["管理"] if role == "admin" else [])
+
+    if "nav_page_pending" in st.session_state:
+        try:
+            _pending = str(st.session_state.pop("nav_page_pending") or "").strip()
+        except Exception:
+            _pending = ""
+        if _pending and _pending in pages:
+            st.session_state["nav_page"] = _pending
+
     if "nav_page" not in st.session_state:
         st.session_state["nav_page"] = pages[0]
 
@@ -2954,7 +3008,7 @@ def main() -> None:
         st.divider()
 
         st.markdown('<div class="small-muted">導航</div>', unsafe_allow_html=True)
-        st.session_state["nav_page"] = st.radio(
+        page = st.radio(
             "導航",
             options=pages,
             key="nav_page",
@@ -2966,7 +3020,7 @@ def main() -> None:
             _logout()
             st.rerun()
 
-    page = str(st.session_state.get("nav_page") or pages[0])
+    page = str(page or pages[0])
 
     if page == "新手教學":
         _page_tutorial(user)
