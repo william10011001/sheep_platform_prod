@@ -791,7 +791,8 @@ def _register_form() -> None:
         st.session_state["tos_dialog_open"] = True
 
     if bool(st.session_state.get("tos_dialog_open")):
-        with st.dialog("服務條款與分潤風險協議"):
+        @st.dialog("服務條款與分潤風險協議")
+        def _tos_dialog() -> None:
             if tos_text.strip():
                 st.markdown(tos_text)
             else:
@@ -799,6 +800,8 @@ def _register_form() -> None:
             if st.button("關閉", key="close_tos_dialog"):
                 st.session_state["tos_dialog_open"] = False
                 st.rerun()
+
+        _tos_dialog()
 
     with st.form("register_form", clear_on_submit=False):
         username = st.text_input("帳號", value="")
@@ -941,6 +944,7 @@ def _render_auth_onboarding_dialog() -> None:
                 border:1px solid rgba(255,255,255,0.10);
                 background:rgba(255,255,255,0.04);
                 padding:14px 14px 12px 14px;
+                color:rgba(255,255,255,0.92);
             }
 
             .sp-flow-head{
@@ -1140,21 +1144,25 @@ def _render_auth_onboarding_dialog() -> None:
                 const activeBtn = track.querySelector('.sp-step[data-step="'+stepKey+'"]');
                 if(activeBtn){
                 activeBtn.classList.add("is-active");
-                activeBtn.scrollIntoView({block:"nearest", inline:"nearest"});
+                try{
+                    activeBtn.scrollIntoView({block:"nearest", inline:"nearest"});
+                }catch(e){
+                    try{ activeBtn.scrollIntoView(); }catch(e2){}
+                }
                 }
             }
 
-            track.addEventListener("mouseover", (e) => {
-                const btn = e.target.closest(".sp-step");
+            const pick = (e) => {
+                const target = e && e.target ? e.target : null;
+                const btn = target && target.closest ? target.closest(".sp-step") : null;
                 if(!btn) return;
                 setActive(btn.getAttribute("data-step"));
-            });
+            };
 
-            track.addEventListener("click", (e) => {
-                const btn = e.target.closest(".sp-step");
-                if(!btn) return;
-                setActive(btn.getAttribute("data-step"));
-            });
+            track.addEventListener("mouseover", pick);
+            track.addEventListener("click", pick);
+            track.addEventListener("pointerdown", pick);
+            track.addEventListener("touchstart", pick, {passive:true});
 
             setActive("login");
             })();
@@ -2609,47 +2617,54 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
 
         st.divider()
 
-        st.markdown("#### 分享預覽")
-        og_title = st.text_input("OG 標題", value=str(db.get_setting(conn, "og_title", "") or ""), key="og_title")
-        og_desc = st.text_area("OG 描述", value=str(db.get_setting(conn, "og_description", "") or ""), height=80, key="og_desc")
-        og_image = st.text_input("OG 圖片 URL", value=str(db.get_setting(conn, "og_image_url", "") or ""), key="og_img")
-        og_url = st.text_input("OG URL", value=str(db.get_setting(conn, "og_url", "") or ""), key="og_url")
-        og_redirect = st.text_input("分享後導向 URL", value=str(db.get_setting(conn, "og_redirect_url", "") or ""), key="og_redirect")
-        if st.button("保存分享預覽", key="save_og"):
-            db.set_setting(conn, "og_title", og_title)
-            db.set_setting(conn, "og_description", og_desc)
-            db.set_setting(conn, "og_image_url", og_image)
-            db.set_setting(conn, "og_url", og_url)
-            db.set_setting(conn, "og_redirect_url", og_redirect)
-            db.write_audit_log(int(user["id"]), "og_settings_update", {})
-            st.success("已保存分享預覽設定")
-            st.rerun()
+        conn = db._conn()
+        try:
+            st.markdown("#### 分享預覽")
+            og_title = st.text_input("OG 標題", value=str(db.get_setting(conn, "og_title", "") or ""), key="og_title")
+            og_desc = st.text_area("OG 描述", value=str(db.get_setting(conn, "og_description", "") or ""), height=80, key="og_desc")
+            og_image = st.text_input("OG 圖片 URL", value=str(db.get_setting(conn, "og_image_url", "") or ""), key="og_img")
+            og_url = st.text_input("OG URL", value=str(db.get_setting(conn, "og_url", "") or ""), key="og_url")
+            og_redirect = st.text_input("分享後導向 URL", value=str(db.get_setting(conn, "og_redirect_url", "") or ""), key="og_redirect")
+            if st.button("保存分享預覽", key="save_og"):
+                db.set_setting(conn, "og_title", og_title)
+                db.set_setting(conn, "og_description", og_desc)
+                db.set_setting(conn, "og_image_url", og_image)
+                db.set_setting(conn, "og_url", og_url)
+                db.set_setting(conn, "og_redirect_url", og_redirect)
+                conn.commit()
+                db.write_audit_log(int(user["id"]), "og_settings_update", {})
+                st.success("已保存分享預覽設定")
+                st.rerun()
 
-        st.divider()
+            st.divider()
 
-        st.markdown("#### 提現規則顯示")
-        w_min = st.number_input("最低提現金額（USDT）", min_value=0.0, value=float(db.get_setting(conn, "withdraw_min_usdt", 20.0) or 20.0), step=1.0, key="withdraw_min")
-        w_fee = st.number_input("預估鏈上手續費（USDT）", min_value=0.0, value=float(db.get_setting(conn, "withdraw_fee_usdt", 1.0) or 1.0), step=0.5, key="withdraw_fee")
-        w_mode = st.selectbox("手續費承擔方式", options=["deduct", "platform_absorb"], index=0 if str(db.get_setting(conn, "withdraw_fee_mode", "deduct") or "deduct") == "deduct" else 1, key="withdraw_mode")
-        if st.button("保存提現規則", key="save_withdraw"):
-            db.set_setting(conn, "withdraw_min_usdt", float(w_min))
-            db.set_setting(conn, "withdraw_fee_usdt", float(w_fee))
-            db.set_setting(conn, "withdraw_fee_mode", str(w_mode))
-            db.write_audit_log(int(user["id"]), "withdraw_rule_update", {})
-            st.success("已保存提現規則")
-            st.rerun()
+            st.markdown("#### 提現規則顯示")
+            w_min = st.number_input("最低提現金額（USDT）", min_value=0.0, value=float(db.get_setting(conn, "withdraw_min_usdt", 20.0) or 20.0), step=1.0, key="withdraw_min")
+            w_fee = st.number_input("預估鏈上手續費（USDT）", min_value=0.0, value=float(db.get_setting(conn, "withdraw_fee_usdt", 1.0) or 1.0), step=0.5, key="withdraw_fee")
+            w_mode = st.selectbox("手續費承擔方式", options=["deduct", "platform_absorb"], index=0 if str(db.get_setting(conn, "withdraw_fee_mode", "deduct") or "deduct") == "deduct" else 1, key="withdraw_mode")
+            if st.button("保存提現規則", key="save_withdraw"):
+                db.set_setting(conn, "withdraw_min_usdt", float(w_min))
+                db.set_setting(conn, "withdraw_fee_usdt", float(w_fee))
+                db.set_setting(conn, "withdraw_fee_mode", str(w_mode))
+                conn.commit()
+                db.write_audit_log(int(user["id"]), "withdraw_rule_update", {})
+                st.success("已保存提現規則")
+                st.rerun()
 
-        st.divider()
+            st.divider()
 
-        st.markdown("#### 服務條款與風險協議")
-        tos_version = st.text_input("條款版本", value=str(db.get_setting(conn, "tos_version", "") or ""), key="tos_version")
-        tos_text = st.text_area("條款內容", value=str(db.get_setting(conn, "tos_text", "") or ""), height=240, key="tos_text")
-        if st.button("保存條款", key="save_tos"):
-            db.set_setting(conn, "tos_version", tos_version)
-            db.set_setting(conn, "tos_text", tos_text)
-            db.write_audit_log(int(user["id"]), "tos_update", {"version": tos_version})
-            st.success("已保存條款")
-            st.rerun()
+            st.markdown("#### 服務條款與風險協議")
+            tos_version = st.text_input("條款版本", value=str(db.get_setting(conn, "tos_version", "") or ""), key="tos_version")
+            tos_text = st.text_area("條款內容", value=str(db.get_setting(conn, "tos_text", "") or ""), height=240, key="tos_text")
+            if st.button("保存條款", key="save_tos"):
+                db.set_setting(conn, "tos_version", tos_version)
+                db.set_setting(conn, "tos_text", tos_text)
+                conn.commit()
+                db.write_audit_log(int(user["id"]), "tos_update", {"version": tos_version})
+                st.success("已保存條款")
+                st.rerun()
+        finally:
+            conn.close()
 
     with tabs[6]:
         st.markdown("Pool")
