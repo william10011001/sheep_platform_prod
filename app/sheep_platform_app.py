@@ -878,7 +878,7 @@ def _render_auth_onboarding_dialog() -> None:
 
     has_video = bool(video_path and os.path.exists(video_path))
 
-    with st.dialog("流程與操作要點"):
+    def _dialog_body() -> None:
         tab_names = ["總覽", "合作模式", "分潤", "成本", "風險"]
         if has_video:
             tab_names.append("影片")
@@ -886,9 +886,7 @@ def _render_auth_onboarding_dialog() -> None:
 
         with tabs[0]:
             st.markdown("#### 這不是傳統挖礦，是參數搜尋")
-            st.write(
-                "平台把一個策略的參數空間切成很多份，每個人拿一份去跑回測。你提供算力，平台提供任務與審核。"
-            )
+            st.write("平台把一個策略的參數空間切成很多份，每個人拿一份去跑回測。你提供算力，平台提供任務與審核。")
             st.markdown("#### 流程")
             st.components.v1.html(
                 """
@@ -956,6 +954,27 @@ def _render_auth_onboarding_dialog() -> None:
         if st.button("我已了解", key="auth_onboarding_close"):
             st.session_state["auth_onboarding_open"] = False
             st.rerun()
+
+    dlg = getattr(st, "dialog", None)
+    if callable(dlg):
+        try:
+            decorator = dlg("流程與操作要點")
+
+            if hasattr(decorator, "__enter__"):
+                with decorator:
+                    _dialog_body()
+            else:
+                @decorator
+                def _run_dialog() -> None:
+                    _dialog_body()
+
+                _run_dialog()
+        except Exception:
+            st.session_state["auth_onboarding_open"] = False
+            st.rerun()
+    else:
+        st.session_state["auth_onboarding_open"] = False
+        st.rerun()
 
 
 def _page_auth() -> None:
