@@ -185,15 +185,54 @@ div[data-testid="stAppViewContainer"] > .main {
     border-bottom: 1px solid var(--bd);
   }}
   .brand {{
+    --mx: 50%;
+    --my: 50%;
+    --rx: 0deg;
+    --ry: 0deg;
+
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 10px 12px;
-    border-radius: 14px;
-    background: var(--glass);
-    border: 1px solid var(--bd);
-    box-shadow: 0 10px 32px rgba(0,0,0,0.35);
+    gap: 14px;
+    padding: 12px 14px;
+    border-radius: 18px;
+
+    background: linear-gradient(180deg, rgba(18,18,22,0.50), rgba(18,18,22,0.30));
+    border: 1px solid rgba(255,255,255,0.10);
+    box-shadow:
+      0 18px 44px rgba(0,0,0,0.40),
+      inset 0 1px 0 rgba(255,255,255,0.08);
+
     transform-origin: left center;
+    transform: translateY(0) rotateX(var(--rx)) rotateY(var(--ry));
+    transition:
+      transform 160ms ease,
+      box-shadow 200ms ease,
+      border-color 200ms ease,
+      background 200ms ease;
+    position: relative;
+    overflow: hidden;
+    cursor: default;
+  }}
+
+  .brand::before {{
+    content: "";
+    position: absolute;
+    inset: -2px;
+    background: radial-gradient(420px 260px at var(--mx) var(--my), rgba(255,255,255,0.13), rgba(255,255,255,0) 55%);
+    opacity: 0;
+    transition: opacity 180ms ease;
+    pointer-events: none;
+  }}
+
+  .brand:hover {{
+    border-color: rgba(255,255,255,0.18);
+    box-shadow:
+      0 22px 56px rgba(0,0,0,0.46),
+      inset 0 1px 0 rgba(255,255,255,0.10);
+  }}
+
+  .brand:hover::before {{
+    opacity: 1;
   }}
   .brand.brand-enter {{
     animation: brandIn 700ms cubic-bezier(0.16, 1, 0.3, 1) 40ms both;
@@ -204,16 +243,17 @@ div[data-testid="stAppViewContainer"] > .main {
     100% {{ opacity: 1; transform: translateY(0) scale(1.00); filter: blur(0px); }}
   }}
   .logoBox {{
-    width: 68px;
-    height: 68px;
-    border-radius: 14px;
+    width: 92px;
+    height: 92px;
+    border-radius: 18px;
     overflow: hidden;
     background: #ffffff;
     border: 1px solid rgba(0,0,0,0.10);
     position: relative;
     flex: 0 0 auto;
-    padding: 6px;
+    padding: 10px;
     box-sizing: border-box;
+    box-shadow: 0 14px 34px rgba(0,0,0,0.18);
   }}
   video {{
     width: 100%;
@@ -221,6 +261,7 @@ div[data-testid="stAppViewContainer"] > .main {
     object-fit: contain;
     display: none;
     background: #ffffff;
+    filter: drop-shadow(0 6px 10px rgba(0,0,0,0.18));
   }}
   video.active {{ display: block; }}
   .fallback {{
@@ -235,15 +276,16 @@ div[data-testid="stAppViewContainer"] > .main {
   }}
   .title {{
     color: var(--fg);
-    font-weight: 750;
-    font-size: 16px;
-    line-height: 1.1;
+    font-weight: 760;
+    font-size: 16.5px;
+    line-height: 1.15;
+    letter-spacing: 0.2px;
     white-space: nowrap;
   }}
   .sub {{
-    color: var(--muted);
-    font-size: 12px;
-    margin-top: 3px;
+    color: rgba(255,255,255,0.60);
+    font-size: 12.5px;
+    margin-top: 4px;
     white-space: nowrap;
   }}
 </style>
@@ -265,6 +307,38 @@ div[data-testid="stAppViewContainer"] > .main {
 
 <script>
 (function() {{
+  const brand = document.querySelector(".brand");
+
+  function bindBrandTilt() {{
+    if (!brand) return;
+
+    const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+    brand.addEventListener("mousemove", (e) => {{
+      const r = brand.getBoundingClientRect();
+      const x = (e.clientX - r.left) / r.width;
+      const y = (e.clientY - r.top) / r.height;
+
+      const mx = (x * 100).toFixed(2) + "%";
+      const my = (y * 100).toFixed(2) + "%";
+
+      const ry = clamp((x - 0.5) * 10, -6, 6);
+      const rx = clamp(-(y - 0.5) * 10, -6, 6);
+
+      brand.style.setProperty("--mx", mx);
+      brand.style.setProperty("--my", my);
+      brand.style.setProperty("--rx", rx.toFixed(2) + "deg");
+      brand.style.setProperty("--ry", ry.toFixed(2) + "deg");
+    }});
+
+    brand.addEventListener("mouseleave", () => {{
+      brand.style.setProperty("--rx", "0deg");
+      brand.style.setProperty("--ry", "0deg");
+      brand.style.setProperty("--mx", "50%");
+      brand.style.setProperty("--my", "50%");
+    }});
+  }}
+
   const hasV1 = { "true" if v1 else "false" };
   const hasV2 = { "true" if v2 else "false" };
   const v1 = document.getElementById("v1");
@@ -276,6 +350,8 @@ div[data-testid="stAppViewContainer"] > .main {
     v1.style.display = "none";
     v2.style.display = "none";
   }}
+
+  bindBrandTilt();
 
   if (!hasV1 || !hasV2) {{
     showFallback();
@@ -1524,7 +1600,50 @@ def _page_auth() -> None:
         st.session_state["brand_enter_played"] = True
 
     _render_brand_header(animate=animate_brand)
+    st.markdown(
+        """
+<style>
+/* Auth page micro-interactions (CSS only, stable across Streamlit reruns) */
+div[data-testid="stVerticalBlockBorderWrapper"],
+div[data-testid="stForm"] {{
+  transition: transform 160ms ease, box-shadow 220ms ease, border-color 220ms ease;
+}}
 
+div[data-testid="stVerticalBlockBorderWrapper"]:hover,
+div[data-testid="stForm"]:hover {{
+  transform: translateY(-2px);
+  box-shadow: 0 18px 46px rgba(0,0,0,0.35);
+}}
+
+.stTextInput input,
+.stPassword input {{
+  transition: box-shadow 160ms ease, border-color 160ms ease, background 160ms ease;
+}}
+
+.stTextInput input:focus,
+.stPassword input:focus {{
+  border-color: rgba(255,255,255,0.22) !important;
+  box-shadow: 0 0 0 3px rgba(255,255,255,0.10) !important;
+}}
+
+button[kind] {{
+  transition: transform 140ms ease, box-shadow 180ms ease, filter 180ms ease;
+}}
+
+button[kind]:hover {{
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+  box-shadow: 0 14px 34px rgba(0,0,0,0.28);
+}}
+
+button[kind]:active {{
+  transform: translateY(0px);
+  filter: brightness(0.98);
+}}
+</style>
+""",
+        unsafe_allow_html=True,
+    )
     if not bool(st.session_state.get("auth_onboarding_seen")):
         st.session_state["auth_onboarding_seen"] = True
         st.session_state["auth_dialog"] = "onboarding"
