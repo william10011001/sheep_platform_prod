@@ -125,11 +125,8 @@ def _render_brand_header(animate: bool) -> None:
     st.markdown(
         """
 <style>
-/* 兼容不同 Streamlit 版本對 components iframe 的 title 命名 */
-iframe[title="components.html"],
-iframe[title="streamlit_component"],
-iframe[title="streamlit.components.v1.html"],
-iframe[title="st.components.v1.html"] {
+/* 只固定品牌 header iframe（用 srcdoc 內唯一標記精準鎖定，避免誤傷其他 components iframe） */
+iframe[srcdoc*="SHEEP_BRAND_HDR_V1"] {
   position: fixed !important;
   top: 0 !important;
   left: 0 !important;
@@ -155,6 +152,7 @@ div[data-testid="stAppViewContainer"] > .main {
     # 注意：Streamlit 不允許在主 DOM 內直接執行 script，因此這段以 components iframe 方式承載 JS。
     html_block = f"""
 <!doctype html>
+<!-- SHEEP_BRAND_HDR_V1 -->
 <html>
 <head>
 <meta charset="utf-8" />
@@ -234,6 +232,33 @@ div[data-testid="stAppViewContainer"] > .main {
   .brand:hover::before {{
     opacity: 1;
   }}
+
+  .brand.pulse {{
+    animation: breatheGlow 1550ms ease-in-out infinite;
+  }}
+
+  @keyframes breatheGlow {{
+    0% {{
+      box-shadow:
+        0 18px 44px rgba(0,0,0,0.40),
+        inset 0 1px 0 rgba(255,255,255,0.08);
+      filter: saturate(1.00);
+    }}
+    50% {{
+      box-shadow:
+        0 22px 58px rgba(0,0,0,0.46),
+        0 0 0 1px rgba(255,255,255,0.12),
+        0 0 22px rgba(255,255,255,0.07),
+        inset 0 1px 0 rgba(255,255,255,0.10);
+      filter: saturate(1.06);
+    }}
+    100% {{
+      box-shadow:
+        0 18px 44px rgba(0,0,0,0.40),
+        inset 0 1px 0 rgba(255,255,255,0.08);
+      filter: saturate(1.00);
+    }}
+  }}
   .brand.brand-enter {{
     animation: brandIn 700ms cubic-bezier(0.16, 1, 0.3, 1) 40ms both;
   }}
@@ -309,7 +334,33 @@ div[data-testid="stAppViewContainer"] > .main {
 (function() {{
   const brand = document.querySelector(".brand");
 
-  function bindBrandTilt() {{
+  const hasV1 = { "true" if v1 else "false" };
+  const hasV2 = { "true" if v2 else "false" };
+  const v1 = document.getElementById("v1");
+  const v2 = document.getElementById("v2");
+  const fb = document.getElementById("fb");
+
+  function showFallback() {{
+    fb.style.display = "flex";
+    v1.style.display = "none";
+    v2.style.display = "none";
+  }}
+
+  function playSafe(v) {{
+    try {{
+      const p = v.play();
+      if (p && typeof p.catch === "function") {{
+        p.catch(() => {{}});
+      }}
+    }} catch (e) {{}}
+  }}
+
+  function setRate(r) {{
+    try {{ v1.playbackRate = r; }} catch (e) {{}}
+    try {{ v2.playbackRate = r; }} catch (e) {{}}
+  }}
+
+  function bindBrandTiltAndSpeed() {{
     if (!brand) return;
 
     const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -331,27 +382,38 @@ div[data-testid="stAppViewContainer"] > .main {
       brand.style.setProperty("--ry", ry.toFixed(2) + "deg");
     }});
 
+    brand.addEventListener("mouseenter", () => {{
+      // 滑鼠靠近：稍微加速（不要太誇張）
+      setRate(1.22);
+    }});
+
     brand.addEventListener("mouseleave", () => {{
+      // 離開：恢復
       brand.style.setProperty("--rx", "0deg");
       brand.style.setProperty("--ry", "0deg");
       brand.style.setProperty("--mx", "50%");
       brand.style.setProperty("--my", "50%");
+      setRate(1.00);
     }});
   }}
 
-  const hasV1 = { "true" if v1 else "false" };
-  const hasV2 = { "true" if v2 else "false" };
-  const v1 = document.getElementById("v1");
-  const v2 = document.getElementById("v2");
-  const fb = document.getElementById("fb");
-
-  function showFallback() {{
-    fb.style.display = "flex";
-    v1.style.display = "none";
-    v2.style.display = "none";
+  function bindPulseFromParent() {{
+    window.addEventListener("message", (ev) => {{
+      try {{
+        const d = ev.data || {{}};
+        if (!d || d.type !== "SHEEP_HDR_PULSE") return;
+        if (!brand) return;
+        if (d.on) {{
+          brand.classList.add("pulse");
+        }} else {{
+          brand.classList.remove("pulse");
+        }}
+      }} catch (e) {{}}
+    }});
   }}
 
-  bindBrandTilt();
+  bindBrandTiltAndSpeed();
+  bindPulseFromParent();
 
   if (!hasV1 || !hasV2) {{
     showFallback();
@@ -363,15 +425,6 @@ div[data-testid="stAppViewContainer"] > .main {
 
   v1.classList.add("active");
   v2.classList.remove("active");
-
-  function playSafe(v) {{
-    try {{
-      const p = v.play();
-      if (p && typeof p.catch === "function") {{
-        p.catch(() => {{}});
-      }}
-    }} catch (e) {{}}
-  }}
 
   function swap(to2) {{
     if (to2) {{
@@ -390,6 +443,8 @@ div[data-testid="stAppViewContainer"] > .main {
   v1.addEventListener("ended", () => swap(true));
   v2.addEventListener("ended", () => swap(false));
 
+  // 初始速率
+  setRate(1.00);
   playSafe(v1);
 }})();
 </script>
@@ -1600,6 +1655,88 @@ def _page_auth() -> None:
         st.session_state["brand_enter_played"] = True
 
     _render_brand_header(animate=animate_brand)
+    st.components.v1.html(
+        """
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  html, body { margin:0; padding:0; background:transparent; }
+</style>
+</head>
+<body>
+<script>
+(function() {
+  function findBrandIframe() {
+    const iframes = Array.from(window.parent.document.querySelectorAll("iframe"));
+    for (const f of iframes) {
+      try {
+        const s = (f.getAttribute("srcdoc") || "");
+        if (s.indexOf("SHEEP_BRAND_HDR_V1") >= 0) return f;
+      } catch (e) {}
+    }
+    return null;
+  }
+
+  function pickAuthCards() {
+    // 盡量不依賴版本：用面積挑出最像登入/註冊的兩塊大卡片
+    const roots = Array.from(window.parent.document.querySelectorAll('div[data-testid="stVerticalBlockBorderWrapper"], div[data-testid="stForm"]'));
+    const scored = [];
+    for (const el of roots) {
+      try {
+        const r = el.getBoundingClientRect();
+        const area = r.width * r.height;
+        if (r.width < 320 || r.height < 180) continue;
+        // 只挑畫面中間區域，避免抓到 sidebar/其他裝飾
+        if (r.top < 60 || r.left < 40) continue;
+        scored.push({ el, area });
+      } catch (e) {}
+    }
+    scored.sort((a,b)=>b.area-a.area);
+    // 取前 2（通常就是註冊/登入兩卡）
+    return scored.slice(0, 2).map(x=>x.el);
+  }
+
+  function postPulse(on) {
+    const f = findBrandIframe();
+    if (!f) return;
+    try {
+      f.contentWindow.postMessage({ type: "SHEEP_HDR_PULSE", on: !!on }, "*");
+    } catch (e) {}
+  }
+
+  function bind() {
+    const cards = pickAuthCards();
+    if (!cards || cards.length === 0) return;
+
+    let hoverCount = 0;
+
+    function onEnter() {
+      hoverCount += 1;
+      postPulse(true);
+    }
+    function onLeave() {
+      hoverCount = Math.max(0, hoverCount - 1);
+      if (hoverCount === 0) postPulse(false);
+    }
+
+    for (const c of cards) {
+      c.addEventListener("mouseenter", onEnter, { passive: true });
+      c.addEventListener("mouseleave", onLeave, { passive: true });
+    }
+  }
+
+  // 等 parent DOM 稍微穩定後再綁（Streamlit 會 rerun）
+  setTimeout(bind, 350);
+})();
+</script>
+</body>
+</html>
+""",
+        height=0,
+        scrolling=False,
+    )
     st.markdown(
         """
 <style>
