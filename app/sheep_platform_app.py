@@ -118,7 +118,370 @@ def _read_file_b64(path_str: str) -> str:
         return ""
 
 
-def _render_brand_header(animate: bool) -> None:
+def _render_brand_header(animate: bool, dim: bool = False) -> None:
+    v1 = _read_file_b64(_BRAND_WEBM_1)
+    v2 = _read_file_b64(_BRAND_WEBM_2)
+
+    # 用 srcdoc 內唯一標記精準鎖定 header iframe，避免誤傷其他 components iframe
+    # 同時做版心對齊與頁面上方預留空間
+    dim_css = ""
+    if bool(dim):
+        dim_css = """
+iframe[srcdoc*="SHEEP_BRAND_HDR_V1"]{
+  opacity: 0.22 !important;
+  pointer-events: none !important;
+  filter: saturate(0.96) !important;
+}
+"""
+
+    st.markdown(
+        f"""
+<style>
+iframe[srcdoc*="SHEEP_BRAND_HDR_V1"] {{
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  height: 96px !important;
+  border: 0 !important;
+  z-index: 2147483000 !important;
+}}
+div[data-testid="stAppViewContainer"] > .main {{
+  padding-top: 106px !important;
+}}
+{dim_css}
+</style>
+""",
+        unsafe_allow_html=True,
+    )
+
+    anim_class = "brand-enter" if bool(animate) else ""
+    data_v1 = f"data:video/webm;base64,{v1}" if v1 else ""
+    data_v2 = f"data:video/webm;base64,{v2}" if v2 else ""
+
+    # 注意：Streamlit 主 DOM 不可靠執行 script，互動都放在 components iframe 內
+    html_block = f"""
+<!doctype html>
+<!-- SHEEP_BRAND_HDR_V1 -->
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  :root {{
+    --h: 96px;
+    --fg: rgba(255,255,255,0.92);
+    --muted: rgba(255,255,255,0.62);
+
+    --bgTop: rgba(8,10,14,0.72);
+    --bgBot: rgba(8,10,14,0.20);
+
+    --cardA: rgba(18,18,22,0.44);
+    --cardB: rgba(18,18,22,0.26);
+    --bd: rgba(255,255,255,0.10);
+  }}
+
+  html, body {{
+    height: 100%;
+    margin: 0;
+    background: transparent;
+    overflow: hidden;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", Arial;
+  }}
+
+  /* 頂部整條品牌列：做成淡玻璃，並用版心對齊內容 */
+  .bar {{
+    height: var(--h);
+    background: linear-gradient(180deg, var(--bgTop), var(--bgBot));
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+  }}
+  .inner {{
+    height: 100%;
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 10px 18px;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 14px;
+  }}
+
+  .brand {{
+    --mx: 50%;
+    --my: 50%;
+    --rx: 0deg;
+    --ry: 0deg;
+
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 14px;
+    border-radius: 18px;
+
+    background: linear-gradient(180deg, var(--cardA), var(--cardB));
+    border: 1px solid var(--bd);
+    box-shadow:
+      0 18px 44px rgba(0,0,0,0.40),
+      inset 0 1px 0 rgba(255,255,255,0.08);
+
+    transform-origin: left center;
+    transform: translateY(0) rotateX(var(--rx)) rotateY(var(--ry));
+    transition:
+      transform 160ms ease,
+      box-shadow 200ms ease,
+      border-color 200ms ease,
+      background 200ms ease,
+      filter 200ms ease;
+    position: relative;
+    overflow: hidden;
+    cursor: default;
+  }}
+
+  .brand::before {{
+    content: "";
+    position: absolute;
+    inset: -2px;
+    background: radial-gradient(420px 260px at var(--mx) var(--my), rgba(255,255,255,0.12), rgba(255,255,255,0) 55%);
+    opacity: 0;
+    transition: opacity 180ms ease;
+    pointer-events: none;
+  }}
+
+  .brand:hover {{
+    border-color: rgba(255,255,255,0.18);
+    box-shadow:
+      0 22px 56px rgba(0,0,0,0.46),
+      inset 0 1px 0 rgba(255,255,255,0.10);
+    filter: saturate(1.04);
+  }}
+  .brand:hover::before {{ opacity: 1; }}
+
+  /* 登入/註冊卡片 hover 同步進來時的微弱呼吸光暈 */
+  .brand.pulse {{
+    animation: breatheGlow 1550ms ease-in-out infinite;
+  }}
+  @keyframes breatheGlow {{
+    0% {{
+      box-shadow:
+        0 18px 44px rgba(0,0,0,0.40),
+        inset 0 1px 0 rgba(255,255,255,0.08);
+      filter: saturate(1.00);
+    }}
+    50% {{
+      box-shadow:
+        0 22px 58px rgba(0,0,0,0.46),
+        0 0 0 1px rgba(255,255,255,0.12),
+        0 0 22px rgba(255,255,255,0.07),
+        inset 0 1px 0 rgba(255,255,255,0.10);
+      filter: saturate(1.06);
+    }}
+    100% {{
+      box-shadow:
+        0 18px 44px rgba(0,0,0,0.40),
+        inset 0 1px 0 rgba(255,255,255,0.08);
+      filter: saturate(1.00);
+    }}
+  }}
+
+  .brand.brand-enter {{
+    animation: brandIn 700ms cubic-bezier(0.16, 1, 0.3, 1) 40ms both;
+  }}
+  @keyframes brandIn {{
+    0%   {{ opacity: 0; transform: translateY(-10px) scale(0.985); filter: blur(8px); }}
+    60%  {{ opacity: 1; transform: translateY(0) scale(1.01); filter: blur(0px); }}
+    100% {{ opacity: 1; transform: translateY(0) scale(1.00); filter: blur(0px); }}
+  }}
+
+  /* 羊動畫容器：白底、足夠大、但不會像貼紙突兀 */
+  .logoBox {{
+    width: 92px;
+    height: 92px;
+    border-radius: 18px;
+    background: #ffffff;
+    border: 1px solid rgba(0,0,0,0.10);
+    box-shadow: 0 14px 34px rgba(0,0,0,0.18);
+    overflow: hidden;
+    position: relative;
+    flex: 0 0 auto;
+    padding: 10px;
+    box-sizing: border-box;
+  }}
+  video {{
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: none;
+    background: #ffffff;
+    filter: drop-shadow(0 6px 10px rgba(0,0,0,0.18));
+  }}
+  video.active {{ display: block; }}
+
+  .fallback {{
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: rgba(0,0,0,0.60);
+    font-size: 12px;
+    letter-spacing: 0.2px;
+  }}
+
+  .title {{
+    color: var(--fg);
+    font-weight: 760;
+    font-size: 16.5px;
+    line-height: 1.15;
+    letter-spacing: 0.2px;
+    white-space: nowrap;
+  }}
+  .sub {{
+    color: var(--muted);
+    font-size: 12.5px;
+    margin-top: 4px;
+    white-space: nowrap;
+  }}
+
+  /* 小螢幕降級：避免 header 壓迫內容 */
+  @media (max-width: 720px) {{
+    :root {{ --h: 88px; }}
+    .inner {{ padding: 10px 12px; }}
+    .logoBox {{ width: 78px; height: 78px; padding: 8px; border-radius: 16px; }}
+    .brand {{ padding: 10px 12px; border-radius: 16px; }}
+  }}
+</style>
+</head>
+<body>
+  <div class="bar">
+    <div class="inner">
+      <div class="brand {anim_class}">
+        <div class="logoBox">
+          <video id="v1" muted playsinline preload="auto"></video>
+          <video id="v2" muted playsinline preload="auto"></video>
+          <div id="fb" class="fallback" style="display:none;">LOGO</div>
+        </div>
+        <div class="txt">
+          <div class="title">{APP_TITLE}</div>
+          <div class="sub">登入 / 註冊</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function() {{
+  const brand = document.querySelector(".brand");
+  const hasV1 = { "true" if v1 else "false" };
+  const hasV2 = { "true" if v2 else "false" };
+  const v1 = document.getElementById("v1");
+  const v2 = document.getElementById("v2");
+  const fb = document.getElementById("fb");
+
+  function showFallback() {{
+    fb.style.display = "flex";
+    v1.style.display = "none";
+    v2.style.display = "none";
+  }}
+
+  function playSafe(v) {{
+    try {{
+      const p = v.play();
+      if (p && typeof p.catch === "function") p.catch(() => {{ }});
+    }} catch (e) {{ }}
+  }}
+
+  function setRate(r) {{
+    try {{ v1.playbackRate = r; }} catch (e) {{ }}
+    try {{ v2.playbackRate = r; }} catch (e) {{ }}
+  }}
+
+  function bindTiltAndSpeed() {{
+    if (!brand) return;
+    const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+    brand.addEventListener("mousemove", (e) => {{
+      const r = brand.getBoundingClientRect();
+      const x = (e.clientX - r.left) / r.width;
+      const y = (e.clientY - r.top) / r.height;
+
+      const mx = (x * 100).toFixed(2) + "%";
+      const my = (y * 100).toFixed(2) + "%";
+
+      const ry = clamp((x - 0.5) * 10, -6, 6);
+      const rx = clamp(-(y - 0.5) * 10, -6, 6);
+
+      brand.style.setProperty("--mx", mx);
+      brand.style.setProperty("--my", my);
+      brand.style.setProperty("--rx", rx.toFixed(2) + "deg");
+      brand.style.setProperty("--ry", ry.toFixed(2) + "deg");
+    }});
+
+    brand.addEventListener("mouseenter", () => {{
+      // 靠近：稍微加速，避免太跳
+      setRate(1.22);
+    }});
+
+    brand.addEventListener("mouseleave", () => {{
+      brand.style.setProperty("--rx", "0deg");
+      brand.style.setProperty("--ry", "0deg");
+      brand.style.setProperty("--mx", "50%");
+      brand.style.setProperty("--my", "50%");
+      setRate(1.00);
+    }});
+  }}
+
+  function bindPulseFromParent() {{
+    window.addEventListener("message", (ev) => {{
+      try {{
+        const d = ev.data || {{}};
+        if (!d || d.type !== "SHEEP_HDR_PULSE") return;
+        if (!brand) return;
+        if (d.on) brand.classList.add("pulse");
+        else brand.classList.remove("pulse");
+      }} catch (e) {{ }}
+    }});
+  }}
+
+  bindTiltAndSpeed();
+  bindPulseFromParent();
+
+  if (!hasV1 || !hasV2) {{
+    showFallback();
+    return;
+  }}
+
+  v1.src = "{data_v1}";
+  v2.src = "{data_v2}";
+  v1.classList.add("active");
+  v2.classList.remove("active");
+
+  function swap(to2) {{
+    if (to2) {{
+      v1.classList.remove("active");
+      v2.classList.add("active");
+      try {{ v2.currentTime = 0; }} catch (e) {{ }}
+      playSafe(v2);
+    }} else {{
+      v2.classList.remove("active");
+      v1.classList.add("active");
+      try {{ v1.currentTime = 0; }} catch (e) {{ }}
+      playSafe(v1);
+    }}
+  }}
+
+  v1.addEventListener("ended", () => swap(true));
+  v2.addEventListener("ended", () => swap(false));
+
+  setRate(1.00);
+  playSafe(v1);
+}})();
+</script>
+</body>
+</html>
+"""
+    st.components.v1.html(html_block, height=96, scrolling=False)
     v1 = _read_file_b64(_BRAND_WEBM_1)
     v2 = _read_file_b64(_BRAND_WEBM_2)
 
@@ -1654,7 +2017,85 @@ def _page_auth() -> None:
     if animate_brand:
         st.session_state["brand_enter_played"] = True
 
-    _render_brand_header(animate=animate_brand)
+    is_dialog_open = (str(st.session_state.get("auth_dialog") or "").strip() != "")
+    _render_brand_header(animate=animate_brand, dim=is_dialog_open)
+
+    # 這個隱藏 components iframe 只負責做 JS 監聽：
+    # 登入/註冊卡片 hover 時，postMessage 給 header iframe 觸發呼吸光暈
+    st.components.v1.html(
+        """
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  html, body { margin:0; padding:0; background:transparent; }
+</style>
+</head>
+<body>
+<script>
+(function() {
+  function findBrandIframe() {
+    const iframes = Array.from(window.parent.document.querySelectorAll("iframe"));
+    for (const f of iframes) {
+      try {
+        const s = (f.getAttribute("srcdoc") || "");
+        if (s.indexOf("SHEEP_BRAND_HDR_V1") >= 0) return f;
+      } catch (e) {}
+    }
+    return null;
+  }
+
+  function pickAuthCards() {
+    const roots = Array.from(window.parent.document.querySelectorAll('div[data-testid="stVerticalBlockBorderWrapper"], div[data-testid="stForm"]'));
+    const scored = [];
+    for (const el of roots) {
+      try {
+        const r = el.getBoundingClientRect();
+        const area = r.width * r.height;
+        if (r.width < 320 || r.height < 180) continue;
+        if (r.top < 60 || r.left < 40) continue;
+        scored.push({ el, area });
+      } catch (e) {}
+    }
+    scored.sort((a,b)=>b.area-a.area);
+    return scored.slice(0, 2).map(x=>x.el);
+  }
+
+  function postPulse(on) {
+    const f = findBrandIframe();
+    if (!f) return;
+    try {
+      f.contentWindow.postMessage({ type: "SHEEP_HDR_PULSE", on: !!on }, "*");
+    } catch (e) {}
+  }
+
+  function bind() {
+    const cards = pickAuthCards();
+    if (!cards || cards.length === 0) return;
+
+    let hoverCount = 0;
+    function onEnter() { hoverCount += 1; postPulse(true); }
+    function onLeave() {
+      hoverCount = Math.max(0, hoverCount - 1);
+      if (hoverCount === 0) postPulse(false);
+    }
+
+    for (const c of cards) {
+      c.addEventListener("mouseenter", onEnter, { passive: true });
+      c.addEventListener("mouseleave", onLeave, { passive: true });
+    }
+  }
+
+  setTimeout(bind, 350);
+})();
+</script>
+</body>
+</html>
+""",
+        height=0,
+        scrolling=False,
+    )
 
     st.markdown(
         """
