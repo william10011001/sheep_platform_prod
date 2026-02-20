@@ -2266,6 +2266,37 @@ def get_global_progress_snapshot(cycle_id: int) -> Dict[str, Any]:
         conn.close()
 
 
+def get_global_paid_payout_sum_usdt(cycle_id: int) -> float:
+    """Sum of all paid payouts (USDT) for a given cycle."""
+    conn = _conn()
+    try:
+        row = conn.execute(
+            """
+            SELECT COALESCE(SUM(p.amount_usdt), 0) AS s
+            FROM payouts p
+            JOIN strategies st ON st.id = p.strategy_id
+            WHERE p.status = 'paid' AND st.cycle_id = ?
+            """,
+            (int(cycle_id),),
+        ).fetchone()
+        if not row:
+            return 0.0
+        try:
+            v = row["s"]  # sqlite3.Row / dict-like
+        except Exception:
+            try:
+                v = row[0]
+            except Exception:
+                v = 0.0
+        try:
+            return float(v or 0.0)
+        except Exception:
+            return 0.0
+    finally:
+        conn.close()
+
+
+
 
 # ---- Worker orchestration, API tokens, and monitoring ----
 

@@ -122,17 +122,7 @@ def _read_file_b64(path_str: str) -> str:
 def _render_brand_header(animate: bool, dim: bool = False) -> None:
     v1 = _read_file_b64(_BRAND_WEBM_1)
     v2 = _read_file_b64(_BRAND_WEBM_2)
-
     dim_css = ""
-    if bool(dim):
-        dim_css = """
-iframe[data-sheep-brand="1"],
-iframe[srcdoc*="SHEEP_BRAND_HDR_V2"]{
-  opacity: 0.22 !important;
-  pointer-events: none !important;
-  filter: saturate(0.96) !important;
-}
-"""
 
     st.markdown(
         f"""
@@ -198,6 +188,11 @@ div[data-testid="stAppViewContainer"] > .main {{
         display: flex;
         align-items: center;
         gap: 12px;
+        padding: 6px 12px 6px 6px;
+        border-radius: 9999px;
+        background: #0b0f19;
+        border: 1px solid #1b2a45;
+        box-shadow: 0 12px 28px #000000;
     }}
 
     /* 圓形白底外框 */
@@ -206,7 +201,7 @@ div[data-testid="stAppViewContainer"] > .main {{
         height: 66px;
         border-radius: 9999px;
         background: #ffffff;
-        border: 1px solid rgba(0,0,0,0.10);
+        border: 1px solid #d7dde6;
         box-shadow: 0 12px 28px rgba(0,0,0,0.20);
         overflow: hidden;
         position: relative;
@@ -219,7 +214,7 @@ div[data-testid="stAppViewContainer"] > .main {{
         position: absolute;
         inset: 0;
         border-radius: 9999px;
-        box-shadow: inset 0 0 0 1px rgba(0,0,0,0.06);
+        box-shadow: inset 0 0 0 1px #e9edf4;
         pointer-events: none;
     }}
 
@@ -231,12 +226,11 @@ div[data-testid="stAppViewContainer"] > .main {{
         height: 100%;
         object-fit: cover;
         transform: scale(1.18);
-        opacity: 0;
-        transition: opacity 140ms ease;
+        display: none;
         background: #ffffff;
     }}
     video.active {{
-        opacity: 1;
+        display: block;
     }}
 
     .fallback {{
@@ -257,11 +251,8 @@ div[data-testid="stAppViewContainer"] > .main {{
         font-weight: 900;
         letter-spacing: 0.4px;
         line-height: 1;
-        background: linear-gradient(90deg, rgba(255,255,255,0.98), rgba(185,215,255,0.92));
-        -webkit-background-clip: text;
-        background-clip: text;
-        color: transparent;
-        text-shadow: 0 10px 24px rgba(0,0,0,0.55);
+        color: #f8fbff;
+        text-shadow: 0 10px 24px #000000;
         user-select: none;
         white-space: nowrap;
     }}
@@ -748,6 +739,14 @@ def _style() -> None:
 
         .small-muted { color: var(--muted); font-size: 12px; }
 
+        .auth_title {
+          font-size: 18px;
+          font-weight: 900;
+          letter-spacing: 0.3px;
+          margin: 0 0 10px 0;
+          color: var(--text);
+        }
+
         header[data-testid="stHeader"] { background: rgba(0,0,0,0); }
         footer { visibility: hidden; }
         #MainMenu { visibility: hidden; }
@@ -811,6 +810,20 @@ def _style() -> None:
         }
 
         /* Sidebar navigation as full-width product-style buttons (st.radio). */
+
+        /* Hide the default radio dot and turn each option into a clean button. */
+        div[data-testid="stSidebar"] label[data-baseweb="radio"] > div > div:first-child {
+          display: none !important;
+        }
+        div[data-testid="stSidebar"] input[type="radio"] {
+          position: absolute !important;
+          opacity: 0 !important;
+          width: 0 !important;
+          height: 0 !important;
+        }
+        div[data-testid="stSidebar"] label[data-baseweb="radio"] svg {
+          display: none !important;
+        }
         div[data-testid="stSidebar"] label[data-baseweb="radio"] {
           width: 100%;
           border: 1px solid rgba(255,255,255,0.14);
@@ -1009,7 +1022,7 @@ def _logout() -> None:
 
 
 def _login_form() -> None:
-    st.markdown('<div class="small-muted">登入</div>', unsafe_allow_html=True)
+    st.markdown('<div class="auth_title">登入</div>', unsafe_allow_html=True)
 
     captcha_enabled = (os.environ.get("SHEEP_CAPTCHA", "1").strip() != "0")
     try:
@@ -1089,7 +1102,7 @@ def _login_form() -> None:
     st.rerun()
 
 def _register_form() -> None:
-    st.markdown("### 註冊")
+    st.markdown('<div class="auth_title">註冊</div>', unsafe_allow_html=True)
 
     tos_text = ""
     tos_version = ""
@@ -1109,7 +1122,7 @@ def _register_form() -> None:
         password = st.text_input("密碼", value="", type="password", placeholder="至少 6 碼，需包含英文字母與數字")
         password2 = st.text_input("確認密碼", value="", type="password")
 
-        tos_ok = st.checkbox("我已閱讀並同意平台服務條款與分潤風險協議", value=False, key="register_tos_ok")
+        tos_ok = st.checkbox("我已閱讀並同意平台服務條款與分潤規則", value=False, key="register_tos_ok")
         remember = st.checkbox("在本裝置記住我", value=False, key="register_remember_me")
         submitted = st.form_submit_button("建立帳號並登入")
 
@@ -1141,7 +1154,7 @@ def _register_form() -> None:
         return
 
     if not bool(tos_ok):
-        st.error("必須同意服務條款與風險協議才可註冊。")
+        st.error("必須同意服務條款與分潤規則才可註冊。")
         return
 
     if db.get_user_by_username(uname):
@@ -1195,7 +1208,7 @@ def _render_tos_dialog() -> None:
         tos_text = ""
         tos_version = ""
 
-    @st.dialog("服務條款與分潤風險協議")
+    @st.dialog("服務條款與分潤規則")
     def _run() -> None:
         if tos_version.strip():
             st.markdown(f"**條款版本：{tos_version.strip()}**")
@@ -1225,7 +1238,7 @@ def _render_auth_onboarding_dialog() -> None:
     has_video = bool(video_path and os.path.exists(video_path))
 
     def _dialog_body() -> None:
-        tab_names = ["總覽", "合作模式", "分潤", "成本", "風險"]
+        tab_names = ["總覽", "合作模式", "分潤"]
         if has_video:
             tab_names.append("影片")
         tabs = st.tabs(tab_names)
@@ -1255,7 +1268,7 @@ def _render_auth_onboarding_dialog() -> None:
             <div class="sp-flow-detail" id="spFlowDetail">
                 <div class="sp-flow-detail-title" id="spFlowDetailTitle">註冊 / 登入</div>
                 <div class="sp-flow-detail-body" id="spFlowDetailBody">
-                建立帳號或登入後，即可領取任務並開始提供算力。註冊時需同意服務條款與分潤風險協議。
+                建立帳號或登入後，即可領取任務並開始提供算力。註冊時需同意服務條款與分潤規則。
                 </div>
 
                 <div class="sp-flow-detail-meta">
@@ -1311,12 +1324,6 @@ def _render_auth_onboarding_dialog() -> None:
             .sp-flow-track::-webkit-scrollbar{height:10px}
             .sp-flow-track::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.12);border-radius:999px}
             .sp-flow-track::-webkit-scrollbar-track{background:rgba(255,255,255,0.04);border-radius:999px}
-
-            .sp-sep{
-                opacity:.35;
-                flex:0 0 auto;
-                user-select:none;
-            }
 
             .sp-step{
                 flex:0 0 auto;
@@ -1404,9 +1411,6 @@ def _render_auth_onboarding_dialog() -> None:
                     overflow-x:auto;
                     padding:8px 6px 10px 6px;
                 }
-                .sp-sep{
-                    display:none;
-                }
                 .sp-step{
                     width:auto;
                     border-radius:999px;
@@ -1422,7 +1426,7 @@ def _render_auth_onboarding_dialog() -> None:
             const steps = {
                 login: {
                 title: "註冊 / 登入",
-                body: "建立帳號或登入後，即可領取任務並開始提供算力。註冊時需同意服務條款與分潤風險協議。",
+                body: "建立帳號或登入後，即可領取任務並開始提供算力。註冊時需同意服務條款與分潤規則。",
                 meta1: "建議：使用電腦",
                 meta2: "重點：同意條款"
                 },
@@ -1527,18 +1531,6 @@ def _render_auth_onboarding_dialog() -> None:
             st.markdown("#### 結算方式")
             st.write("以 USDT 計算，明細會在結算頁看到。")
 
-        with tabs[3]:
-            st.markdown("#### 成本")
-            st.write("CPU/GPU 使用率上升、耗電、風扇噪音、網路流量。長時間建議用電腦。")
-            st.markdown("#### 建議")
-            st.write("不要用行動裝置長時間跑任務。若在應用程式內建瀏覽器遇到輸入框問題，改用系統瀏覽器。")
-
-        with tabs[4]:
-            st.markdown("#### 風險")
-            st.write("實盤有風險，不保證收益。策略可能因市場變化失效而停用或淘汰。")
-            st.markdown("#### 重要提醒")
-            st.write("分潤地址填錯，資產通常無法追回。請在結算頁設定並再次確認。")
-
         if has_video:
             with tabs[-1]:
                 try:
@@ -1607,8 +1599,6 @@ def _page_auth() -> None:
     animate_brand = (not is_dialog_open) and (not bool(st.session_state.get("brand_enter_played")))
     if animate_brand:
         st.session_state["brand_enter_played"] = True
-
-    _render_brand_header(animate=animate_brand, dim=is_dialog_open)
 
     st.markdown(
         """
@@ -1721,6 +1711,11 @@ def _cached_global_progress_snapshot(cycle_id: int) -> Dict[str, Any]:
     return db.get_global_progress_snapshot(int(cycle_id))
 
 
+@st.cache_data(ttl=20)
+def _cached_global_paid_payout_sum(cycle_id: int) -> float:
+    return float(db.get_global_paid_payout_sum_usdt(int(cycle_id)))
+
+
 def _partition_bucket(task: Dict[str, Any], system_user_id: int) -> str:
     status = str(task.get("status") or "")
     uid = int(task.get("user_id") or 0)
@@ -1777,10 +1772,8 @@ def _render_global_progress(cycle_id: int) -> None:
     pools = pools_all
     if sel_family != "全部策略":
         pools = [p for p in pools_all if str(p.get("family") or "").strip() == sel_family]
-
     total_est = 0.0
     total_done = 0.0
-    total_speed = 0.0
     total_running = 0
     total_assigned = 0
     total_completed = 0
@@ -1789,16 +1782,14 @@ def _render_global_progress(cycle_id: int) -> None:
     for p in pools:
         for t in p.get("tasks") or []:
             est = float(t.get("estimated_combos") or 0.0)
-            prog = t.get("progress_json") or {}
+            prog = (t.get("progress") or t.get("progress_json") or {})
             done = float(prog.get("combos_done") or 0.0)
-            speed = float(prog.get("speed_cps") or 0.0)
             status = str(t.get("status") or "")
 
             total_est += est
             total_done += done
 
             if status == "running":
-                total_speed += speed
                 total_running += 1
             elif status == "completed":
                 total_completed += 1
@@ -1808,19 +1799,24 @@ def _render_global_progress(cycle_id: int) -> None:
                     total_reserved += 1
 
     ratio = (total_done / total_est) if total_est > 0 else 0.0
+    paid_sum = 0.0
+    try:
+        paid_sum = float(_cached_global_paid_payout_sum(int(cycle_id)) or 0.0)
+    except Exception:
+        paid_sum = 0.0
 
     st.markdown("#### 全域挖掘進度")
     st.progress(min(1.0, max(0.0, float(ratio))))
 
     kcols = st.columns(4)
     with kcols[0]:
-        st.markdown(_render_kpi("已跑組合", f"{int(total_done):,}", f"預估總量 {int(total_est):,}"), unsafe_allow_html=True)
+        st.markdown(_render_kpi("全球已跑組合數", f"{int(total_done):,}", f"預估總量 {int(total_est):,}"), unsafe_allow_html=True)
     with kcols[1]:
-        st.markdown(_render_kpi("全域進度", f"{ratio*100:.1f}%", f"策略範圍 {sel_family}"), unsafe_allow_html=True)
+        st.markdown(_render_kpi("全球任務完成總數", f"{int(total_completed):,}", f"執行中 {int(total_running):,}"), unsafe_allow_html=True)
     with kcols[2]:
-        st.markdown(_render_kpi("全域速度", f"{total_speed:.1f} 組合/秒", f"執行中任務 {total_running}"), unsafe_allow_html=True)
+        st.markdown(_render_kpi("全球挖礦進度", f"{ratio*100:.1f}%", f"策略範圍 {sel_family}"), unsafe_allow_html=True)
     with kcols[3]:
-        st.markdown(_render_kpi("任務狀態", f"{total_completed} 完成", f"{total_reserved} 預訂 · {max(0,total_assigned-total_reserved)} 待挖掘"), unsafe_allow_html=True)
+        st.markdown(_render_kpi("全用戶已實現分潤", f"{paid_sum:,.6f}", "USDT"), unsafe_allow_html=True)
 
     recs: List[Dict[str, Any]] = []
     pool_rows: List[Dict[str, Any]] = []
@@ -1831,12 +1827,11 @@ def _render_global_progress(cycle_id: int) -> None:
         est_sum = 0.0
         done_sum = 0.0
         running = 0
-        speed_sum = 0.0
-
+        
         by_bucket: Dict[str, float] = {}
         for t in tasks:
             est = float(t.get("estimated_combos") or 0.0)
-            prog = t.get("progress_json") or {}
+            prog = (t.get("progress") or t.get("progress_json") or {})
             done = float(prog.get("combos_done") or 0.0)
             status = str(t.get("status") or "")
 
@@ -1844,7 +1839,6 @@ def _render_global_progress(cycle_id: int) -> None:
             done_sum += done
             if status == "running":
                 running += 1
-                speed_sum += float(prog.get("speed_cps") or 0.0)
 
             b = _partition_bucket(t, system_uid)
             by_bucket[b] = by_bucket.get(b, 0.0) + est
@@ -1857,7 +1851,6 @@ def _render_global_progress(cycle_id: int) -> None:
                 "週期": f"{int(p.get('timeframe_min') or 0)}m",
                 "策略": str(p.get("family") or ""),
                 "進度": f"{r*100:.1f}%",
-                "速度(組合/秒)": round(speed_sum, 2),
                 "執行中": running,
             }
         )
@@ -1958,7 +1951,7 @@ def _page_tutorial(user: Optional[Dict[str, Any]] = None) -> None:
     with tabs[3]:
         st.markdown('<div class="tut_card tut_anim"><div class="tut_kicker">候選與提交</div><div class="tut_title">候選不是最終成果</div><div class="tut_body">候選需要通過伺服器複驗。複驗通過後才會進入策略池並參與後續規則與結算。</div></div>', unsafe_allow_html=True)
         st.markdown("#### 提交建議")
-        st.markdown("- 優先提交交易數達標且風險可控的候選\n- 避免提交大量低品質候選\n- 觀察複驗結果並調整後續投入策略")
+        st.markdown("- 優先提交交易數達標且品質較高的候選\n- 避免提交大量低品質候選\n- 觀察複驗結果並調整後續投入策略")
 
     with tabs[4]:
         st.markdown('<div class="tut_card tut_anim"><div class="tut_kicker">結算</div><div class="tut_title">提現門檻與手續費規則</div><div class="tut_body">結算頁可設定分潤地址與鏈別。提現需滿足最低門檻，並依平台規則處理手續費。</div></div>', unsafe_allow_html=True)
@@ -1970,7 +1963,6 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
     pools = db.list_factor_pools(cycle_id=int(cycle["id"])) if cycle else []
 
     st.markdown("### 控制台")
-    st.markdown('<div class="small-muted">週期：' + str(cycle.get("name") or "-") + '</div>', unsafe_allow_html=True)
 
     # Ensure tasks quota
     conn = db._conn()
@@ -2165,7 +2157,14 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
     exec_mode_label = _EXEC_MODE_LABEL.get(exec_mode, exec_mode)
     st.markdown(f'<div class="small-muted">執行模式：{exec_mode_label}</div>', unsafe_allow_html=True)
 
-    col_a, col_b, col_c, col_d = st.columns([1.1, 1.1, 1.0, 1.2])
+    auto_refresh = True
+    try:
+        refresh_s = float(os.environ.get("SHEEP_TASKS_REFRESH_S", "1.0") or 1.0)
+    except Exception:
+        refresh_s = 1.0
+    refresh_s = float(max(0.5, min(10.0, refresh_s)))
+
+    col_a, col_b = st.columns([1.2, 2.0])
 
     if exec_mode == "server":
         run_key = f"server_run_all_{int(user['id'])}"
@@ -2174,74 +2173,61 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
         run_all = bool(st.session_state.get(run_key, False))
 
         with col_a:
-            if st.button("開始全部任務", key="start_all"):
-                st.session_state[run_key] = True
-                run_all = True
-                to_queue: List[int] = []
-                for t in tasks:
-                    tid = int(t["id"])
-                    if str(t.get("status") or "") != "assigned":
-                        continue
-                    if job_mgr.is_running(tid):
-                        continue
-                    if job_mgr.is_queued(int(user["id"]), tid):
-                        continue
-                    to_queue.append(tid)
-                result = job_mgr.enqueue_many(int(user["id"]), to_queue, bt)
-                db.write_audit_log(
-                    int(user["id"]),
-                    "task_queue_all",
-                    {"queued": int(result.get("queued") or 0), "skipped": int(result.get("skipped") or 0)},
-                )
-                st.rerun()
+            if not run_all:
+                if st.button("開始全部任務", key="start_all"):
+                    st.session_state[run_key] = True
+                    run_all = True
+                    to_queue: List[int] = []
+                    for t in tasks:
+                        tid = int(t["id"])
+                        if str(t.get("status") or "") != "assigned":
+                            continue
+                        if job_mgr.is_running(tid):
+                            continue
+                        if job_mgr.is_queued(int(user["id"]), tid):
+                            continue
+                        to_queue.append(tid)
+                    result = job_mgr.enqueue_many(int(user["id"]), to_queue, bt)
+                    db.write_audit_log(
+                        int(user["id"]),
+                        "task_queue_all",
+                        {"queued": int(result.get("queued") or 0), "skipped": int(result.get("skipped") or 0)},
+                    )
+                    st.rerun()
+            else:
+                if st.button("停止全部任務", key="stop_all"):
+                    st.session_state[run_key] = False
+                    run_all = False
+                    job_mgr.stop_all_for_user(int(user["id"]))
+                    db.write_audit_log(int(user["id"]), "task_stop_all", {})
+                    st.rerun()
 
         with col_b:
-            if st.button("停止全部任務", key="stop_all"):
-                st.session_state[run_key] = False
-                run_all = False
-                job_mgr.stop_all_for_user(int(user["id"]))
-                db.write_audit_log(int(user["id"]), "task_stop_all", {})
-                st.rerun()
-
-        with col_c:
-            if st.button("刷新", key="tasks_refresh"):
-                st.rerun()
-
-        with col_d:
-            auto_refresh = st.checkbox("自動刷新", value=True, key="tasks_auto_refresh")
-            refresh_s = st.number_input(
-                "刷新間隔秒數", min_value=0.5, max_value=10.0, value=1.0, step=0.5, key="tasks_refresh_s"
+            st.markdown(
+                f'<div class="small-muted">狀態：{"執行中" if run_all else "待命"} · 並行上限 {int(max_concurrent_jobs)}</div>',
+                unsafe_allow_html=True,
             )
-
-        st.markdown(
-            f'<div class="small-muted">狀態：{"running" if run_all else "idle"} · 並行上限 {int(max_concurrent_jobs)}</div>',
-            unsafe_allow_html=True,
-        )
 
 
     else:
         run_enabled = db.get_user_run_enabled(int(user["id"]))
 
         with col_a:
-            if st.button("開始全部任務", key="worker_enable"):
-                db.set_user_run_enabled(int(user["id"]), True)
-                st.rerun()
+            if not bool(run_enabled):
+                if st.button("開始全部任務", key="worker_enable"):
+                    db.set_user_run_enabled(int(user["id"]), True)
+                    st.rerun()
+            else:
+                if st.button("停止全部任務", key="worker_disable"):
+                    db.set_user_run_enabled(int(user["id"]), False)
+                    st.rerun()
 
         with col_b:
-            if st.button("停止全部任務", key="worker_disable"):
-                db.set_user_run_enabled(int(user["id"]), False)
-                st.rerun()
-
-        with col_c:
-            if st.button("刷新", key="tasks_refresh"):
-                st.rerun()
-
-        with col_d:
-            auto_refresh = st.checkbox("自動刷新", value=True, key="tasks_auto_refresh")
-            refresh_s = st.number_input("刷新間隔秒數", min_value=0.5, max_value=10.0, value=1.0, step=0.5, key="tasks_refresh_s")
-
-        st.markdown(f'<div class="small-muted">狀態：{"running" if run_enabled else "idle"}</div>', unsafe_allow_html=True)
-        st.markdown('<div class="small-muted">Worker API：' + api_url + '</div>', unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="small-muted">狀態：{"執行中" if run_enabled else "待命"}</div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown('<div class="small-muted">Worker API：' + api_url + '</div>', unsafe_allow_html=True)
 
         last_hb = None
         for _t in tasks:
@@ -2576,8 +2562,7 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
     else:
         keep_polling = bool(run_enabled)
 
-    # 自動刷新：預設永遠勾選。
-    # - any_active=True：有人在跑 / 在隊列 -> 正常刷新
+        # - any_active=True：有人在跑 / 在隊列 -> 正常刷新
     # - keep_polling=True：使用者點過「開始全部任務」(server) 或 run_enabled=True(worker)
     #   即使暫時沒任務，也會持續刷新，才能無縫接新任務。
     if auto_refresh and (any_active or keep_polling):
@@ -3080,8 +3065,6 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
             db.write_audit_log(int(user["id"]), "settings_update", {"keys": list(edited.keys()) + ["execution_mode", "worker_api_url"]})
             st.rerun()
 
-        st.divider()
-
         # 教學影片：上傳 MP4 後會顯示在登入頁的「流程與操作要點」中。
         st.markdown("#### 教學影片")
 
@@ -3134,8 +3117,6 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
         else:
             st.markdown('<div class="small-muted">目前未上傳教學影片。</div>', unsafe_allow_html=True)
 
-        st.divider()
-
         conn = db._conn()
         try:
             st.markdown("#### 分享預覽")
@@ -3155,8 +3136,6 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
                 st.success("已保存分享預覽設定")
                 st.rerun()
 
-            st.divider()
-
             st.markdown("#### 提現規則顯示")
             w_min = st.number_input("最低提現金額（USDT）", min_value=0.0, value=float(db.get_setting(conn, "withdraw_min_usdt", 20.0) or 20.0), step=1.0, key="withdraw_min")
             w_fee = st.number_input("預估鏈上手續費（USDT）", min_value=0.0, value=float(db.get_setting(conn, "withdraw_fee_usdt", 1.0) or 1.0), step=0.5, key="withdraw_fee")
@@ -3170,9 +3149,7 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
                 st.success("已保存提現規則")
                 st.rerun()
 
-            st.divider()
-
-            st.markdown("#### 服務條款與風險協議")
+            st.markdown("#### 服務條款與分潤規則")
             tos_version = st.text_input("條款版本", value=str(db.get_setting(conn, "tos_version", "") or ""), key="tos_version")
             tos_text = st.text_area("條款內容", value=str(db.get_setting(conn, "tos_text", "") or ""), height=240, key="tos_text")
             if st.button("保存條款", key="save_tos"):
@@ -3276,9 +3253,6 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
                 if st.button("重置任務", key="pool_reset_tasks"):
                     n = db.delete_tasks_for_pool(cycle_id=cycle_id, pool_id=int(sel_id))
                     db.write_audit_log(int(user["id"]), "pool_reset_tasks", {"pool_id": int(sel_id), "deleted": int(n)})
-                    st.rerun()
-            with col_r2:
-                if st.button("刷新", key="pool_refresh"):
                     st.rerun()
 
         st.markdown("複製 Pool")
@@ -3531,6 +3505,8 @@ def main() -> None:
     _apply_cookie_ops()
     _inject_meta(APP_TITLE, "分散算力挖礦與週結算分潤任務平台")
 
+    _render_brand_header(animate=False, dim=False)
+
     _try_auto_login_from_cookie()
 
     user = _session_user()
@@ -3563,17 +3539,13 @@ def main() -> None:
     with st.sidebar:
         st.markdown(f"### {APP_TITLE}")
         st.markdown(f'<div class="small-muted">{user["username"]} · {role}</div>', unsafe_allow_html=True)
-        st.divider()
 
-        st.markdown('<div class="small-muted">導航</div>', unsafe_allow_html=True)
         page = st.radio(
             "導航",
             options=pages,
             key="nav_page",
             label_visibility="collapsed",
         )
-
-        st.divider()
         if st.button("登出"):
             _logout()
             st.rerun()
