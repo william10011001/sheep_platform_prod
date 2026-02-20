@@ -86,7 +86,8 @@ APP_TITLE = "羊肉爐挖礦分潤任務平台"
 
 _BRAND_WEBM_1 = os.environ.get("SHEEP_BRAND_WEBM_1", "static/brand_1.webm")
 _BRAND_WEBM_2 = os.environ.get("SHEEP_BRAND_WEBM_2", "static/brand_2.webm")
-_BRAND_IFRAME_KEY = "brand_header"
+# 注意：舊版 Streamlit 的 st.components.v1.html 不支援 key=
+# 因此不使用 key，並改用更穩的 CSS selector 來固定 iframe
 
 
 def _abs_asset_path(p: str) -> str:
@@ -122,9 +123,13 @@ def _render_brand_header(animate: bool) -> None:
     v2 = _read_file_b64(_BRAND_WEBM_2)
 
     st.markdown(
-        f"""
+        """
 <style>
-iframe[title="{_BRAND_IFRAME_KEY}"] {{
+/* 兼容不同 Streamlit 版本對 components iframe 的 title 命名 */
+iframe[title="components.html"],
+iframe[title="streamlit_component"],
+iframe[title="streamlit.components.v1.html"],
+iframe[title="st.components.v1.html"] {
   position: fixed !important;
   top: 0 !important;
   left: 0 !important;
@@ -132,10 +137,12 @@ iframe[title="{_BRAND_IFRAME_KEY}"] {{
   height: 86px !important;
   border: 0 !important;
   z-index: 2147483000 !important;
-}}
-div[data-testid="stAppViewContainer"] > .main {{
+}
+
+/* 讓主內容往下避開頂部品牌列 */
+div[data-testid="stAppViewContainer"] > .main {
   padding-top: 92px !important;
-}}
+}
 </style>
 """,
         unsafe_allow_html=True,
@@ -310,7 +317,7 @@ div[data-testid="stAppViewContainer"] > .main {{
 </body>
 </html>
 """
-    st.components.v1.html(html_block, height=86, scrolling=False, key=_BRAND_IFRAME_KEY)
+    st.components.v1.html(html_block, height=86, scrolling=False)
 
 _EXEC_MODE_LABEL = {
     "server": "伺服器",
