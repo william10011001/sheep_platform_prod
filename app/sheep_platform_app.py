@@ -890,30 +890,241 @@ def _render_auth_onboarding_dialog() -> None:
             st.markdown("#### 流程")
             st.components.v1.html(
                 """
-                <div style="padding:14px;border-radius:14px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);">
-                  <div class="sp-flow">
-                    <span class="sp-step">註冊 / 登入</span>
-                    <span class="sp-sep">></span>
-                    <span class="sp-step sp-focus">開始任務</span>
-                    <span class="sp-sep">></span>
-                    <span class="sp-step">候選結果</span>
-                    <span class="sp-sep">></span>
-                    <span class="sp-step">伺服器複驗</span>
-                    <span class="sp-sep">></span>
-                    <span class="sp-step">提交策略池</span>
-                    <span class="sp-sep">></span>
-                    <span class="sp-step">週期結算</span>
-                  </div>
+            <div class="sp-flow-wrap">
+            <div class="sp-flow-head">
+                <div class="sp-flow-title">步驟總覽</div>
+                <div class="sp-flow-hint">滑鼠移動或點擊步驟可查看詳細說明</div>
+            </div>
+
+            <div class="sp-flow-track" id="spFlowTrack">
+                <button class="sp-step" data-step="login" type="button">註冊 / 登入</button>
+                <span class="sp-sep">></span>
+                <button class="sp-step" data-step="start" type="button">開始任務</button>
+                <span class="sp-sep">></span>
+                <button class="sp-step" data-step="cand" type="button">候選結果</button>
+                <span class="sp-sep">></span>
+                <button class="sp-step" data-step="verify" type="button">伺服器複驗</button>
+                <span class="sp-sep">></span>
+                <button class="sp-step" data-step="submit" type="button">提交策略池</button>
+                <span class="sp-sep">></span>
+                <button class="sp-step" data-step="settle" type="button">週期結算</button>
+            </div>
+
+            <div class="sp-flow-detail" id="spFlowDetail">
+                <div class="sp-flow-detail-title" id="spFlowDetailTitle">註冊 / 登入</div>
+                <div class="sp-flow-detail-body" id="spFlowDetailBody">
+                建立帳號或登入後，即可領取任務並開始提供算力。註冊時需同意服務條款與分潤風險協議。
                 </div>
-                <style>
-                  .sp-flow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
-                  .sp-step{padding:10px 12px;border-radius:999px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.10);font-size:13px;}
-                  .sp-sep{opacity:.35}
-                  .sp-focus{border-color: rgba(120,180,255,0.55);background: rgba(120,180,255,0.10);}
-                </style>
+
+                <div class="sp-flow-detail-meta">
+                <div class="sp-meta-pill" id="spFlowMeta1">建議：使用電腦</div>
+                <div class="sp-meta-pill" id="spFlowMeta2">重點：保持網路穩定</div>
+                </div>
+            </div>
+            </div>
+
+            <style>
+            .sp-flow-wrap{
+                border-radius:16px;
+                border:1px solid rgba(255,255,255,0.10);
+                background:rgba(255,255,255,0.04);
+                padding:14px 14px 12px 14px;
+            }
+
+            .sp-flow-head{
+                display:flex;
+                align-items:flex-end;
+                justify-content:space-between;
+                gap:10px;
+                margin-bottom:10px;
+            }
+
+            .sp-flow-title{
+                font-size:13px;
+                font-weight:700;
+                letter-spacing:.2px;
+                opacity:.95;
+            }
+
+            .sp-flow-hint{
+                font-size:12px;
+                opacity:.55;
+                text-align:right;
+            }
+
+            .sp-flow-track{
+                display:flex;
+                align-items:center;
+                gap:10px;
+                flex-wrap:nowrap;
+                overflow-x:auto;
+                overflow-y:hidden;
+                padding:8px 6px 10px 6px;
+                scrollbar-width:thin;
+                scroll-behavior:smooth;
+            }
+
+            .sp-flow-track::-webkit-scrollbar{height:10px}
+            .sp-flow-track::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.12);border-radius:999px}
+            .sp-flow-track::-webkit-scrollbar-track{background:rgba(255,255,255,0.04);border-radius:999px}
+
+            .sp-sep{
+                opacity:.35;
+                flex:0 0 auto;
+                user-select:none;
+            }
+
+            .sp-step{
+                flex:0 0 auto;
+                border-radius:999px;
+                padding:10px 12px;
+                border:1px solid rgba(255,255,255,0.10);
+                background:rgba(255,255,255,0.06);
+                color:rgba(255,255,255,0.92);
+                font-size:13px;
+                cursor:pointer;
+                transition:transform .06s ease, border-color .15s ease, background .15s ease;
+                user-select:none;
+                outline:none;
+            }
+
+            .sp-step:hover{
+                border-color: rgba(120,180,255,0.55);
+                background: rgba(120,180,255,0.10);
+            }
+
+            .sp-step:active{
+                transform: translateY(1px);
+            }
+
+            .sp-step.is-active{
+                border-color: rgba(120,180,255,0.75);
+                background: rgba(120,180,255,0.14);
+            }
+
+            .sp-flow-detail{
+                margin-top:10px;
+                border-radius:14px;
+                border:1px solid rgba(255,255,255,0.10);
+                background:rgba(0,0,0,0.22);
+                padding:12px 12px 10px 12px;
+            }
+
+            .sp-flow-detail-title{
+                font-size:13px;
+                font-weight:800;
+                margin-bottom:6px;
+                opacity:.95;
+            }
+
+            .sp-flow-detail-body{
+                font-size:12.5px;
+                line-height:1.55;
+                opacity:.80;
+            }
+
+            .sp-flow-detail-meta{
+                display:flex;
+                gap:8px;
+                flex-wrap:wrap;
+                margin-top:10px;
+            }
+
+            .sp-meta-pill{
+                font-size:12px;
+                padding:6px 10px;
+                border-radius:999px;
+                border:1px solid rgba(255,255,255,0.10);
+                background:rgba(255,255,255,0.06);
+                opacity:.78;
+            }
+            </style>
+
+            <script>
+            (function(){
+            const steps = {
+                login: {
+                title: "註冊 / 登入",
+                body: "建立帳號或登入後，即可領取任務並開始提供算力。註冊時需同意服務條款與分潤風險協議。",
+                meta1: "建議：使用電腦",
+                meta2: "重點：同意條款"
+                },
+                start: {
+                title: "開始任務",
+                body: "選擇策略池與運行模式後開始領取分割任務。任務在本機運算，產出候選參數與績效指標。",
+                meta1: "建議：保持前景運行",
+                meta2: "重點：算力越穩越好"
+                },
+                cand: {
+                title: "候選結果",
+                body: "本機運算會產生候選參數組合。候選只代表本機結果，尚未被平台視為有效成果。",
+                meta1: "建議：只提交高品質候選",
+                meta2: "重點：避免使用過期資料"
+                },
+                verify: {
+                title: "伺服器複驗",
+                body: "伺服器會在受控環境中重跑回測，核對結果一致性。誤差超過門檻的回報會被拒絕並記錄。",
+                meta1: "建議：資料版本需一致",
+                meta2: "重點：反作弊必經"
+                },
+                submit: {
+                title: "提交策略池",
+                body: "複驗通過的候選會進入策略池候選名單，等待策略池規則篩選、排程與淘汰機制運作。",
+                meta1: "建議：持續貢獻提升採用率",
+                meta2: "重點：策略池會重置"
+                },
+                settle: {
+                title: "週期結算",
+                body: "依平台結算週期統計可分配收益並產出明細。提現需滿足最低門檻與手續費規則。",
+                meta1: "建議：先在結算頁設定地址",
+                meta2: "重點：提現門檻與費用"
+                }
+            };
+
+            const track = document.getElementById("spFlowTrack");
+            const titleEl = document.getElementById("spFlowDetailTitle");
+            const bodyEl = document.getElementById("spFlowDetailBody");
+            const meta1El = document.getElementById("spFlowMeta1");
+            const meta2El = document.getElementById("spFlowMeta2");
+
+            function setActive(stepKey){
+                const cfg = steps[stepKey];
+                if(!cfg) return;
+
+                titleEl.textContent = cfg.title;
+                bodyEl.textContent = cfg.body;
+                meta1El.textContent = cfg.meta1 || "";
+                meta2El.textContent = cfg.meta2 || "";
+
+                const btns = track.querySelectorAll(".sp-step");
+                btns.forEach(b => b.classList.remove("is-active"));
+                const activeBtn = track.querySelector('.sp-step[data-step="'+stepKey+'"]');
+                if(activeBtn){
+                activeBtn.classList.add("is-active");
+                activeBtn.scrollIntoView({block:"nearest", inline:"nearest"});
+                }
+            }
+
+            track.addEventListener("mouseover", (e) => {
+                const btn = e.target.closest(".sp-step");
+                if(!btn) return;
+                setActive(btn.getAttribute("data-step"));
+            });
+
+            track.addEventListener("click", (e) => {
+                const btn = e.target.closest(".sp-step");
+                if(!btn) return;
+                setActive(btn.getAttribute("data-step"));
+            });
+
+            setActive("login");
+            })();
+            </script>
                 """,
-                height=90,
+                height=320,
+                scrolling=False,
             )
+
 
         with tabs[1]:
             st.markdown("#### 你提供什麼")
