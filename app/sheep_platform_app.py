@@ -5,6 +5,7 @@ import re
 import time
 import math
 import html
+import base64
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -82,6 +83,234 @@ from sheep_platform_audit import audit_candidate
 
 
 APP_TITLE = "羊肉爐挖礦分潤任務平台"
+
+_BRAND_WEBM_1 = os.environ.get("SHEEP_BRAND_WEBM_1", "static/brand_1.webm")
+_BRAND_WEBM_2 = os.environ.get("SHEEP_BRAND_WEBM_2", "static/brand_2.webm")
+_BRAND_IFRAME_KEY = "brand_header"
+
+
+def _abs_asset_path(p: str) -> str:
+    p = (p or "").strip()
+    if not p:
+        return ""
+    if os.path.isabs(p):
+        return p
+    try:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+    except Exception:
+        base_dir = os.getcwd()
+    return os.path.join(base_dir, p)
+
+
+@st.cache_data(show_spinner=False)
+def _read_file_b64(path_str: str) -> str:
+    try:
+        ap = _abs_asset_path(path_str)
+        if not ap:
+            return ""
+        with open(ap, "rb") as f:
+            raw = f.read()
+        if not raw:
+            return ""
+        return base64.b64encode(raw).decode("ascii")
+    except Exception:
+        return ""
+
+
+def _render_brand_header(animate: bool) -> None:
+    v1 = _read_file_b64(_BRAND_WEBM_1)
+    v2 = _read_file_b64(_BRAND_WEBM_2)
+
+    st.markdown(
+        f"""
+<style>
+iframe[title="{_BRAND_IFRAME_KEY}"] {{
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 100% !important;
+  height: 86px !important;
+  border: 0 !important;
+  z-index: 2147483000 !important;
+}}
+div[data-testid="stAppViewContainer"] > .main {{
+  padding-top: 92px !important;
+}}
+</style>
+""",
+        unsafe_allow_html=True,
+    )
+
+    anim_class = "brand-enter" if bool(animate) else ""
+    data_v1 = f"data:video/webm;base64,{v1}" if v1 else ""
+    data_v2 = f"data:video/webm;base64,{v2}" if v2 else ""
+
+    # 注意：Streamlit 不允許在主 DOM 內直接執行 script，因此這段以 components iframe 方式承載 JS。
+    html_block = f"""
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  :root {{
+    --bh: 86px;
+    --fg: rgba(255,255,255,0.92);
+    --muted: rgba(255,255,255,0.65);
+    --glass: rgba(18,18,22,0.58);
+    --bd: rgba(255,255,255,0.10);
+  }}
+  html, body {{
+    height: 100%;
+    margin: 0;
+    background: transparent;
+    overflow: hidden;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", Arial;
+  }}
+  .wrap {{
+    height: var(--bh);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    box-sizing: border-box;
+    background: linear-gradient(180deg, rgba(10,10,14,0.72), rgba(10,10,14,0.28));
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--bd);
+  }}
+  .brand {{
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: 14px;
+    background: var(--glass);
+    border: 1px solid var(--bd);
+    box-shadow: 0 10px 32px rgba(0,0,0,0.35);
+    transform-origin: left center;
+  }}
+  .brand.brand-enter {{
+    animation: brandIn 700ms cubic-bezier(0.16, 1, 0.3, 1) 40ms both;
+  }}
+  @keyframes brandIn {{
+    0%   {{ opacity: 0; transform: translateY(-10px) scale(0.98); filter: blur(8px); }}
+    60%  {{ opacity: 1; transform: translateY(0) scale(1.01); filter: blur(0px); }}
+    100% {{ opacity: 1; transform: translateY(0) scale(1.00); filter: blur(0px); }}
+  }}
+  .logoBox {{
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    overflow: hidden;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.10);
+    position: relative;
+    flex: 0 0 auto;
+  }}
+  video {{
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: none;
+  }}
+  video.active {{ display: block; }}
+  .fallback {{
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    font-size: 11px;
+    letter-spacing: 0.2px;
+  }}
+  .title {{
+    color: var(--fg);
+    font-weight: 750;
+    font-size: 16px;
+    line-height: 1.1;
+    white-space: nowrap;
+  }}
+  .sub {{
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 3px;
+    white-space: nowrap;
+  }}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="brand {anim_class}">
+      <div class="logoBox">
+        <video id="v1" muted playsinline preload="auto"></video>
+        <video id="v2" muted playsinline preload="auto"></video>
+        <div id="fb" class="fallback" style="display:none;">LOGO</div>
+      </div>
+      <div class="txt">
+        <div class="title">{APP_TITLE}</div>
+        <div class="sub">登入 / 註冊</div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function() {{
+  const hasV1 = { "true" if v1 else "false" };
+  const hasV2 = { "true" if v2 else "false" };
+  const v1 = document.getElementById("v1");
+  const v2 = document.getElementById("v2");
+  const fb = document.getElementById("fb");
+
+  function showFallback() {{
+    fb.style.display = "flex";
+    v1.style.display = "none";
+    v2.style.display = "none";
+  }}
+
+  if (!hasV1 || !hasV2) {{
+    showFallback();
+    return;
+  }}
+
+  v1.src = "{data_v1}";
+  v2.src = "{data_v2}";
+
+  v1.classList.add("active");
+  v2.classList.remove("active");
+
+  function playSafe(v) {{
+    try {{
+      const p = v.play();
+      if (p && typeof p.catch === "function") {{
+        p.catch(() => {{}});
+      }}
+    }} catch (e) {{}}
+  }}
+
+  function swap(to2) {{
+    if (to2) {{
+      v1.classList.remove("active");
+      v2.classList.add("active");
+      try {{ v2.currentTime = 0; }} catch (e) {{}}
+      playSafe(v2);
+    }} else {{
+      v2.classList.remove("active");
+      v1.classList.add("active");
+      try {{ v1.currentTime = 0; }} catch (e) {{}}
+      playSafe(v1);
+    }}
+  }}
+
+  v1.addEventListener("ended", () => swap(true));
+  v2.addEventListener("ended", () => swap(false));
+
+  playSafe(v1);
+}})();
+</script>
+</body>
+</html>
+"""
+    st.components.v1.html(html_block, height=86, scrolling=False, key=_BRAND_IFRAME_KEY)
 
 _EXEC_MODE_LABEL = {
     "server": "伺服器",
@@ -691,7 +920,6 @@ def _logout() -> None:
 
 
 def _login_form() -> None:
-    st.markdown(f"### {APP_TITLE}")
     st.markdown('<div class="small-muted">登入</div>', unsafe_allow_html=True)
 
     captcha_enabled = (os.environ.get("SHEEP_CAPTCHA", "1").strip() != "0")
@@ -1278,13 +1506,21 @@ def _page_auth() -> None:
     if "auth_dialog" not in st.session_state:
         st.session_state["auth_dialog"] = ""
 
+    if "brand_enter_played" not in st.session_state:
+        st.session_state["brand_enter_played"] = False
+
+    animate_brand = (str(st.session_state.get("auth_dialog") or "").strip() == "" and (not bool(st.session_state.get("brand_enter_played"))))
+    if animate_brand:
+        st.session_state["brand_enter_played"] = True
+
+    _render_brand_header(animate=animate_brand)
+
     if not bool(st.session_state.get("auth_onboarding_seen")):
         st.session_state["auth_onboarding_seen"] = True
         st.session_state["auth_dialog"] = "onboarding"
 
     top_l, top_r = st.columns([1.0, 0.48])
     with top_l:
-        st.markdown(f"## {APP_TITLE}")
         st.markdown('<div class="small-muted">登入或註冊後即可開始參與運算任務。</div>', unsafe_allow_html=True)
     with top_r:
         b1, b2 = st.columns([1, 1])
