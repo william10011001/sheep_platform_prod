@@ -1518,7 +1518,7 @@ def _page_tutorial(user: Optional[Dict[str, Any]] = None) -> None:
     tabs = st.tabs(["總覽", "任務執行", "策略選擇", "候選與提交", "結算"])
 
     with tabs[0]:
-        st.markdown('<div class="tut_card tut_anim"><div class="tut_kicker">快速理解</div><div class="tut_title">這不是傳統挖礦，是參數搜尋</div><div class="tut_body">平台把一個策略的參數空間切成分割任務。用戶端提供算力跑回測，產出候選參數。候選需要通過伺服器複驗後才會進入策略池並參與結算。</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="tut_card tut_anim"><div class="tut_kicker">快速理解</div><div class="tut_title">用你們的裝置算出最佳交易策略 賺取獎勵分潤</div><div class="tut_body">平台提供所有策略與參數，讓用戶提供算力自行組合並挖出最佳結果。若該策略獲利達標將獲得平台分潤獎勵。</div></div>', unsafe_allow_html=True)
         st.markdown("#### 使用流程")
         st.markdown("- 選擇策略並開始任務\n- 產生候選結果\n- 提交候選並等待複驗\n- 複驗通過後進入策略池\n- 依結算週期產出明細")
 
