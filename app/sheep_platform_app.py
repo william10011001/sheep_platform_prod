@@ -2523,7 +2523,7 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                             "task_queue_all",
                             {"queued": int(result.get("queued") or 0), "skipped": int(result.get("skipped") or 0)},
                         )
-                        st.toast(f"✅ 已成功排程 {len(to_queue)} 個任務", icon="🚀")
+                        st.toast(f"已成功排程 {len(to_queue)} 個任務", icon=" ")
                     else:
                         st.toast("目前無可執行的任務", icon="ℹ️")
                     
