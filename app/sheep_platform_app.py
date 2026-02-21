@@ -135,9 +135,10 @@ iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
 
 /* [側邊欄按鈕專家修復] 確保按鈕永遠可見且不與 Header 衝突 */
 div[data-testid="stSidebarCollapsedControl"] {{
+    position: fixed !important;
     left: 12px !important;
     top: 12px !important;
-    z-index: 9999999 !important;
+    z-index: 2147483647 !important;
     background: #2563eb !important;
     border-radius: 10px !important;
     padding: 6px !important;
@@ -152,12 +153,7 @@ div[data-testid="stSidebarCollapsedControl"] button {{
     color: white !important;
 }}
 
-/* 強制將 Streamlit 的控制項推回最前線 */
-div[data-testid="stSidebarCollapsedControl"] {{
-    left: 10px !important;
-    top: 15px !important;
-    z-index: 2147483647 !important;
-}}
+/* （移除重複覆寫）由下方同一份規則統一控制位置與層級 */
 
 @media (max-width: 720px) {{
   iframe[data-sheep-brand="1"],
@@ -797,12 +793,21 @@ def _style() -> None:
             height: 28px !important;
         }
 
-        /* 3. 修正側邊欄內部的收起按鈕，防止它跟展開按鈕在同一位置重疊 */
+        /* 3. 修正側邊欄「展開狀態」的收起按鈕：固定在視窗層級，避免被 sidebar/header 裁切或遮擋 */
         button[data-testid="stSidebarCollapseButton"] {
-            position: relative !important;
+            position: fixed !important;
+            top: 12px !important;
+            left: 288px !important; /* 讓按鈕落在 sidebar 右緣附近 */
             z-index: 2147483647 !important;
             pointer-events: auto !important;
-            background: rgba(255,255,255,0.1) !important;
+            background: rgba(255,255,255,0.12) !important;
+            border-radius: 10px !important;
+        }
+        @media (max-width: 980px) {
+            button[data-testid="stSidebarCollapseButton"] { left: 248px !important; }
+        }
+        @media (max-width: 720px) {
+            button[data-testid="stSidebarCollapseButton"] { left: 208px !important; }
         }
 
         /* 3. 修正主內容區塊的 Padding，防止內容被固定的 Brand Header 遮擋 */
@@ -2255,8 +2260,41 @@ def _render_global_progress(cycle_id: int) -> None:
 
     if recs:
         df = pd.DataFrame(recs)
-        fig = px.bar(df, x="策略池", y="預估組合", color="狀態", barmode="stack", height=340)
-        st.plotly_chart(fig, use_container_width=True)
+
+        # 預設只顯示「全域狀態摘要」，避免圖表造成視覺噪音
+        try:
+            order = ["待挖掘", "已預訂", "執行中", "已完成"]
+            agg = (
+                df.groupby("狀態")["預估組合"]
+                .sum()
+                .reindex(order)
+                .fillna(0.0)
+            )
+            total_est = float(agg.sum() or 0.0)
+        except Exception:
+            agg = None
+            total_est = 0.0
+
+        if agg is not None and total_est > 0:
+            scols = st.columns(4)
+            labels = ["待挖掘", "已預訂", "執行中", "已完成"]
+            for i, lab in enumerate(labels):
+                v = float(agg.get(lab, 0.0))
+                pct = (v / total_est) * 100.0 if total_est > 0 else 0.0
+                with scols[i]:
+                    st.markdown(
+                        _render_kpi(
+                            f"{lab} 預估組合",
+                            f"{int(v):,}",
+                            f"{pct:.1f}%",
+                            help_text="由策略池規格推導的預估組合量彙總。"
+                        ),
+                        unsafe_allow_html=True,
+                    )
+
+        with st.expander("查看各策略池狀態圖表", expanded=False):
+            fig = px.bar(df, x="策略池", y="預估組合", color="狀態", barmode="stack", height=340)
+            st.plotly_chart(fig, use_container_width=True)
 
     if pool_rows:
         st.markdown(_section_title_html("策略池概覽", "列出每個策略池的目標、週期、策略族與進度。", level=4), unsafe_allow_html=True)
@@ -2679,9 +2717,9 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                             "task_queue_all",
                             {"queued": int(result.get("queued") or 0), "skipped": int(result.get("skipped") or 0)},
                         )
-                        st.toast(f"已成功排程 {len(to_queue)} 個任務", icon="恭喜")
+                        st.toast(f"已成功排程 {len(to_queue)} 個任務")
                     else:
-                        st.toast("目前無可執行的任務", icon="再等等吧")
+                        st.toast("目前無可執行的任務")
                     
                     time.sleep(0.5)
                     st.rerun()
@@ -4232,9 +4270,24 @@ def main() -> None:
         elif page == "管理" and role == "admin":
             _page_admin(user, job_mgr)
     except Exception as route_err:
+        import uuid
+        from datetime import datetime, timezone
+
+        err_id = str(uuid.uuid4())
+        ts_utc = datetime.now(timezone.utc).isoformat()
+
+        tb = traceback.format_exc()
+
+        # 伺服器端也輸出一份，方便用 err_id 對 log
+        try:
+            print(f"[route_error] id={err_id} ts_utc={ts_utc} page={page} user={(user.get('username') if isinstance(user, dict) else '')}", flush=True)
+            print(tb, flush=True)
+        except Exception:
+            pass
+
         st.error(f"頁面「{page}」發生錯誤，已觸發全域保護機制。")
-        st.info("請將下方錯誤訊息截圖提供給開發人員：")
-        st.code(traceback.format_exc(), language="python")
+        st.info(f"錯誤編號：{err_id}（請連同下方錯誤訊息一起提供）")
+        st.code(tb, language="python")
     return
 
 
