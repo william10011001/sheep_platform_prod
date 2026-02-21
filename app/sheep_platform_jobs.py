@@ -430,8 +430,24 @@ class JobManager:
             sig_cache = None
             if use_fast_path and part:
                 try:
-                    sig_cache = bt_module.build_cache_for_family(df, family, part, logger=None)
-                except Exception:
+                    # [專家級即時進度] 建立專屬 Logger，將指標計算進度即時寫入 DB 讓 UI 顯示
+                    def _cache_logger(msg: str):
+                        progress["phase"] = "build_grid"
+                        progress["phase_msg"] = f"指標計算中: {msg}"
+                        progress["updated_at"] = db.utc_now_iso()
+                        db.update_task_progress(task_id, progress)
+                    
+                    progress["phase"] = "build_grid"
+                    progress["phase_msg"] = f" 準備計算 {family} 參數快取 ({len(part)} 組)..."
+                    db.update_task_progress(task_id, progress)
+                    
+                    sig_cache = bt_module.build_cache_for_family(df, family, part, logger=_cache_logger)
+                except Exception as cache_err:
+                    import traceback
+                    err_str = f"快取計算失敗: {str(cache_err)}\n{traceback.format_exc()}"
+                    print(f"[CACHE ERROR] {err_str}")
+                    progress["last_error"] = err_str
+                    db.update_task_progress(task_id, progress)
                     sig_cache = None
                     use_fast_path = False
 

@@ -133,32 +133,19 @@ iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
   pointer-events: none !important;
 }}
 
-/* [側邊欄按鈕專家修復] 確保按鈕永遠可見、大小適中，並且不會被左側螢幕邊緣切斷 */
+/* [專家級精簡修復] 移除衝突的背景，讓側邊欄控制鈕回歸原生但強制置頂顯示 */
 div[data-testid="stSidebarCollapsedControl"] {{
     position: fixed !important;
-    left: 8px !important;
-    top: 12px !important;
-    z-index: 999999 !important;
-    background: rgba(37, 99, 235, 0.85) !important;
-    backdrop-filter: blur(8px) !important;
-    border-radius: 8px !important;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5) !important;
-    display: flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-    padding: 4px !important;
-    transition: all 0.2s ease !important;
+    left: 0px !important;
+    top: 0px !important;
+    z-index: 9999999 !important;
+    padding: 10px !important;
+    background: rgba(10, 14, 20, 0.8) !important;
+    border-bottom-right-radius: 12px !important;
 }}
-div[data-testid="stSidebarCollapsedControl"]:hover {{
-    background: rgba(37, 99, 235, 1) !important;
-    transform: scale(1.05) !important;
+div[data-testid="stSidebarCollapsedControl"] svg {{
+    fill: #ffffff !important;
 }}
-div[data-testid="stSidebarCollapsedControl"] button {{
-    color: white !important;
-    background: transparent !important;
-}}
-
-/* （移除重複覆寫）由下方同一份規則統一控制位置與層級 */
 
 @media (max-width: 720px) {{
   iframe[data-sheep-brand="1"],
@@ -767,53 +754,7 @@ def _style() -> None:
         div[data-testid="stStatusWidget"] { display: none !important; }
         div[data-testid="stDecoration"] { display: none !important; }
 
-        /* [專家級 UI 終極修復 V4] 強制穿透式按鈕顯示 */
-        /* 1. 強制讓展開控制項脫離 Streamlit 預設佈局層級 */
-        div[data-testid="stSidebarCollapsedControl"] {
-            position: fixed !important;
-            left: 0 !important;
-            top: 12px !important;
-            z-index: 2147483647 !important;
-            display: block !important;
-            visibility: visible !important;
-            opacity: 1 !important;
-            background: #2563eb !important;
-            border-radius: 0 12px 12px 0 !important;
-            padding: 8px !important;
-            box-shadow: 5px 0 20px rgba(0,0,0,0.5) !important;
-        }
         
-        /* 2. 強制內部的按鈕本身也要可見且穿透 */
-        div[data-testid="stSidebarCollapsedControl"] button {
-            background: transparent !important;
-            color: white !important;
-            border: none !important;
-            width: 45px !important;
-            height: 45px !important;
-        }
-
-        div[data-testid="stSidebarCollapsedControl"] svg {
-            fill: white !important;
-            width: 28px !important;
-            height: 28px !important;
-        }
-
-        /* 3. 修正側邊欄「展開狀態」的收起按鈕：固定在視窗層級，避免被 sidebar/header 裁切或遮擋 */
-        button[data-testid="stSidebarCollapseButton"] {
-            position: fixed !important;
-            top: 12px !important;
-            left: 288px !important; /* 讓按鈕落在 sidebar 右緣附近 */
-            z-index: 2147483647 !important;
-            pointer-events: auto !important;
-            background: rgba(255,255,255,0.12) !important;
-            border-radius: 10px !important;
-        }
-        @media (max-width: 980px) {
-            button[data-testid="stSidebarCollapseButton"] { left: 248px !important; }
-        }
-        @media (max-width: 720px) {
-            button[data-testid="stSidebarCollapseButton"] { left: 208px !important; }
-        }
 
         /* 3. 修正主內容區塊的 Padding，防止內容被固定的 Brand Header 遮擋 */
         .main .block-container {
@@ -979,48 +920,7 @@ def _style() -> None:
         unsafe_allow_html=True,
     )
 
-    # ─────────────────────────────────────────────────────────────────────
-    # [專家級 DOM 守護者] 強制顯示與劫持側邊欄按鈕
-    # 解決截圖中按鈕消失的終極手段：透過 JavaScript 強制從 Parent DOM 提取按鈕
-    # ─────────────────────────────────────────────────────────────────────
-    st.components.v1.html(
-        """
-        <script>
-        (function() {
-            const doc = window.parent.document;
-            
-            function forceShowSidebar() {
-                // 1. 抓取所有可能的 Streamlit 側邊欄控制項
-                const selectors = [
-                    'div[data-testid="stSidebarCollapsedControl"]',
-                    'button[kind="headerNoPadding"]',
-                    '.st-emotion-cache-p5msec'
-                ];
-                
-                selectors.forEach(sel => {
-                    const el = doc.querySelector(sel);
-                    if (el) {
-                        el.style.display = 'flex';
-                        el.style.visibility = 'visible';
-                        el.style.opacity = '1';
-                        el.style.zIndex = '2147483647';
-                        el.style.background = '#2563eb';
-                        el.style.borderRadius = '0 12px 12px 0';
-                        el.style.position = 'fixed';
-                        el.style.left = '0';
-                        el.style.top = '12px';
-                    }
-                });
-            }
-
-            // 每 300 毫秒強力檢查一次，防止 React 狀態變更後按鈕被銷毀或隱藏
-            setInterval(forceShowSidebar, 300);
-            forceShowSidebar();
-        })();
-        </script>
-        """,
-        height=0
-    )
+    
 
 _LAST_ROLLOVER_CHECK = 0.0
 
@@ -2929,62 +2829,69 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
 
         def _pill_class(kind: str) -> str:
             k = str(kind or "")
-            if k in ("completed",):
-                return "ok"
-            if k in ("running",):
-                return "info"
-            if k in ("queued", "assigned"):
-                return "warn"
-            if k in ("expired", "revoked", "error"):
-                return "bad"
+            if k in ("completed",): return "ok"
+            if k in ("running",): return "info"
+            if k in ("queued", "assigned"): return "warn"
+            if k in ("expired", "revoked", "error"): return "bad"
             return "neutral"
 
-        top_a, top_b, top_c, top_d, top_e = st.columns([1.0, 1.1, 1.5, 1.3, 1.0])
-        with top_a:
-            st.markdown(
-                f'<span class="pill pill-{_pill_class(view_status)}">{status_label}</span>',
-                unsafe_allow_html=True,
-            )
+        # [專家級 UI] 強化的進度儀表板
+        st.markdown(
+            f'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">'
+            f'<span class="pill pill-{_pill_class(view_status)}" style="font-size:14px; padding:6px 12px;">狀態: {status_label}</span>'
+            f'<span class="pill pill-{"ok" if bool(best_any_passed) else "neutral"}" style="font-size:14px; padding:6px 12px;">達標: {passed_label}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        
+        # 動態進度訊息區塊
+        if str(phase) == "sync_data":
+            st.info(f" **資料同步中**：正在拉取交易所 K 線資料... \n\n{phase_msg}")
+        elif str(phase) == "build_grid":
+            st.warning(f"**指標運算中**：正在進行向量化指標計算與快取建立... \n\n{phase_msg}")
+        elif str(phase) == "grid_search":
+            st.success(f"⚡ **格點搜尋中**：正在高速回測參數組合...")
+        
+        top_b, top_c, top_d = st.columns([1.5, 1.5, 1.5])
         with top_b:
-            st.markdown(f'<div class="small-muted">階段</div><div class="kpi">{phase_label}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="small-muted">目前階段</div><div class="kpi" style="font-size:20px; font-weight:bold;">{phase_label}</div>', unsafe_allow_html=True)
         with top_c:
             prog_text = "-"
             sync = prog.get("sync")
             if int(combos_total) > 0:
-                prog_text = f"{int(combos_done)}/{int(combos_total)}"
+                prog_text = f"{int(combos_done)} / {int(combos_total)}"
             elif str(phase) == "sync_data" and isinstance(sync, dict):
                 items = sync.get("items")
                 cur = str(sync.get("current") or "")
                 if isinstance(items, dict) and cur in items:
-                    try:
-                        done_i = int(items[cur].get("done") or 0)
-                        total_i = int(items[cur].get("total") or 0)
-                        if total_i > 0:
-                            prog_text = f"{cur} {done_i}/{total_i}"
-                    except Exception:
-                        prog_text = "-"
-            st.markdown(f'<div class="small-muted">進度</div><div class="kpi">{prog_text}</div>', unsafe_allow_html=True)
+                    done_i = int(items[cur].get("done", 0))
+                    total_i = int(items[cur].get("total", 0))
+                    if total_i > 0:
+                        prog_text = f"{cur} {done_i}/{total_i}"
+            st.markdown(f'<div class="small-muted">計算進度</div><div class="kpi" style="font-size:20px; font-weight:bold; color:#3b82f6;">{prog_text}</div>', unsafe_allow_html=True)
         with top_d:
             sc_txt = "-" if best_any_score is None else str(round(float(best_any_score), 6))
-            st.markdown(f'<div class="small-muted">最佳分數</div><div class="kpi">{sc_txt}</div>', unsafe_allow_html=True)
-        with top_e:
-            st.markdown(
-                f'<span class="pill pill-{"ok" if bool(best_any_passed) else "neutral"}">達標 {passed_label}</span>',
-                unsafe_allow_html=True,
-            )
+            st.markdown(f'<div class="small-muted">當前最佳分數</div><div class="kpi" style="font-size:20px; font-weight:bold; color:#10b981;">{sc_txt}</div>', unsafe_allow_html=True)
 
-        # Only show speed indicators when in grid_search.
         if str(phase) == "grid_search":
             elapsed_s = prog.get("elapsed_s")
             speed_cps = prog.get("speed_cps")
             eta_s = prog.get("eta_s")
-            es = "-" if elapsed_s is None else f"{float(elapsed_s):.2f}s"
-            sp = "-" if speed_cps is None else f"{float(speed_cps):.3f} cps"
-            et = "-" if eta_s is None else f"{float(eta_s):.1f}s"
-            st.markdown(f'<div class="small-muted">耗時 {es} · 速度 {sp} · ETA {et}</div>', unsafe_allow_html=True)
+            es = "-" if elapsed_s is None else f"{float(elapsed_s):.1f} 秒"
+            sp = "-" if speed_cps is None else f"{float(speed_cps):.0f} 組合/秒"
+            et = "-" if eta_s is None else f"{float(eta_s):.1f} 秒"
+            st.markdown(f'<div style="background:rgba(255,255,255,0.05); padding:8px; border-radius:8px; margin-top:10px; font-size:13px; color:#94a3b8; display:flex; justify-content:space-around;">'
+                        f'<span> 耗時: <b>{es}</b></span>'
+                        f'<span> 速度: <b>{sp}</b></span>'
+                        f'<span>預估剩餘: <b>{et}</b></span>'
+                        f'</div>', unsafe_allow_html=True)
 
+        # [最大化錯誤顯示]
         if last_error:
-            st.error(last_error[:220])
+            st.error(f" 任務發生錯誤:\n\n{last_error}")
+            if prog.get("debug_traceback"):
+                with st.expander(" 點擊展開詳細錯誤追蹤 (Traceback)"):
+                    st.code(prog.get("debug_traceback"), language="python")
 
         # Progress visualization
         sync = prog.get("sync")

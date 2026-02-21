@@ -6194,8 +6194,9 @@ def build_cache_for_family(df: pd.DataFrame,
             out.append(np.asarray(sig_only, dtype=np.bool_))
             
             now_t = time.perf_counter()
-            if now_t - last_t >= 0.5:
-                _log(f"   {fam} 快取 {i}/{Np}（{i/Np*100:.1f}%）")
+            # [專家級修正] 提高回報頻率，讓 UI 不會卡住
+            if now_t - last_t >= 0.3:
+                _log(f"進度 {i}/{Np} ({i/Np*100:.1f}%)")
                 last_t = now_t
 
     _log(f"   {fam} 訊號快取完成，寫入全域快取...")
