@@ -2595,10 +2595,19 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                                 db.update_task_status(tid, "assigned")
                             except Exception:
                                 pass
+                        elif st_raw == "error":
+                            # [專家級修復] 若之前發生錯誤卡在 error，重新排程時也應初始化狀態
+                            try:
+                                db.update_task_status(tid, "assigned")
+                            except Exception:
+                                pass
                                 
                         to_queue.append(tid)
                     
                     if to_queue:
+                        # 呼叫 job_mgr 實際將任務加入排程列隊，這行非常關鍵，否則任務無法啟動且會報錯
+                        result = job_mgr.enqueue_many(int(user["id"]), to_queue, bt)
+                        
                         # [專家級 UX 修復] 將任務狀態變更為 queued 的同時，立即注入詳細的排隊進度 JSON，打破點擊後毫無反應的死寂
                         for qid in to_queue:
                             db.update_task_status(qid, "queued")
@@ -2610,7 +2619,6 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                                 "updated_at": _iso(_utc_now())
                             })
                         
-                        result = job_mgr.enqueue_many(int(user["id"]), to_queue, bt)
                         db.write_audit_log(
                             int(user["id"]),
                             "task_queue_all",

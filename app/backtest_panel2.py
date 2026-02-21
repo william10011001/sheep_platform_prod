@@ -4581,10 +4581,18 @@ reverse_mode: bool = False) -> Dict:
 
     # 修正：序列化前過濾掉 _ts，避免 json.dumps 失敗，並增強 NumPy Scalar 判斷
     safe_params = {k: v for k, v in family_params.items() if not k.startswith("_")}
+    
+    # [專家級防護] 徹底解決 NumPy 或 Pandas 資料型別混入導致 json.dumps 崩潰的問題
+    try:
+        family_params_json = _fast_json_dumps(safe_params)
+    except Exception:
+        # 最後防線，將所有非基本型別轉為字串
+        safe_params_str = {k: (v if isinstance(v, (int, float, str, bool, list, dict)) else str(v)) for k, v in safe_params.items()}
+        family_params_json = json.dumps(safe_params_str, ensure_ascii=False)
 
     result = {
         "family": family,
-        "family_params": json.dumps(safe_params, ensure_ascii=False, default=lambda o: o.tolist() if hasattr(o, "tolist") else (o.item() if hasattr(o, "item") and getattr(o, "ndim", 0) == 0 else str(o))),
+        "family_params": family_params_json,
         "tp_pct": float(tp_pct) * 100.0,
         "sl_pct": float(sl_pct) * 100.0,
         "max_hold": max_hold,
@@ -5816,9 +5824,17 @@ def run_grid_gpu(df: pd.DataFrame,
 
             _log(f"→ Numba 批次：size={es.shape[0]}, T={T}")
             t0 = time.perf_counter()
+            
+            # [專家級修復] 單家族模式也必須正確判斷是否為反向做空策略，否則做空參數計算全錯
+            is_reverse = False
+            if batch_meta and batch_meta[0]["family"] == "OB_FVG":
+                is_reverse = batch_meta[0]["family_params"].get("reverse", False)
+            
+            batch_core = _metrics_from_sigs_batch_short_nb if is_reverse else _metrics_from_sigs_batch_nb
+            
             (tr_pct, cagr_pct, mdd_pct, sharpe, sortino, calmar,
              trades, entries, win_rate, avg_win, avg_loss, payoff, pf,
-             expectancy, avg_hold, tim_pct, eq_final) = _metrics_from_sigs_batch_nb(
+             expectancy, avg_hold, tim_pct, eq_final) = batch_core(
                 o_np, h_np, l_np, c_np, es, tps, sls,
                 int(max_hold), float(fee_side), float(slippage),
                 1 if worst_case else 0,

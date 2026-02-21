@@ -214,8 +214,13 @@ class JobManager:
 
                 started_any = False
                 # [專家級資源防護] 避免伺服器因過度併發 14 種組合任務而內存崩潰
-                import psutil
-                mem_free_pct = psutil.virtual_memory().available / psutil.virtual_memory().total
+                # [專家修復] 處理 psutil 未安裝引發的 ModuleNotFoundError 無窮迴圈死機問題
+                mem_free_pct = 1.0
+                try:
+                    import psutil
+                    mem_free_pct = psutil.virtual_memory().available / psutil.virtual_memory().total
+                except ImportError:
+                    pass # 若未安裝 psutil 則略過記憶體檢查，確保排程器繼續運作
                 
                 with self._lock:
                     self._cleanup_finished_locked()
@@ -257,7 +262,10 @@ class JobManager:
                         started_any = True
 
                 time.sleep(0.05 if started_any else 0.5)
-            except Exception:
+            except Exception as e:
+                # [專家級最大化顯示] 捕捉排程器內部的致命錯誤並強制輸出
+                import traceback
+                print(f"\n[SCHEDULER CRITICAL ERROR] 排程器迴圈發生異常: {e}\n{traceback.format_exc()}\n")
                 time.sleep(1.0)
 
     def _run_task(self, task_id: int, bt_module, stop_flag: threading.Event) -> None:
