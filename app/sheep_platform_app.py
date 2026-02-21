@@ -134,14 +134,15 @@ iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
 }}
 
 /* [專家級終極修復] 強制側邊欄控制鈕永久顯示，提供高對比度底色，並阻絕任何 Hover 隱藏機制 */
-/* [專家級終極修復] 兼容新舊版 Streamlit，強制側邊欄控制鈕永久顯示 */
-div[data-testid="stSidebarCollapsedControl"],
-div[data-testid="collapsedControl"] {{
-    position: fixed !important;
-    left: 0px !important;
-    top: 0px !important;
-    z-index: 9999999 !important;
-    padding: 12px 14px !important;
+/* [專家級終極修復] 兼容新舊版 Streamlit，強制側邊欄控制鈕永久顯示，解決被隱藏或移出邊界問題 */
+        div[data-testid="stSidebarCollapsedControl"],
+        div[data-testid="collapsedControl"],
+        button[kind="headerNoPadding"] {{
+            position: fixed !important;
+            left: 15px !important; /* 避免緊貼邊緣導致被裁切 */
+            top: 15px !important;  /* 避開視窗最頂端 */
+            z-index: 2147483647 !important; /* 提至瀏覽器極限最高層級 */
+            padding: 8px 12px !important;
     background: linear-gradient(135deg, rgba(37, 99, 235, 0.9) 0%, rgba(15, 23, 42, 0.9) 100%) !important;
     border-bottom-right-radius: 14px !important;
     border-right: 1px solid rgba(255,255,255,0.2) !important;
@@ -771,9 +772,10 @@ def _style() -> None:
         header[data-testid="stHeader"] {
             background: transparent !important;
             pointer-events: none !important; /* 讓 header 不擋住下方的點擊，但內部按鈕需設為 auto */
+            z-index: 2147483646 !important; /* 確保不阻擋側邊欄按鈕，但仍在前景 */
         }
-        header[data-testid="stHeader"] button {
-            pointer-events: auto !important;
+        header[data-testid="stHeader"] * {
+            pointer-events: auto !important; /* 強制所有子元素可點擊 */
         }
 
         .stButton > button[kind="primary"], .stDownloadButton > button[kind="primary"] {
@@ -3028,15 +3030,16 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
     else:
         keep_polling = bool(run_enabled)
 
-        # - any_active=True：有人在跑 / 在隊列 -> 正常刷新
-        # - keep_polling=True：使用者點過「開始全部任務」(server) 或 run_enabled=True(worker)
-        #   即使暫時沒任務，也會持續刷新，才能無縫接新任務。
-        if auto_refresh and (any_active or keep_polling):
-            try:
-                time.sleep(float(refresh_s))
-            except Exception:
-                time.sleep(1.0)
-            st.rerun()
+    # [專家級修復] 解除錯誤的縮排，確保 Server 模式下也能每秒精準觸發 UI 刷新
+    # - any_active=True：有人在跑 / 在隊列 -> 正常刷新
+    # - keep_polling=True：使用者點過「開始全部任務」(server) 或 run_enabled=True(worker)
+    #   即使暫時沒任務，也會持續刷新，才能無縫接新任務。
+    if auto_refresh and (any_active or keep_polling):
+        try:
+            time.sleep(float(refresh_s))
+        except Exception:
+            time.sleep(1.0)
+        st.rerun()
 
 
 def _render_candidates_and_submit(user: Dict[str, Any], task_row: Dict[str, Any]) -> None:

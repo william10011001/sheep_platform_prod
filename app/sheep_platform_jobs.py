@@ -80,6 +80,16 @@ class JobManager:
         self._threads: Dict[int, threading.Thread] = {}
         self._stop_flags: Dict[int, threading.Event] = {}
 
+        # [專家級防護] 伺服器重啟時，將先前遺留(已斷線)但狀態卡在 running 的殭屍任務自動重置回 assigned
+        try:
+            conn = db._conn()
+            conn.execute("UPDATE mining_tasks SET status = 'assigned' WHERE status = 'running'")
+            conn.commit()
+            conn.close()
+            print("[SYSTEM] 已重置所有遺留的殭屍任務狀態為 'assigned'")
+        except Exception as e:
+            print(f"[SYSTEM ERROR] 無法重置殭屍任務: {e}")
+
         self._queue_by_user: Dict[int, Deque[Tuple[int, Any]]] = {}
         self._queued_set_by_user: Dict[int, Set[int]] = {}
         self._rr_users: Deque[int] = deque()
@@ -316,6 +326,7 @@ class JobManager:
             db.update_task_progress(task_id, progress)
 
             _SYNC_RE = re.compile(r"^\s*(\S+)\s+已寫入\s+(\d+)\s*/\s*(\d+)\s*$")
+            t0 = time.time()  # [專家級修復] 提前記錄起始時間，讓資料同步階段也能顯示已耗時
 
             def _progress_cb(frac: float, msg: str) -> None:
                 if stop_flag.is_set():
@@ -323,6 +334,7 @@ class JobManager:
                 progress["phase"] = "sync_data"
                 progress["phase_progress"] = float(frac)
                 progress["phase_msg"] = str(msg)
+                progress["elapsed_s"] = round(float(max(0.0, time.time() - t0)), 3) # [專家級修復] 即時更新耗時
 
                 m = _SYNC_RE.match(str(msg))
                 if m:
@@ -432,7 +444,7 @@ class JobManager:
             done = 0
             last_commit = 0
             last_commit_ts = time.time()
-            t0 = time.time()
+            # t0 = time.time() # [專家級修復] 已移至 _progress_cb 上方以計算總體耗時
 
             progress["phase"] = "grid_search"
             progress["combos_total"] = int(combos_total)
