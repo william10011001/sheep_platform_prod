@@ -12,6 +12,8 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+import traceback
+import sys
 
 # --- 專家級版本相容修復：解決 dataframe_selector 遺失問題 ---
 def _get_orig_dataframe():
@@ -3683,26 +3685,48 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
             if st.button("確認執行新增", type="primary", use_container_width=True):
                 try:
                     if batch_json.strip():
-                        # 批量模式
-                        raw_data = json.loads(batch_json)
+                        # 批量模式 - 專家級容錯解析
+                        clean_json = batch_json.strip()
+                        # 自動修正常見的手寫 JSON 結尾錯誤（如最後多出的逗號或錯誤的括號）
+                        if clean_json.endswith('}') and clean_json.count('[') > clean_json.count(']'):
+                            clean_json += ']'
+                        
+                        try:
+                            raw_data = json.loads(clean_json)
+                        except json.JSONDecodeError as je:
+                            st.error(f"❌ JSON 語法錯誤：{je.msg} (行 {je.lineno}, 列 {je.colno})")
+                            st.info("💡 提示：請檢查第 1046 行附近是否有遺漏的逗號或多餘的括號。")
+                            with st.expander("查看錯誤位置上下文"):
+                                lines = clean_json.split('\n')
+                                start_err = max(0, je.lineno - 3)
+                                end_err = min(len(lines), je.lineno + 3)
+                                for i in range(start_err, end_err):
+                                    pointer = " <--- 🔴 錯誤位置附近" if (i+1) == je.lineno else ""
+                                    st.code(f"{i+1}: {lines[i]}{pointer}")
+                            st.stop()
+
                         pool_list = raw_data if isinstance(raw_data, list) else [raw_data]
                         success_count = 0
-                        for p_item in pool_list:
-                            pid = db.create_factor_pool(
-                                cycle_id=cycle_id,
-                                name=str(p_item.get("name", "Imported Pool")),
-                                symbol=str(p_item.get("symbol", "BTC_USDT")),
-                                timeframe_min=int(p_item.get("timeframe_min", 30)),
-                                years=int(p_item.get("years", 3)),
-                                family=str(p_item.get("family", "TEMA_RSI")),
-                                grid_spec=p_item.get("grid_spec", {}),
-                                risk_spec=p_item.get("risk_spec", {}),
-                                num_partitions=int(p_item.get("num_partitions", 128)),
-                                seed=int(p_item.get("seed", 0)),
-                                active=bool(p_item.get("active", True))
-                            )
-                            success_count += 1
-                        st.success(f"成功批量匯入 {success_count} 個策略池！")
+                        for p_idx, p_item in enumerate(pool_list):
+                            try:
+                                pid = db.create_factor_pool(
+                                    cycle_id=cycle_id,
+                                    name=str(p_item.get("name", f"Imported Pool {p_idx+1}")),
+                                    symbol=str(p_item.get("symbol", "BTC_USDT")),
+                                    timeframe_min=int(p_item.get("timeframe_min", 30)),
+                                    years=int(p_item.get("years", 3)),
+                                    family=str(p_item.get("family", "TEMA_RSI")),
+                                    grid_spec=p_item.get("grid_spec", {}),
+                                    risk_spec=p_item.get("risk_spec", {}),
+                                    num_partitions=int(p_item.get("num_partitions", 128)),
+                                    seed=int(p_item.get("seed", 0)),
+                                    active=bool(p_item.get("active", True))
+                                )
+                                success_count += 1
+                            except Exception as item_e:
+                                st.error(f"第 {p_idx+1} 個物件匯入失敗：{item_e}")
+                        
+                        st.success(f"✅ 成功批量匯入 {success_count} 個策略池！")
                     else:
                         # 單筆模式
                         grid_spec = json.loads(grid_spec_json)
@@ -3726,8 +3750,8 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
                     time.sleep(1)
                     st.rerun()
                 except Exception as fatal_e:
-                    st.error(f"建立失敗：{str(fatal_e)}")
-                    st.code(traceback.format_exc())
+                    st.error(f" 建立失敗：{str(fatal_e)}")
+                    st.code(traceback.format_exc(), language="python")
 
         st.markdown("同步任務")
         st.caption("依目前設定，為所有用戶分配缺少的任務。")
