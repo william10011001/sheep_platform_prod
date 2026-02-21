@@ -238,14 +238,20 @@ class JobManager:
                             continue
 
                         trow = db.get_task(int(task_id))
-                        if not trow or str(trow.get("status")) != "assigned":
+                        # [專家級排程修正] 同時支援 assigned 與 queued 狀態，確保手動點擊與自動排程皆能啟動
+                        if not trow or str(trow.get("status")) not in ("assigned", "queued"):
                             continue
 
                         flag = threading.Event()
                         th = threading.Thread(target=self._run_task, args=(int(task_id), bt_module, flag), daemon=True)
+                        # 確保 ID 轉換為 int 防止 Dict Key 類型混亂
                         self._threads[int(task_id)] = th
                         self._stop_flags[int(task_id)] = flag
                         th.start()
+                        
+                        # 立即標記為 running 防止排程器在下一毫秒重複選取
+                        db.update_task_status(int(task_id), "running")
+                        
                         alive += 1
                         started_any = True
 

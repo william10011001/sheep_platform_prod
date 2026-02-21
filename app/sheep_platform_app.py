@@ -133,15 +133,23 @@ iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
   pointer-events: none !important;
 }}
 
-/* 強制讓 Streamlit 原始按鈕容器出現在最前方，且具備明顯背景 */
+/* [側邊欄按鈕專家修復] 確保按鈕永遠可見且不與 Header 衝突 */
 div[data-testid="stSidebarCollapsedControl"] {{
-    left: 8px !important;
-    top: 10px !important;
-    z-index: 2147483647 !important;
+    left: 12px !important;
+    top: 12px !important;
+    z-index: 9999999 !important;
     background: #2563eb !important;
-    border-radius: 8px !important;
-    padding: 4px !important;
-    box-shadow: 0 0 15px rgba(0,0,0,0.5) !important;
+    border-radius: 10px !important;
+    padding: 6px !important;
+    box-shadow: 0 4px 20px rgba(37, 99, 235, 0.4) !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 44px !important;
+    height: 44px !important;
+}}
+div[data-testid="stSidebarCollapsedControl"] button {{
+    color: white !important;
 }}
 
 /* 強制將 Streamlit 的控制項推回最前線 */
@@ -2488,25 +2496,38 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
 
         with col_a:
             if not run_all:
-                if st.button("開始全部任務", key="start_all"):
+                # [UI 強化] 使用 primary 顏色突顯開始按鈕
+                if st.button("開始全部任務", key="start_all", type="primary"):
                     st.session_state[run_key] = True
                     run_all = True
                     to_queue: List[int] = []
                     for t in tasks:
                         tid = int(t["id"])
-                        if str(t.get("status") or "") != "assigned":
+                        # 允許將 assigned 或 error 的任務重新加入隊列
+                        if str(t.get("status") or "") not in ("assigned", "error"):
                             continue
                         if job_mgr.is_running(tid):
                             continue
                         if job_mgr.is_queued(int(user["id"]), tid):
                             continue
                         to_queue.append(tid)
-                    result = job_mgr.enqueue_many(int(user["id"]), to_queue, bt)
-                    db.write_audit_log(
-                        int(user["id"]),
-                        "task_queue_all",
-                        {"queued": int(result.get("queued") or 0), "skipped": int(result.get("skipped") or 0)},
-                    )
+                    
+                    if to_queue:
+                        # 將任務狀態變更為 queued 以便在 UI 立即顯示進度
+                        for qid in to_queue:
+                            db.update_task_status(qid, "queued")
+                        
+                        result = job_mgr.enqueue_many(int(user["id"]), to_queue, bt)
+                        db.write_audit_log(
+                            int(user["id"]),
+                            "task_queue_all",
+                            {"queued": int(result.get("queued") or 0), "skipped": int(result.get("skipped") or 0)},
+                        )
+                        st.toast(f"✅ 已成功排程 {len(to_queue)} 個任務", icon="🚀")
+                    else:
+                        st.toast("目前無可執行的任務", icon="ℹ️")
+                    
+                    time.sleep(0.5)
                     st.rerun()
             else:
                 if st.button("停止全部任務", key="stop_all"):

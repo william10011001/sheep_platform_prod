@@ -523,18 +523,25 @@ def issue_token(req: Request, body: TokenRequest):
 
     # [專家除錯] 修正遺失的方法調用，並套用強化的 Bytes/String 驗證護城河
     from sheep_platform_security import verify_password
+    # [安全性補丁] 處理 bcrypt 雜湊值的 str/bytes 混用情況
+    from sheep_platform_security import verify_password
     is_valid = False
     try:
-        is_valid = verify_password(body.password, user["password_hash"])
-    except TypeError:
-        pw_bytes = body.password.encode("utf-8") if isinstance(body.password, str) else body.password
-        hash_bytes = user["password_hash"].encode("utf-8") if isinstance(user["password_hash"], str) else user["password_hash"]
+        # 強制將資料庫雜湊值正規化
+        raw_hash = user["password_hash"]
+        if isinstance(raw_hash, str):
+            if raw_hash.startswith("b'") or raw_hash.startswith('b"'):
+                raw_hash = raw_hash[2:-1]
+        
+        is_valid = verify_password(body.password, raw_hash)
+    except Exception as e:
+        # 備援驗證方案
         try:
-            is_valid = verify_password(pw_bytes, hash_bytes)
-        except Exception:
-            pass
-    except Exception:
-        pass
+            pw_bin = body.password.encode("utf-8")
+            hash_bin = raw_hash.encode("utf-8") if isinstance(raw_hash, str) else raw_hash
+            is_valid = verify_password(pw_bin, hash_bin)
+        except:
+            is_valid = False
 
     if not is_valid:
         raise HTTPException(status_code=401, detail="bad_credentials")
