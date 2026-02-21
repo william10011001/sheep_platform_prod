@@ -765,10 +765,16 @@ def _style() -> None:
             width: 24px !important;
             height: 24px !important;
         }
-        /* 確保側邊欄按鈕不會被頂部導航組件遮擋而無法點擊 */
+        /* [極端專家修復] 確保側邊欄按鈕不會被頂部導航組件遮擋，且強制恢復其互動能力(解決收起後無法展開的BUG) */
         [data-testid="stHeader"] {
             z-index: 100 !important;
             pointer-events: none !important;
+        }
+        [data-testid="stHeader"] * {
+            pointer-events: auto !important;
+        }
+        [data-testid="collapsedControl"], [data-testid="stSidebarCollapsedControl"] {
+            pointer-events: auto !important;
         }
 
         /* 2. 收起按鈕 (側邊欄打開時)：釘在側邊欄的最右側邊緣中間（一半在內一半在外） */

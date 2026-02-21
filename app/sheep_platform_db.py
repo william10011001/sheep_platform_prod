@@ -111,8 +111,9 @@ def _conn() -> sqlite3.Connection:
     path = _db_path()
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-    except Exception:
-        pass
+    except Exception as e:
+        import traceback
+        print(f"[DB ERROR] 無法建立資料庫目錄 {path}, 錯誤詳情: {e}\n{traceback.format_exc()}")
 
     conn = sqlite3.connect(path, timeout=30.0, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -586,8 +587,9 @@ def _conn() -> sqlite3.Connection:
     # ensure dir exists
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-    except Exception:
-        pass
+    except Exception as e:
+        import traceback
+        print(f"[DB ERROR] 無法建立資料庫目錄 {path}, 錯誤詳情: {e}\n{traceback.format_exc()}")
 
     conn = sqlite3.connect(path, timeout=30.0, check_same_thread=False)
     conn.row_factory = sqlite3.Row
