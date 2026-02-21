@@ -133,24 +133,29 @@ iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
   pointer-events: none !important;
 }}
 
-/* [側邊欄按鈕專家修復] 確保按鈕永遠可見且不與 Header 衝突 */
+/* [側邊欄按鈕專家修復] 確保按鈕永遠可見、大小適中，並且不會被左側螢幕邊緣切斷 */
 div[data-testid="stSidebarCollapsedControl"] {{
     position: fixed !important;
-    left: 12px !important;
+    left: 8px !important;
     top: 12px !important;
-    z-index: 2147483647 !important;
-    background: #2563eb !important;
-    border-radius: 10px !important;
-    padding: 6px !important;
-    box-shadow: 0 4px 20px rgba(37, 99, 235, 0.4) !important;
+    z-index: 999999 !important;
+    background: rgba(37, 99, 235, 0.85) !important;
+    backdrop-filter: blur(8px) !important;
+    border-radius: 8px !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5) !important;
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
-    width: 44px !important;
-    height: 44px !important;
+    padding: 4px !important;
+    transition: all 0.2s ease !important;
+}}
+div[data-testid="stSidebarCollapsedControl"]:hover {{
+    background: rgba(37, 99, 235, 1) !important;
+    transform: scale(1.05) !important;
 }}
 div[data-testid="stSidebarCollapsedControl"] button {{
     color: white !important;
+    background: transparent !important;
 }}
 
 /* （移除重複覆寫）由下方同一份規則統一控制位置與層級 */
@@ -2229,16 +2234,11 @@ def _render_global_progress(cycle_id: int) -> None:
             }
         )
 
-        for b, v in bucket_est.items():
-            recs.append({"策略池": pool_name, "狀態": b, "預估組合": float(v)})
-
         pools_for_map.append({"pool_id": pool_id, "pool_name": pool_name, "meta": f"{p.get('symbol')} · {p.get('timeframe_min')}m · {fam}", "num_partitions": num_parts, "tasks": tasks})
 
     ratio = (float(total_done) / float(total_true)) if total_true > 0 else 0.0
-    if ratio < 0:
-        ratio = 0.0
-    if ratio > 1:
-        ratio = 1.0
+    if ratio < 0: ratio = 0.0
+    if ratio > 1: ratio = 1.0
 
     try:
         paid_sum = float(_cached_global_paid_payout_sum(int(cycle_id)) or 0.0)
@@ -2246,75 +2246,42 @@ def _render_global_progress(cycle_id: int) -> None:
         paid_sum = 0.0
 
     st.markdown(_section_title_html("全域挖掘進度", "統計全部用戶已跑組合數、任務完成數與全域進度。", level=4), unsafe_allow_html=True)
+    
+    # [專家級視覺優化] 使用更清晰的進度條與 KPI 卡片
     st.progress(float(ratio))
-
+    
     kcols = st.columns(4)
     with kcols[0]:
-        st.markdown(_render_kpi("全球已跑組合數", f"{int(total_done):,}", f"總量 {int(total_true):,}", help_text="累計所有用戶已測試的參數組合數。總量由策略池規格精準推導，與任務表是否存在無關。"), unsafe_allow_html=True)
+        st.markdown(_render_kpi("已計算參數組合", f"{int(total_done):,}", f"總量 {int(total_true):,}", help_text="累計所有用戶已測試的參數組合數。"), unsafe_allow_html=True)
     with kcols[1]:
-        st.markdown(_render_kpi("全球任務完成總數", f"{int(total_completed):,}", f"執行中 {int(total_running):,}", help_text="完成/執行中以『分割』為單位統計。若分割被重派或接手，只會計一次。"), unsafe_allow_html=True)
+        st.markdown(_render_kpi("任務完成進度", f"{ratio*100:.1f}%", f"範圍：{sel_family}", help_text="基於已跑組合數與總量的完成比例。"), unsafe_allow_html=True)
     with kcols[2]:
-        st.markdown(_render_kpi("全球挖礦進度", f"{ratio*100:.1f}%", f"策略範圍 {sel_family}", help_text="已跑組合數 / 總量。可用上方選單切換策略範圍。"), unsafe_allow_html=True)
+        st.markdown(_render_kpi("活躍任務數", f"{int(total_running):,}", f"已完成 {int(total_completed):,}", help_text="全球目前正在執行中的任務數量。"), unsafe_allow_html=True)
     with kcols[3]:
-        st.markdown(_render_kpi("全用戶已實現分潤", f"{paid_sum:,.6f}", "USDT", help_text="本週期已完成發放並標記為已支付的分潤總額。"), unsafe_allow_html=True)
+        st.markdown(_render_kpi("累計已發放獎勵", f"{paid_sum:,.2f}", "USDT", help_text="本週期已發放給用戶的獎勵總額。"), unsafe_allow_html=True)
 
-    if recs:
-        df = pd.DataFrame(recs)
-
-        # 預設只顯示「全域狀態摘要」，避免圖表造成視覺噪音
-        try:
-            order = ["待挖掘", "已預訂", "執行中", "已完成"]
-            agg = (
-                df.groupby("狀態")["預估組合"]
-                .sum()
-                .reindex(order)
-                .fillna(0.0)
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    # 將策略池概覽與分割分佈收納進 Expander，避免干擾主要視覺
+    with st.expander(" 展開查看詳細策略池狀態與分割分佈", expanded=False):
+        if pool_rows:
+            st.dataframe(pd.DataFrame(pool_rows), use_container_width=True, hide_index=True)
+            
+        st.markdown("##### 分割熱力圖")
+        if pools_for_map:
+            labels = [f'{x["pool_name"]}（{x["meta"]}）' for x in pools_for_map]
+            sel = st.selectbox("選擇策略池", options=list(range(len(labels))), format_func=lambda i: labels[i], index=0, key=f"pm_sel_{int(cycle_id)}_{sel_family}")
+            chosen = pools_for_map[int(sel)]
+            st.markdown(_partition_map_html(chosen["tasks"], int(chosen["num_partitions"]), system_uid), unsafe_allow_html=True)
+            st.markdown(
+                '<div class="pm_legend">'
+                '<span class="pm_cell pm_available" style="display:inline-block; margin-right:4px;"></span>待挖掘&nbsp;&nbsp;'
+                '<span class="pm_cell pm_reserved" style="display:inline-block; margin-right:4px;"></span>已預訂&nbsp;&nbsp;'
+                '<span class="pm_cell pm_running" style="display:inline-block; margin-right:4px;"></span>執行中&nbsp;&nbsp;'
+                '<span class="pm_cell pm_done" style="display:inline-block; margin-right:4px;"></span>已完成'
+                '</div>',
+                unsafe_allow_html=True,
             )
-            total_est = float(agg.sum() or 0.0)
-        except Exception:
-            agg = None
-            total_est = 0.0
-
-        if agg is not None and total_est > 0:
-            scols = st.columns(4)
-            labels = ["待挖掘", "已預訂", "執行中", "已完成"]
-            for i, lab in enumerate(labels):
-                v = float(agg.get(lab, 0.0))
-                pct = (v / total_est) * 100.0 if total_est > 0 else 0.0
-                with scols[i]:
-                    st.markdown(
-                        _render_kpi(
-                            f"{lab} 預估組合",
-                            f"{int(v):,}",
-                            f"{pct:.1f}%",
-                            help_text="由策略池規格推導的預估組合量彙總。"
-                        ),
-                        unsafe_allow_html=True,
-                    )
-
-        with st.expander("查看各策略池狀態圖表", expanded=False):
-            fig = px.bar(df, x="策略池", y="預估組合", color="狀態", barmode="stack", height=340)
-            st.plotly_chart(fig, use_container_width=True)
-
-    if pool_rows:
-        st.markdown(_section_title_html("策略池概覽", "列出每個策略池的目標、週期、策略族與進度。", level=4), unsafe_allow_html=True)
-        st.dataframe(pd.DataFrame(pool_rows), use_container_width=True, hide_index=True)
-
-    st.markdown(_section_title_html("分割分佈", "只顯示一個策略池的分割格，避免一次渲染大量格子導致載入變慢。", level=4), unsafe_allow_html=True)
-    if pools_for_map:
-        labels = [f'{x["pool_name"]}（{x["meta"]}）' for x in pools_for_map]
-        sel = st.selectbox("選擇策略池", options=list(range(len(labels))), format_func=lambda i: labels[i], index=0, key=f"pm_sel_{int(cycle_id)}_{sel_family}")
-        chosen = pools_for_map[int(sel)]
-        st.markdown(_partition_map_html(chosen["tasks"], int(chosen["num_partitions"]), system_uid), unsafe_allow_html=True)
-        st.markdown(
-            '<div class="pm_legend">'
-            '<span class="pm_dot pm_available"></span>待挖掘'
-            '<span class="pm_dot pm_reserved"></span>已預訂'
-            '<span class="pm_dot pm_running"></span>執行中'
-            '<span class="pm_dot pm_done"></span>已完成'
-            '</div>',
-            unsafe_allow_html=True,
-        )
 def _page_tutorial(user: Optional[Dict[str, Any]] = None) -> None:
     st.markdown(f"### {APP_TITLE} · 使用指引")
 
@@ -2697,13 +2664,24 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                     to_queue: List[int] = []
                     for t in tasks:
                         tid = int(t["id"])
-                        # 允許將 assigned 或 error 的任務重新加入隊列
-                        if str(t.get("status") or "") not in ("assigned", "error"):
+                        st_raw = str(t.get("status") or "")
+                        
+                        # [專家級修復] 擴大可排程狀態，包含 queued 與 意外死掉的 running
+                        if st_raw not in ("assigned", "queued", "error", "running"):
                             continue
                         if job_mgr.is_running(tid):
                             continue
                         if job_mgr.is_queued(int(user["id"]), tid):
                             continue
+                            
+                        # 如果任務在 DB 是 running，但 job_mgr 判斷它根本沒在跑，這就是「殭屍任務」
+                        # 我們主動將其降級回 assigned 讓它能被重新領取
+                        if st_raw == "running":
+                            try:
+                                db.update_task_status(tid, "assigned")
+                            except Exception:
+                                pass
+                                
                         to_queue.append(tid)
                     
                     if to_queue:

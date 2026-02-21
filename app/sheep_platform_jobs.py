@@ -247,10 +247,11 @@ class JobManager:
                         # 確保 ID 轉換為 int 防止 Dict Key 類型混亂
                         self._threads[int(task_id)] = th
                         self._stop_flags[int(task_id)] = flag
-                        th.start()
                         
-                        # 立即標記為 running 防止排程器在下一毫秒重複選取
-                        db.update_task_status(int(task_id), "running")
+                        # [專家級修復] 絕對不能在這裡先 update status 為 running，
+                        # 否則 _run_task 裡的 db.claim_task_for_run(要求 assigned/queued) 會直接失敗導致任務秒死變成殭屍！
+                        # 這裡我們只將它加入記憶體鎖，真正的狀態變更交給 _run_task 內部去原子化執行
+                        th.start()
                         
                         alive += 1
                         started_any = True
@@ -578,8 +579,16 @@ class JobManager:
                     action="task_execution_failed",
                     payload={"task_id": task_id, "exception": str(e), "trace": err_trace[:2000]}
                 )
+                
+                # [專家級最大化顯示] 解除記憶體鎖定，防止出錯任務永久佔用執行緒配額
+                with self._lock:
+                    if task_id in self._threads:
+                        self._threads.pop(task_id, None)
+                    if task_id in self._stop_flags:
+                        self._stop_flags.pop(task_id, None)
+                        
             except Exception as nested_err:
-                print(f"[CRITICAL] 錯誤處理器本身也發生錯誤: {nested_err}")
+                print(f"[CRITICAL] 錯誤處理器本身也發生錯誤: {nested_err}\n{traceback.format_exc()}", file=sys.stderr)
 
 
 JOB_MANAGER = JobManager()
