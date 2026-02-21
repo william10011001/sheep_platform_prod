@@ -188,28 +188,30 @@ def init_db() -> None:
         conn.close()
 
 
-def get_user_by_username(username: str) -> Optional[sqlite3.Row]:
+def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
     uname_norm = normalize_username(str(username or ""))
     if not uname_norm:
         return None
     conn = _conn()
     try:
-        return conn.execute(
+        row = conn.execute(
             "SELECT * FROM users WHERE username_norm = ? LIMIT 1",
             (uname_norm,),
         ).fetchone()
+        return dict(row) if row else None
     finally:
         conn.close()
 
 
-def get_user_by_id(user_id: int) -> Optional[sqlite3.Row]:
+def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
     try:
         uid = int(user_id)
     except Exception:
         return None
     conn = _conn()
     try:
-        return conn.execute("SELECT * FROM users WHERE id = ? LIMIT 1", (uid,)).fetchone()
+        row = conn.execute("SELECT * FROM users WHERE id = ? LIMIT 1", (uid,)).fetchone()
+        return dict(row) if row else None
     finally:
         conn.close()
 
@@ -246,10 +248,11 @@ def create_user(
         conn.close()
 
 
-def list_users(limit: int = 500) -> List[sqlite3.Row]:
+def list_users(limit: int = 500) -> List[Dict[str, Any]]:
     conn = _conn()
     try:
-        return conn.execute("SELECT * FROM users ORDER BY id DESC LIMIT ?", (int(limit),)).fetchall()
+        rows = conn.execute("SELECT * FROM users ORDER BY id DESC LIMIT ?", (int(limit),)).fetchall()
+        return [dict(r) for r in rows]
     finally:
         conn.close()
 
@@ -328,8 +331,15 @@ def set_wallet_address(user_id: int, wallet_address: str, wallet_chain: str = ""
         conn.close()
 
 
-def get_setting(key: str, default: Any = None) -> Any:
-    k = str(key or "").strip()
+def get_setting(arg1: Any, arg2: Any = None, arg3: Any = None) -> Any:
+    import sqlite3
+    if isinstance(arg1, sqlite3.Connection):
+        k = str(arg2 or "").strip()
+        default = arg3
+    else:
+        k = str(arg1 or "").strip()
+        default = arg2
+
     if not k:
         return default
     conn = _conn()
@@ -345,8 +355,15 @@ def get_setting(key: str, default: Any = None) -> Any:
         conn.close()
 
 
-def set_setting(key: str, value: Any) -> None:
-    k = str(key or "").strip()
+def set_setting(arg1: Any, arg2: Any, arg3: Any = None) -> None:
+    import sqlite3
+    if isinstance(arg1, sqlite3.Connection):
+        k = str(arg2 or "").strip()
+        value = arg3
+    else:
+        k = str(arg1 or "").strip()
+        value = arg2
+
     if not k:
         return
     v_json = json.dumps(value, ensure_ascii=False)
@@ -1498,14 +1515,23 @@ def _login_form() -> None:
         st.error("登入已鎖定。")
         return
 
-    # [專家除錯] 強化密碼驗證邏輯，完美處理資料庫儲存為 bytes/str 混用的潛在錯誤
+    # [專家除錯] 強化密碼驗證邏輯，完美處理資料庫儲存為 bytes/str 以及字串化 bytes (如 "b'...'") 的潛在錯誤
     is_valid = False
+    hash_stored = user.get("password_hash", "")
+    
+    # 處理資料庫中不小心被存成 "b'$2b$...'" 的字串
+    if isinstance(hash_stored, str):
+        if hash_stored.startswith("b'") and hash_stored.endswith("'"):
+            hash_stored = hash_stored[2:-1]
+        elif hash_stored.startswith('b"') and hash_stored.endswith('"'):
+            hash_stored = hash_stored[2:-1]
+            
     try:
-        is_valid = verify_password(password, user["password_hash"])
+        is_valid = verify_password(password, hash_stored)
     except TypeError:
-        # 當 bcrypt 需要 bytes 但收到字串時會觸發 TypeError，這裡強制雙向轉換保證通過
+        # bcrypt 型別嚴格要求 bytes 的退路
         pw_bytes = password.encode("utf-8") if isinstance(password, str) else password
-        hash_bytes = user["password_hash"].encode("utf-8") if isinstance(user["password_hash"], str) else user["password_hash"]
+        hash_bytes = hash_stored.encode("utf-8") if isinstance(hash_stored, str) else hash_stored
         try:
             is_valid = verify_password(pw_bytes, hash_bytes)
         except Exception:
