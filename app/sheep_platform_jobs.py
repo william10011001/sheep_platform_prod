@@ -345,7 +345,9 @@ class JobManager:
                 return
 
             combos = bt_module.grid_combinations_from_ui(family, grid_spec)
-            seed = int(pool.get("seed") or 0) ^ (int(task["cycle_id"]) & 0x7FFFFFFF)
+            # [專家修復] 防止舊任務或異常資料導致 task["cycle_id"] 為 None 引發 TypeError
+            cycle_id_val = int(task.get("cycle_id") or 0)
+            seed = int(pool.get("seed") or 0) ^ (cycle_id_val & 0x7FFFFFFF)
             rng = random.Random(seed)
             rng.shuffle(combos)
             part = combos[partition_idx::num_partitions]

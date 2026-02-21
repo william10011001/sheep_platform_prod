@@ -725,29 +725,60 @@ def _style() -> None:
         div[data-testid="stStatusWidget"] { display: none !important; }
         div[data-testid="stDecoration"] { display: none !important; }
 
-        /* [專家修復] 將 Streamlit 展開/收起按鈕的控制區塊往下推，避開左上角 Logo 的遮擋 */
+        /* [極端專家修復] 徹底解決收起/展開按鈕被遮擋與難以點擊的問題 */
+        /* 1. 展開按鈕 (Collapsed Control)：強制下移避開 Logo 並放大感應區與層級 */
         [data-testid="collapsedControl"] {
-          top: 90px !important;
-          z-index: 999999 !important;
-        }
-        
-        button[data-testid="stSidebarCollapseButton"],
-        button[title*="sidebar"],
-        button[aria-label*="sidebar"] {
-          opacity: 0.8 !important;
-          background: rgba(15, 23, 42, 0.8) !important;
-          border: 1px solid rgba(120, 180, 255, 0.4) !important;
-          border-radius: 8px !important;
+          top: 100px !important;
+          left: 10px !important;
+          z-index: 2147483647 !important;
+          background-color: rgba(15, 23, 42, 0.9) !important;
+          border: 2px solid rgba(59, 130, 246, 0.6) !important;
+          border-radius: 12px !important;
+          box-shadow: 0 4px 16px rgba(0, 0, 0, 0.8), 0 0 12px rgba(59, 130, 246, 0.4) !important;
+          padding: 4px !important;
           transition: all 0.2s ease !important;
-          z-index: 999999 !important;
         }
-        button[data-testid="stSidebarCollapseButton"]:hover,
-        button[title*="sidebar"]:hover,
-        button[aria-label*="sidebar"]:hover {
+        [data-testid="collapsedControl"]:hover {
+          background-color: rgba(30, 58, 138, 1) !important;
+          border-color: rgba(96, 165, 250, 1) !important;
+          transform: scale(1.1) !important;
+        }
+        [data-testid="collapsedControl"] svg {
+          fill: #ffffff !important;
+          width: 24px !important;
+          height: 24px !important;
+        }
+
+        /* 2. 收起按鈕 (Collapse Button 內部)：移至側邊欄右側中間邊緣，極度顯眼防誤觸 */
+        button[data-testid="stSidebarCollapseButton"] {
+          position: fixed !important;
+          top: 50% !important;
+          right: -16px !important;
+          transform: translateY(-50%) !important;
           opacity: 1 !important;
-          background: rgba(59, 130, 246, 0.2) !important;
-          border-color: rgba(120, 180, 255, 0.8) !important;
-          box-shadow: 0 0 10px rgba(59, 130, 246, 0.4) !important;
+          background: linear-gradient(90deg, rgba(15, 23, 42, 0.9), rgba(30, 58, 138, 0.9)) !important;
+          border: 1px solid rgba(120, 180, 255, 0.5) !important;
+          border-right: none !important;
+          border-radius: 12px 0 0 12px !important;
+          width: 36px !important;
+          height: 80px !important;
+          display: flex !important;
+          align-items: center !important;
+          justify-content: center !important;
+          z-index: 2147483647 !important;
+          box-shadow: -4px 0 12px rgba(0, 0, 0, 0.5) !important;
+          transition: all 0.2s ease !important;
+        }
+        button[data-testid="stSidebarCollapseButton"]:hover {
+          right: 0 !important;
+          background: linear-gradient(90deg, rgba(30, 58, 138, 1), rgba(59, 130, 246, 1)) !important;
+          border-color: rgba(120, 180, 255, 0.9) !important;
+          box-shadow: -6px 0 16px rgba(59, 130, 246, 0.5) !important;
+        }
+        button[data-testid="stSidebarCollapseButton"] svg {
+          fill: #ffffff !important;
+          width: 20px !important;
+          height: 20px !important;
         }
 
         .stButton > button[kind="primary"], .stDownloadButton > button[kind="primary"] {
@@ -1853,7 +1884,17 @@ def _render_global_progress(cycle_id: int) -> None:
     for p in pools:
         for t in p.get("tasks") or []:
             est = float(t.get("estimated_combos") or 0.0)
-            prog = (t.get("progress") or t.get("progress_json") or {})
+            
+            # [極端專家修復] 安全解析 DB 傳回的 JSON 字串，徹底避免 AttributeError: 'str' object has no attribute 'get'
+            prog_raw = t.get("progress") or t.get("progress_json") or "{}"
+            if isinstance(prog_raw, str):
+                try:
+                    prog = json.loads(prog_raw)
+                except Exception:
+                    prog = {}
+            else:
+                prog = prog_raw if isinstance(prog_raw, dict) else {}
+                
             done = float(prog.get("combos_done") or 0.0)
             status = str(t.get("status") or "")
 
@@ -2125,91 +2166,93 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
             return
 
         tasks = db.list_tasks_for_user(int(user["id"]), cycle_id=int(cycle["id"]))
+        strategies = db.list_strategies(user_id=int(user["id"]), limit=200)
+        payouts = db.list_payouts(user_id=int(user["id"]), limit=200)
+
+        active_tasks = [t for t in tasks if t["status"] in ("assigned", "running")]
+        completed_tasks = [t for t in tasks if t["status"] == "completed"]
+
+        active_strategies = [s for s in strategies if s["status"] == "active"]
+        unpaid = [p for p in payouts if p["status"] == "unpaid"]
+
+        st.markdown('<div class="metric-row">', unsafe_allow_html=True)
+        st.markdown(_render_kpi("任務", len(active_tasks), "進行中"), unsafe_allow_html=True)
+        st.markdown(_render_kpi("任務", len(completed_tasks), "已完成"), unsafe_allow_html=True)
+        st.markdown(_render_kpi("策略", len(active_strategies), "有效中"), unsafe_allow_html=True)
+        st.markdown(_render_kpi("結算", len(unpaid), "未發放"), unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown(_section_title_html("任務摘要", "列出目前分配給你的任務狀態、階段、進度與最佳分數。達標表示候選已符合門檻。", level=3), unsafe_allow_html=True)
+        if not tasks:
+            st.info("無任務。")
+        else:
+            rows = []
+            for t in tasks:
+                try:
+                    prog = json.loads(t.get("progress_json") or "{}")
+                except Exception:
+                    prog = {}
+
+                combos_done = int(prog.get("combos_done") or 0)
+                combos_total = int(prog.get("combos_total") or 0)
+                pct = (100.0 * float(combos_done) / float(combos_total)) if combos_total > 0 else 0.0
+
+                best_score = prog.get("best_any_score")
+                passed = bool(prog.get("best_any_passed") or False)
+
+                eta_s = prog.get("eta_s")
+                speed_cps = prog.get("speed_cps")
+                phase = str(prog.get("phase") or "")
+                updated_at = str(prog.get("updated_at") or "")
+
+                status_raw = str(t.get("status") or "")
+                status_cn = _label_task_status(status_raw)
+                phase_cn = _label_phase(phase)
+
+                rows.append(
+                    {
+                        "任務ID": int(t["id"]),
+                        "策略池": str(t.get("pool_name") or ""),
+                        "交易對": str(t.get("symbol") or ""),
+                        "週期": f"{int(t.get('timeframe_min') or 0)}m",
+                        "策略族": str(t.get("family") or ""),
+                        "分割": f'{int(t.get("partition_idx") or 0) + 1}/{int(t.get("num_partitions") or 1)}',
+                        "狀態": status_cn,
+                        "階段": phase_cn,
+                        "進度(%)": round(float(pct), 2),
+                        "已跑組合": int(combos_done),
+                        "組合總量": int(combos_total),
+                        "最佳分數": None if best_score is None else round(float(best_score), 6),
+                        "達標": bool(passed),
+                        "速度(組合/秒)": None if speed_cps is None else round(float(speed_cps), 3),
+                        "預估剩餘(秒)": None if eta_s is None else round(float(eta_s), 1),
+                        "更新時間": updated_at,
+                        "__status_raw": status_raw,
+                    }
+                )
+
+            df = pd.DataFrame(rows)
+
+            order = {"running": 0, "assigned": 1, "queued": 2, "completed": 3, "expired": 4, "revoked": 5}
+            try:
+                df["_ord"] = df["__status_raw"].map(order).fillna(9)
+                df = df.sort_values(["_ord", "任務ID"], ascending=[True, False]).drop(columns=["_ord", "__status_raw"])
+            except Exception:
+                pass
+
+            st.dataframe(df, use_container_width=True, hide_index=True)
+
+        st.markdown(_section_title_html("全域進度", "顯示全站所有用戶的整體挖礦進度與分潤統計。可依策略篩選觀察。", level=3), unsafe_allow_html=True)
+        # 呼叫此函式也被包裝在最外層的 try-except 中，確保不再出現裸奔錯誤
+        _render_global_progress(int(cycle.get("id") or 0))
+
     except Exception as dashboard_e:
-        st.error(f" 控制台載入發生嚴重錯誤：{str(dashboard_e)}")
+        # [極端專家修復] 最強保護網：不論是上述哪一行程式碼出錯（包含_render_global_progress），都會被攔截並印出精準 Traceback
+        st.error(f" 控制台頁面發生嚴重錯誤，已啟動防護隔離：{str(dashboard_e)}")
+        st.info("請將下方完整錯誤訊息截圖提供給開發人員進行除錯：")
         import traceback
-        st.code(traceback.format_exc(), language="text")
+        st.code(traceback.format_exc(), language="python")
         return
-    strategies = db.list_strategies(user_id=int(user["id"]), limit=200)
-    payouts = db.list_payouts(user_id=int(user["id"]), limit=200)
-
-    active_tasks = [t for t in tasks if t["status"] in ("assigned", "running")]
-    completed_tasks = [t for t in tasks if t["status"] == "completed"]
-
-    active_strategies = [s for s in strategies if s["status"] == "active"]
-    unpaid = [p for p in payouts if p["status"] == "unpaid"]
-
-    st.markdown('<div class="metric-row">', unsafe_allow_html=True)
-    st.markdown(_render_kpi("任務", len(active_tasks), "進行中"), unsafe_allow_html=True)
-    st.markdown(_render_kpi("任務", len(completed_tasks), "已完成"), unsafe_allow_html=True)
-    st.markdown(_render_kpi("策略", len(active_strategies), "有效中"), unsafe_allow_html=True)
-    st.markdown(_render_kpi("結算", len(unpaid), "未發放"), unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    st.markdown(_section_title_html("任務摘要", "列出目前分配給你的任務狀態、階段、進度與最佳分數。達標表示候選已符合門檻。", level=3), unsafe_allow_html=True)
-    if not tasks:
-        st.info("無任務。")
-        return
-
-    rows = []
-    for t in tasks:
-        try:
-            prog = json.loads(t.get("progress_json") or "{}")
-        except Exception:
-            prog = {}
-
-        combos_done = int(prog.get("combos_done") or 0)
-        combos_total = int(prog.get("combos_total") or 0)
-        pct = (100.0 * float(combos_done) / float(combos_total)) if combos_total > 0 else 0.0
-
-        best_score = prog.get("best_any_score")
-        passed = bool(prog.get("best_any_passed") or False)
-
-        eta_s = prog.get("eta_s")
-        speed_cps = prog.get("speed_cps")
-        phase = str(prog.get("phase") or "")
-        updated_at = str(prog.get("updated_at") or "")
-
-        status_raw = str(t.get("status") or "")
-        status_cn = _label_task_status(status_raw)
-        phase_cn = _label_phase(phase)
-
-        rows.append(
-            {
-                "任務ID": int(t["id"]),
-                "策略池": str(t.get("pool_name") or ""),
-                "交易對": str(t.get("symbol") or ""),
-                "週期": f"{int(t.get('timeframe_min') or 0)}m",
-                "策略族": str(t.get("family") or ""),
-                "分割": f'{int(t.get("partition_idx") or 0) + 1}/{int(t.get("num_partitions") or 1)}',
-                "狀態": status_cn,
-                "階段": phase_cn,
-                "進度(%)": round(float(pct), 2),
-                "已跑組合": int(combos_done),
-                "組合總量": int(combos_total),
-                "最佳分數": None if best_score is None else round(float(best_score), 6),
-                "達標": bool(passed),
-                "速度(組合/秒)": None if speed_cps is None else round(float(speed_cps), 3),
-                "預估剩餘(秒)": None if eta_s is None else round(float(eta_s), 1),
-                "更新時間": updated_at,
-                "__status_raw": status_raw,
-            }
-        )
-
-    df = pd.DataFrame(rows)
-
-    order = {"running": 0, "assigned": 1, "queued": 2, "completed": 3, "expired": 4, "revoked": 5}
-    try:
-        df["_ord"] = df["__status_raw"].map(order).fillna(9)
-        df = df.sort_values(["_ord", "任務ID"], ascending=[True, False]).drop(columns=["_ord", "__status_raw"])
-    except Exception:
-        pass
-
-    st.dataframe(df, use_container_width=True, hide_index=True)
-
-    st.markdown(_section_title_html("全域進度", "顯示全站所有用戶的整體挖礦進度與分潤統計。可依策略篩選觀察。", level=3), unsafe_allow_html=True)
-    _render_global_progress(int(cycle.get("id") or 0))
-
 
 def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
     try:

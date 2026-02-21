@@ -4863,9 +4863,17 @@ def get_global_progress_snapshot(cycle_id: int) -> dict:
         pools = list_factor_pools(cycle_id)
         for p in pools:
             cur = conn.execute("SELECT * FROM mining_tasks WHERE pool_id = ?", (p["id"],))
-            p["tasks"] = [dict(row) for row in cur.fetchall()]
-            for t in p["tasks"]:
+            tasks_list = []
+            for row in cur.fetchall():
+                t = dict(row)
                 t["estimated_combos"] = p.get("num_partitions", 1) * 10
+                # [專家修復] 在資料庫層級就確保 progress_json 被正確解析為 dict，根絕前端所有字串解析引發的崩潰
+                try:
+                    t["progress"] = json.loads(t.get("progress_json") or "{}")
+                except Exception:
+                    t["progress"] = {}
+                tasks_list.append(t)
+            p["tasks"] = tasks_list
         return {"system_user_id": 0, "pools": pools}
     except Exception as e:
         print(f"[DB ERROR] get_global_progress_snapshot: {e}")
