@@ -226,6 +226,54 @@ def init_db() -> None:
                 audit_json TEXT DEFAULT '{}',
                 submitted_at TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS candidates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id INTEGER,
+                user_id INTEGER,
+                pool_id INTEGER,
+                params_json TEXT,
+                metrics_json TEXT,
+                score REAL,
+                is_submitted INTEGER DEFAULT 0,
+                created_at TEXT
+            );
+            
+            CREATE TABLE IF NOT EXISTS strategies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                submission_id INTEGER,
+                user_id INTEGER,
+                pool_id INTEGER,
+                params_json TEXT,
+                status TEXT DEFAULT 'active',
+                allocation_pct REAL,
+                note TEXT,
+                created_at TEXT,
+                expires_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS weekly_checks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                strategy_id INTEGER,
+                week_start_ts TEXT,
+                week_end_ts TEXT,
+                return_pct REAL,
+                max_drawdown_pct REAL,
+                trades INTEGER,
+                eligible INTEGER,
+                checked_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS payouts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                strategy_id INTEGER,
+                user_id INTEGER,
+                week_start_ts TEXT,
+                amount_usdt REAL,
+                status TEXT DEFAULT 'unpaid',
+                txid TEXT,
+                created_at TEXT
+            );
             """
         )
         try:
@@ -4361,10 +4409,21 @@ def ensure_cycle_rollover() -> None:
         else:
             if now_str > active["end_ts"]:
                 conn.execute("UPDATE mining_cycles SET status = 'completed' WHERE id = ?", (active["id"],))
-                # [專家修正] 移除多餘的 fromisoformat，直接使用現有的 now_dt 變數，避免舊版 Python 發生解析錯誤
                 new_end = (now_dt + _safe_td(days=7)).isoformat()
-                conn.execute("INSERT INTO mining_cycles (name, status, start_ts, end_ts) VALUES (?, ?, ?, ?)",
+                cur2 = conn.execute("INSERT INTO mining_cycles (name, status, start_ts, end_ts) VALUES (?, ?, ?, ?)",
                                 (f"Cycle {active['id'] + 1}", "active", now_str, new_end))
+                new_cycle_id = cur2.lastrowid
+                
+                # [專家修復] 自動繼承上一個週期的活躍 Pool 到新週期，避免跨週期後所有 Pool 消失
+                try:
+                    conn.execute("""
+                        INSERT INTO factor_pools (cycle_id, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, created_at)
+                        SELECT ?, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, ?
+                        FROM factor_pools WHERE cycle_id = ? AND active = 1
+                    """, (new_cycle_id, now_str, active["id"]))
+                except Exception as e:
+                    print(f"[DB ERROR] 繼承 Pool 失敗: {e}")
+                    
                 conn.commit()
     except Exception:
         pass
@@ -4394,48 +4453,64 @@ def list_factor_pools(cycle_id: int) -> list:
     finally:
         conn.close()
 
-def get_active_cycle() -> dict:
-    conn = db._conn()
-    try:
-        cur = conn.execute("SELECT id, name, status, start_ts, end_ts FROM mining_cycles WHERE status = 'active' ORDER BY id DESC LIMIT 1")
-        row = cur.fetchone()
-        if row:
-            return dict(row)
-        return {}
-    except Exception:
-        return {}
-    finally:
-        conn.close()
-
 def list_factor_pools(cycle_id: int) -> list:
-    conn = db._conn()
+    conn = _conn()
     try:
         cur = conn.execute("SELECT * FROM factor_pools WHERE cycle_id = ?", (cycle_id,))
-        return [dict(row) for row in cur.fetchall()]
+        rows = [dict(row) for row in cur.fetchall()]
+        
+        # [極端專家修復] 如果當前週期沒有任何 Pool，主動去舊週期找回來補上 (無縫修復之前漏掉的資料)
+        if not rows and cycle_id > 1:
+            try:
+                conn.execute("""
+                    INSERT INTO factor_pools (cycle_id, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, created_at)
+                    SELECT ?, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, ?
+                    FROM factor_pools WHERE cycle_id = ? AND active = 1
+                """, (cycle_id, _now_iso(), cycle_id - 1))
+                conn.commit()
+                # 救援後重新讀取
+                cur = conn.execute("SELECT * FROM factor_pools WHERE cycle_id = ?", (cycle_id,))
+                rows = [dict(row) for row in cur.fetchall()]
+            except Exception as e:
+                print(f"[DB ERROR] Pool 救援失敗: {e}")
+                
+        return rows
     except Exception as e:
         print(f"[DB ERROR] list_factor_pools: {e}")
         return []
     finally:
         conn.close()
 
-def assign_tasks_for_user(user_id: int, min_tasks: int = 2, cycle_id: int = 0, max_tasks: int = 6, preferred_family: str = "") -> None:
+def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, max_tasks: int = 6, preferred_family: str = "") -> None:
     conn = _conn()
     try:
         if cycle_id <= 0:
             cycle_row = conn.execute("SELECT id FROM mining_cycles WHERE status = 'active' ORDER BY id DESC LIMIT 1").fetchone()
-            if cycle_row: cycle_id = cycle_row["id"]
+            if not cycle_row: return
+            cycle_id = cycle_row["id"]
         
-        cur = conn.execute("SELECT COUNT(*) as c FROM mining_tasks WHERE user_id = ? AND status IN ('assigned', 'running')", (user_id,))
+        cur = conn.execute("SELECT COUNT(*) as c FROM mining_tasks WHERE user_id = ? AND status IN ('assigned', 'running', 'queued') AND cycle_id = ?", (user_id, cycle_id))
         current_tasks = cur.fetchone()["c"]
         
         if current_tasks < min_tasks:
             needed = min_tasks - current_tasks
-            pools = conn.execute("SELECT id FROM factor_pools WHERE cycle_id = ? AND active = 1", (cycle_id,)).fetchall()
+            pools_query = "SELECT id, num_partitions FROM factor_pools WHERE cycle_id = ? AND active = 1"
+            params = [cycle_id]
+            if preferred_family:
+                pools_query += " AND family = ?"
+                params.append(preferred_family)
+            
+            pools = conn.execute(pools_query, params).fetchall()
+            
+            # 若偏好的策略無效，退回尋找全部
+            if not pools and preferred_family:
+                pools = conn.execute("SELECT id, num_partitions FROM factor_pools WHERE cycle_id = ? AND active = 1", (cycle_id,)).fetchall()
+                
             for _ in range(needed):
                 if pools:
                     p = random.choice(pools)
                     conn.execute("INSERT INTO mining_tasks (user_id, pool_id, cycle_id, partition_idx, num_partitions, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                                 (user_id, p["id"], cycle_id, random.randint(0, 100), 128, 'assigned', _now_iso()))
+                                 (user_id, p["id"], cycle_id, random.randint(0, max(0, p["num_partitions"]-1)), p["num_partitions"], 'assigned', _now_iso()))
             conn.commit()
     except Exception as e:
         print(f"[DB ERROR] assign_tasks_for_user: {e}")
@@ -4489,20 +4564,73 @@ def list_task_overview(limit: int = 500) -> list:
         conn.close()
 
 def list_strategies(user_id: int = 0, status: str = "", limit: int = 200) -> list:
-    return [] 
+    conn = _conn()
+    try:
+        query = "SELECT s.*, u.username, p.name as pool_name, p.symbol, p.timeframe_min, p.family FROM strategies s LEFT JOIN users u ON s.user_id = u.id LEFT JOIN factor_pools p ON s.pool_id = p.id WHERE 1=1"
+        params = []
+        if user_id > 0:
+            query += " AND s.user_id = ?"
+            params.append(user_id)
+        if status:
+            query += " AND s.status = ?"
+            params.append(status)
+        query += " ORDER BY s.id DESC LIMIT ?"
+        params.append(limit)
+        cur = conn.execute(query, params)
+        return [dict(row) for row in cur.fetchall()]
+    except Exception as e:
+        print(f"[DB ERROR] list_strategies: {e}")
+        return []
+    finally:
+        conn.close()
 
 def list_payouts(user_id: int = 0, status: str = "", limit: int = 200) -> list:
-    return []
+    conn = _conn()
+    try:
+        query = "SELECT p.*, u.username FROM payouts p LEFT JOIN users u ON p.user_id = u.id WHERE 1=1"
+        params = []
+        if user_id > 0:
+            query += " AND p.user_id = ?"
+            params.append(user_id)
+        if status:
+            query += " AND p.status = ?"
+            params.append(status)
+        query += " ORDER BY p.id DESC LIMIT ?"
+        params.append(limit)
+        cur = conn.execute(query, params)
+        return [dict(row) for row in cur.fetchall()]
+    except Exception as e:
+        print(f"[DB ERROR] list_payouts: {e}")
+        return []
+    finally:
+        conn.close()
 
 def list_candidates(task_id: int, limit: int = 50) -> list:
-    return []
+    conn = _conn()
+    try:
+        cur = conn.execute("SELECT * FROM candidates WHERE task_id = ? ORDER BY score DESC LIMIT ?", (task_id, limit))
+        rows = [dict(row) for row in cur.fetchall()]
+        for r in rows:
+            r["params_json"] = json.loads(r.get("params_json") or "{}")
+            r["metrics"] = json.loads(r.get("metrics_json") or "{}")
+        return rows
+    except Exception as e:
+        print(f"[DB ERROR] list_candidates: {e}")
+        return []
+    finally:
+        conn.close()
 
 def get_pool(pool_id: int) -> Optional[dict]:
     conn = _conn()
     try:
         row = conn.execute("SELECT * FROM factor_pools WHERE id = ?", (pool_id,)).fetchone()
-        return dict(row) if row else None
-    except Exception:
+        if not row: return None
+        d = dict(row)
+        d["grid_spec"] = json.loads(d.get("grid_spec_json") or "{}")
+        d["risk_spec"] = json.loads(d.get("risk_spec_json") or "{}")
+        return d
+    except Exception as e:
+        print(f"[DB ERROR] get_pool: {e}")
         return None
     finally:
         conn.close()
@@ -4538,7 +4666,255 @@ def delete_tasks_for_pool(cycle_id: int, pool_id: int) -> int:
         conn.close()
         
 def get_global_progress_snapshot(cycle_id: int) -> dict:
-    return {"system_user_id": 0, "pools": []}
+    conn = _conn()
+    try:
+        pools = list_factor_pools(cycle_id)
+        for p in pools:
+            cur = conn.execute("SELECT * FROM mining_tasks WHERE pool_id = ?", (p["id"],))
+            p["tasks"] = [dict(row) for row in cur.fetchall()]
+            for t in p["tasks"]:
+                t["estimated_combos"] = p.get("num_partitions", 1) * 10
+        return {"system_user_id": 0, "pools": pools}
+    except Exception as e:
+        print(f"[DB ERROR] get_global_progress_snapshot: {e}")
+        return {"system_user_id": 0, "pools": []}
+    finally:
+        conn.close()
 
 def get_global_paid_payout_sum_usdt(cycle_id: int) -> float:
-    return 0.0
+    conn = _conn()
+    try:
+        cur = conn.execute("SELECT SUM(amount_usdt) as s FROM payouts WHERE status = 'paid'")
+        row = cur.fetchone()
+        return float(row["s"] or 0.0) if row else 0.0
+    except Exception:
+        return 0.0
+    finally:
+        conn.close()
+
+def create_factor_pool(cycle_id: int, name: str, symbol: str, timeframe_min: int, years: int, family: str, grid_spec: dict, risk_spec: dict, num_partitions: int, seed: int, active: bool) -> int:
+    conn = _conn()
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO factor_pools (cycle_id, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (cycle_id, name, symbol, timeframe_min, years, family, json.dumps(grid_spec, ensure_ascii=False), json.dumps(risk_spec, ensure_ascii=False), num_partitions, seed, 1 if active else 0, _now_iso())
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+def update_factor_pool(pool_id: int, name: str, symbol: str, timeframe_min: int, years: int, family: str, grid_spec: dict, risk_spec: dict, num_partitions: int, seed: int, active: bool) -> None:
+    conn = _conn()
+    try:
+        conn.execute(
+            """
+            UPDATE factor_pools
+            SET name=?, symbol=?, timeframe_min=?, years=?, family=?, grid_spec_json=?, risk_spec_json=?, num_partitions=?, seed=?, active=?
+            WHERE id=?
+            """,
+            (name, symbol, timeframe_min, years, family, json.dumps(grid_spec, ensure_ascii=False), json.dumps(risk_spec, ensure_ascii=False), num_partitions, seed, 1 if active else 0, pool_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+def get_submission(sub_id: int) -> Optional[dict]:
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT s.*, c.params_json FROM submissions s LEFT JOIN candidates c ON s.candidate_id = c.id WHERE s.id = ?", (sub_id,)).fetchone()
+        if not row: return None
+        d = dict(row)
+        d["audit"] = json.loads(d.get("audit_json") or "{}")
+        d["params_json"] = json.loads(d.get("params_json") or "{}")
+        return d
+    finally:
+        conn.close()
+
+def set_submission_status(sub_id: int, status: str, approved_by: int = 0) -> None:
+    conn = _conn()
+    try:
+        conn.execute("UPDATE submissions SET status = ? WHERE id = ?", (status, sub_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+def create_strategy_from_submission(sub_id: int, allocation_pct: float, note: str) -> int:
+    conn = _conn()
+    try:
+        sub = conn.execute("SELECT * FROM submissions WHERE id = ?", (sub_id,)).fetchone()
+        if not sub: return 0
+        cand = conn.execute("SELECT params_json FROM candidates WHERE id = ?", (sub["candidate_id"],)).fetchone()
+        params = cand["params_json"] if cand else "{}"
+        
+        cur = conn.execute(
+            "INSERT INTO strategies (submission_id, user_id, pool_id, params_json, status, allocation_pct, note, created_at, expires_at) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?)",
+            (sub_id, sub["user_id"], sub["pool_id"], params, allocation_pct, note, _now_iso(), "2099-12-31T23:59:59Z")
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+def set_strategy_status(strategy_id: int, status: str) -> None:
+    conn = _conn()
+    try:
+        conn.execute("UPDATE strategies SET status = ? WHERE id = ?", (status, strategy_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+def get_strategy_with_params(strategy_id: int) -> Optional[dict]:
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT * FROM strategies WHERE id = ?", (strategy_id,)).fetchone()
+        if not row: return None
+        d = dict(row)
+        d["params_json"] = json.loads(d.get("params_json") or "{}")
+        return d
+    finally:
+        conn.close()
+
+def payout_exists(strategy_id: int, week_start_ts: str) -> bool:
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT 1 FROM payouts WHERE strategy_id = ? AND week_start_ts = ?", (strategy_id, week_start_ts)).fetchone()
+        return bool(row)
+    finally:
+        conn.close()
+
+def create_payout(strategy_id: int, user_id: int, week_start_ts: str, amount_usdt: float) -> int:
+    conn = _conn()
+    try:
+        cur = conn.execute("INSERT INTO payouts (strategy_id, user_id, week_start_ts, amount_usdt, status, created_at) VALUES (?, ?, ?, ?, 'unpaid', ?)",
+                           (strategy_id, user_id, week_start_ts, amount_usdt, _now_iso()))
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+def create_weekly_check(strategy_id: int, week_start_ts: str, week_end_ts: str, return_pct: float, max_drawdown_pct: float, trades: int, eligible: bool) -> None:
+    conn = _conn()
+    try:
+        conn.execute("INSERT INTO weekly_checks (strategy_id, week_start_ts, week_end_ts, return_pct, max_drawdown_pct, trades, eligible, checked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                     (strategy_id, week_start_ts, week_end_ts, return_pct, max_drawdown_pct, trades, 1 if eligible else 0, _now_iso()))
+        conn.commit()
+    finally:
+        conn.close()
+
+def set_payout_paid(payout_id: int, txid: str) -> None:
+    conn = _conn()
+    try:
+        conn.execute("UPDATE payouts SET status = 'paid', txid = ? WHERE id = ?", (txid, payout_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+def get_task(task_id: int) -> Optional[dict]:
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT t.*, p.family, p.symbol, p.timeframe_min, p.years, p.grid_spec_json, p.risk_spec_json, p.seed, p.name as pool_name FROM mining_tasks t LEFT JOIN factor_pools p ON t.pool_id = p.id WHERE t.id = ?", (task_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+def update_task_progress(task_id: int, progress: dict) -> None:
+    conn = _conn()
+    try:
+        conn.execute("UPDATE mining_tasks SET progress_json = ?, updated_at = ? WHERE id = ?", (json.dumps(progress, ensure_ascii=False), _now_iso(), task_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+def update_task_status(task_id: int, status: str, finished: bool = False) -> None:
+    conn = _conn()
+    try:
+        conn.execute("UPDATE mining_tasks SET status = ?, updated_at = ? WHERE id = ?", (status, _now_iso(), task_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+def clear_candidates_for_task(task_id: int) -> None:
+    conn = _conn()
+    try:
+        conn.execute("DELETE FROM candidates WHERE task_id = ?", (task_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+def insert_candidate(task_id: int, user_id: int, pool_id: int, params: dict, metrics: dict, score: float) -> int:
+    conn = _conn()
+    try:
+        cur = conn.execute("INSERT INTO candidates (task_id, user_id, pool_id, params_json, metrics_json, score, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                           (task_id, user_id, pool_id, json.dumps(params, ensure_ascii=False), json.dumps(metrics, ensure_ascii=False), score, _now_iso()))
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+def claim_task_for_run(task_id: int) -> bool:
+    conn = _conn()
+    try:
+        cur = conn.execute("UPDATE mining_tasks SET status = 'running', updated_at = ? WHERE id = ? AND status IN ('assigned', 'queued')", (_now_iso(), task_id))
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+def create_submission(candidate_id: int, user_id: int, pool_id: int, audit: dict) -> int:
+    conn = _conn()
+    try:
+        cur = conn.execute("INSERT INTO submissions (candidate_id, user_id, pool_id, audit_json, submitted_at) VALUES (?, ?, ?, ?, ?)",
+                           (candidate_id, user_id, pool_id, json.dumps(audit, ensure_ascii=False), _now_iso()))
+        conn.execute("UPDATE candidates SET is_submitted = 1 WHERE id = ?", (candidate_id,))
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+def data_hash_setting_key(symbol: str, tf_min: int, years: int) -> str:
+    return f"dh_{symbol}_{tf_min}m_{years}y"
+
+def data_hash_ts_setting_key(symbol: str, tf_min: int, years: int) -> str:
+    return f"dh_ts_{symbol}_{tf_min}m_{years}y"
+
+def get_data_hash(symbol: str, tf_min: int, years: int) -> dict:
+    conn = _conn()
+    try:
+        h = get_setting(conn, data_hash_setting_key(symbol, tf_min, years), "")
+        ts = get_setting(conn, data_hash_ts_setting_key(symbol, tf_min, years), "")
+        return {"data_hash": str(h), "data_hash_ts": str(ts)}
+    finally:
+        conn.close()
+
+def set_data_hash(symbol: str, tf_min: int, years: int, data_hash: str, ts: str) -> None:
+    conn = _conn()
+    try:
+        set_setting(conn, data_hash_setting_key(symbol, tf_min, years), data_hash)
+        set_setting(conn, data_hash_ts_setting_key(symbol, tf_min, years), ts)
+    finally:
+        conn.close()
+
+def worker_heartbeat(worker_id: str, user_id: int, task_id: int = None) -> None:
+    pass
+
+def upsert_worker(worker_id: str, user_id: int, version: str, protocol: int, meta: dict) -> None:
+    pass
+
+def claim_next_task(user_id: int, worker_id: str) -> Optional[dict]:
+    return None
+
+def update_task_progress_with_lease(task_id: int, user_id: int, worker_id: str, lease_id: str, progress: dict) -> bool:
+    return False
+
+def release_task_with_lease(task_id: int, user_id: int, worker_id: str, lease_id: str, progress: dict) -> bool:
+    return False
+
+def finish_task_with_lease(task_id: int, user_id: int, worker_id: str, lease_id: str, candidates: list, final_progress: dict) -> Optional[int]:
+    return None
+
+def utc_now_iso() -> str:
+    return _now_iso()

@@ -3390,8 +3390,10 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
                 try:
                     grid_spec = json.loads(grid_spec_json)
                     risk_spec = json.loads(risk_spec_json)
-                except Exception:
-                    st.error("JSON 格式錯誤。")
+                except Exception as e:
+                    import traceback
+                    st.error(f"JSON 格式解析錯誤，請檢查您的括號或屬性是否正確。\n錯誤詳情：{e}")
+                    st.code(traceback.format_exc(), language="text")
                     st.stop()
 
                 db.update_factor_pool(
@@ -3440,8 +3442,10 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
                 try:
                     grid_spec = json.loads(grid_spec_json)
                     risk_spec = json.loads(risk_spec_json)
-                except Exception:
-                    st.error("JSON 格式錯誤。")
+                except Exception as e:
+                    import traceback
+                    st.error(f"JSON 格式解析錯誤，請檢查您的括號或屬性是否正確。\n錯誤詳情：{e}")
+                    st.code(traceback.format_exc(), language="text")
                     st.stop()
 
                 pid_new = db.create_factor_pool(
