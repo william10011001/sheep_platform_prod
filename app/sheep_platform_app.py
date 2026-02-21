@@ -906,7 +906,13 @@ def _style() -> None:
         .pm_cell.reserved { background: rgba(255,200,120,0.50); }
         .pm_cell.available { background: rgba(255,255,255,0.12); }
 
-        /* Help tooltip icon */
+        
+        /* Reserve space in sidebar for bottom HUD */
+        div[data-testid="stSidebarContent"]{
+          padding-bottom: 190px !important;
+        }
+
+/* Help tooltip icon */
         .metric { overflow: visible; }
 
         .metric .k { display: flex; align-items: center; gap: 6px; }
@@ -957,7 +963,8 @@ def _style() -> None:
           opacity: 0;
           pointer-events: none;
           transition: opacity 140ms ease, transform 140ms ease;
-          z-index: 9999;
+          z-index: 100000;
+          pointer-events: auto;
         }
         .help_tip:after {
           content: "";
@@ -995,7 +1002,18 @@ def _style() -> None:
           gap: 8px;
         }
 
-        /* Bottom-left user HUD */
+        
+        /* Panel wrapper (replaces legacy card blocks) */
+        .panel{
+          border-radius: 16px;
+          border: 1px solid rgba(255,255,255,0.12);
+          background: rgba(255,255,255,0.04);
+          padding: 14px 14px 12px 14px;
+          margin: 10px 0 12px 0;
+          box-shadow: 0 14px 44px rgba(0,0,0,0.28);
+        }
+
+/* Bottom-left user HUD */
         .user_hud {
           position: fixed;
           left: 18px;
@@ -1008,7 +1026,8 @@ def _style() -> None:
           box-shadow: 0 18px 50px rgba(0,0,0,0.45);
           backdrop-filter: blur(14px);
           -webkit-backdrop-filter: blur(14px);
-          z-index: 9999;
+          z-index: 100000;
+          pointer-events: auto;
         }
         .user_hud .hud_name {
           font-size: 14px;
@@ -1770,10 +1789,14 @@ def _page_auth() -> None:
     st.markdown(
         """
 <style>
-.auth_scope .card{
+.auth_scope div[data-testid="stForm"]{
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.05);
+  padding: 14px 14px 10px 14px;
   transition: transform 160ms ease, box-shadow 220ms ease, border-color 220ms ease, background 220ms ease;
 }
-.auth_scope .card:hover{
+.auth_scope div[data-testid="stForm"]:hover{
   transform: translateY(-2px);
   border-color: rgba(120,180,255,0.22);
   box-shadow: 0 18px 46px rgba(0,0,0,0.35);
@@ -1809,13 +1832,9 @@ def _page_auth() -> None:
 
     col1, col2 = st.columns([1, 1])
     with col1:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
         _register_form()
-        st.markdown("</div>", unsafe_allow_html=True)
     with col2:
-        st.markdown('<div class="card">', unsafe_allow_html=True)
         _login_form()
-        st.markdown("</div>", unsafe_allow_html=True)
 
     st.components.v1.html(
         """
@@ -2127,23 +2146,80 @@ def _page_tutorial(user: Optional[Dict[str, Any]] = None) -> None:
         )
     with tabs[1]:
         st.markdown('<div class="tut_card tut_anim"><div class="tut_kicker">任務頁</div><div class="tut_title">如何穩定跑任務</div><div class="tut_body">建議使用電腦長時間運行並保持網路穩定。任務頁可一鍵開始全部任務，系統會自動排程並依序執行。</div></div>', unsafe_allow_html=True)
-        st.markdown("#### 建議操作")
-        st.markdown("- 先選擇策略\n- 點擊開始全部任務\n- 觀察執行中數量與速度\n- 任務完成後檢視候選結果")
+        st.markdown(
+            """
+<div class="flow_panel tut_anim">
+  <div class="flow_header">
+    <div class="flow_title">建議操作</div>
+    <div class="flow_hint">4 項</div>
+  </div>
+  <div class="flow_items">
+    <div class="flow_item"><div class="flow_badge">1</div><div><div class="flow_text">先選擇策略</div><div class="flow_sub">建議先固定一個策略池，避免反覆切換造成任務釋回。</div></div></div>
+    <div class="flow_item"><div class="flow_badge">2</div><div><div class="flow_text">開始全部任務</div><div class="flow_sub">點擊開始後系統會自動排程，並依並行上限逐步執行。</div></div></div>
+    <div class="flow_item"><div class="flow_badge">3</div><div><div class="flow_text">觀察執行狀態</div><div class="flow_sub">以執行中數量與任務階段確認是否正常運行。</div></div></div>
+    <div class="flow_item"><div class="flow_badge">4</div><div><div class="flow_text">完成後檢視候選</div><div class="flow_sub">任務完成會產生候選結果，可再視品質提交複驗。</div></div></div>
+  </div>
+</div>
+""",
+            unsafe_allow_html=True,
+        )
 
     with tabs[2]:
         st.markdown('<div class="tut_card tut_anim"><div class="tut_kicker">策略選擇</div><div class="tut_title">用戶可自行選擇要跑的策略</div><div class="tut_body">策略選擇會影響你領取的分割任務來源。切換策略時，系統會釋回未開始的已分配任務，避免卡住新的任務分配。</div></div>', unsafe_allow_html=True)
-        st.markdown("#### 選擇原則")
-        st.markdown("- 依社群共識或個人偏好選擇策略\n- 建議固定策略以累積有效貢獻\n- 透過控制台查看各策略全域進度")
+        st.markdown(
+            """
+<div class="flow_panel tut_anim">
+  <div class="flow_header">
+    <div class="flow_title">選擇原則</div>
+    <div class="flow_hint">3 項</div>
+  </div>
+  <div class="flow_items">
+    <div class="flow_item"><div class="flow_badge">1</div><div><div class="flow_text">依共識或偏好選擇</div><div class="flow_sub">可依社群共識或你熟悉的策略型態先投入。</div></div></div>
+    <div class="flow_item"><div class="flow_badge">2</div><div><div class="flow_text">固定策略累積貢獻</div><div class="flow_sub">固定策略較容易累積可複用成果，避免分散。</div></div></div>
+    <div class="flow_item"><div class="flow_badge">3</div><div><div class="flow_text">用控制台看全域進度</div><div class="flow_sub">控制台可查看策略池進度與分割分佈，選擇更需要算力的池。</div></div></div>
+  </div>
+</div>
+""",
+            unsafe_allow_html=True,
+        )
 
     with tabs[3]:
         st.markdown('<div class="tut_card tut_anim"><div class="tut_kicker">候選與提交</div><div class="tut_title">候選不是最終成果</div><div class="tut_body">候選需要通過伺服器複驗。複驗通過後才會進入策略池並參與後續規則與結算。</div></div>', unsafe_allow_html=True)
-        st.markdown("#### 提交建議")
-        st.markdown("- 優先提交交易數達標且品質較高的候選\n- 避免提交大量低品質候選\n- 觀察複驗結果並調整後續投入策略")
+        st.markdown(
+            """
+<div class="flow_panel tut_anim">
+  <div class="flow_header">
+    <div class="flow_title">提交建議</div>
+    <div class="flow_hint">3 項</div>
+  </div>
+  <div class="flow_items">
+    <div class="flow_item"><div class="flow_badge">1</div><div><div class="flow_text">優先提交高品質候選</div><div class="flow_sub">以交易數達標且分數較高者優先，提升複驗通過率。</div></div></div>
+    <div class="flow_item"><div class="flow_badge">2</div><div><div class="flow_text">避免大量低品質提交</div><div class="flow_sub">低品質候選會增加伺服器負擔，也降低整體效率。</div></div></div>
+    <div class="flow_item"><div class="flow_badge">3</div><div><div class="flow_text">看複驗結果再調整投入</div><div class="flow_sub">複驗回饋能反映策略與數據差異，依結果再調整方向。</div></div></div>
+  </div>
+</div>
+""",
+            unsafe_allow_html=True,
+        )
 
     with tabs[4]:
         st.markdown('<div class="tut_card tut_anim"><div class="tut_kicker">結算</div><div class="tut_title">提現門檻與手續費規則</div><div class="tut_body">結算頁可設定分潤地址與鏈別。提現需滿足最低門檻，並依平台規則處理手續費。</div></div>', unsafe_allow_html=True)
-        st.markdown("#### 注意事項")
-        st.markdown("- 分潤地址請自行確認正確\n- 鏈別需與地址對應\n- 提現規則以平台設定為準")
+        st.markdown(
+            """
+<div class="flow_panel tut_anim">
+  <div class="flow_header">
+    <div class="flow_title">注意事項</div>
+    <div class="flow_hint">3 項</div>
+  </div>
+  <div class="flow_items">
+    <div class="flow_item"><div class="flow_badge">1</div><div><div class="flow_text">分潤地址務必確認</div><div class="flow_sub">地址錯誤可能導致資產無法追回，提交前請自行核對。</div></div></div>
+    <div class="flow_item"><div class="flow_badge">2</div><div><div class="flow_text">鏈別需與地址相符</div><div class="flow_sub">鏈別不符可能造成轉帳失敗或資產損失。</div></div></div>
+    <div class="flow_item"><div class="flow_badge">3</div><div><div class="flow_text">提現規則以平台設定為準</div><div class="flow_sub">門檻、手續費與結算以平台當期設定與公告為準。</div></div></div>
+  </div>
+</div>
+""",
+            unsafe_allow_html=True,
+        )
 
 def _page_dashboard(user: Dict[str, Any]) -> None:
     cycle = db.get_active_cycle()
@@ -2339,7 +2415,7 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
             pct = 100.0 * float(combos_done_sum) / float(combos_total_sum)
         st.metric("參數進度", f"{int(combos_done_sum)}/{int(combos_total_sum)} ({pct:.2f}%)")
 
-    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.markdown("#### 控制")
     exec_mode_label = _EXEC_MODE_LABEL.get(exec_mode, exec_mode)
     st.markdown(f'<div class="small-muted">執行模式：{exec_mode_label}</div>', unsafe_allow_html=True)
@@ -2571,7 +2647,7 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
             sharpe = None
             trades = None
 
-        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.markdown('<div class="panel">', unsafe_allow_html=True)
         st.markdown(f"#### 任務 {t['id']}")
         st.markdown(
             f'<div class="small-muted">{t["pool_name"]} · {t["symbol"]} · {t["timeframe_min"]}m · {t["family"]} · 分割 {int(t["partition_idx"])+1}/{int(t.get("num_partitions") or 1)}</div>',
@@ -2947,7 +3023,7 @@ def _page_rewards(user: Dict[str, Any]) -> None:
     chain, wallet = db.get_wallet_info(int(user["id"]))
     chain = (chain or "TRC20").strip().upper()
 
-    st.markdown('<div class="card">', unsafe_allow_html=True)
+    st.markdown('<div class="panel">', unsafe_allow_html=True)
     st.write("提現規則")
     st.write(
         "最低提現門檻", f"{withdraw_min:g} {payout_currency}"
@@ -3800,9 +3876,9 @@ def main() -> None:
             _logout()
             st.rerun()
 
-    page = str(st.session_state.get("nav_page") or pages[0])
+        _render_user_hud(user)
 
-    _render_user_hud(user)
+    page = str(st.session_state.get("nav_page") or pages[0])
 
     if page == "新手教學":
         _page_tutorial(user)
