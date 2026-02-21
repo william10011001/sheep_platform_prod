@@ -115,16 +115,19 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "init_db":
-        db.init_db()
+        if hasattr(db, "init_db"):
+            db.init_db()
         return
 
     if args.command == "cycle_rollover":
-        db.init_db()
+        if hasattr(db, "init_db"):
+            db.init_db()
         db.ensure_cycle_rollover()
         return
 
     if args.command == "weekly_check":
-        db.init_db()
+        if hasattr(db, "init_db"):
+            db.init_db()
         db.ensure_cycle_rollover()
         if args.week_start and args.week_end:
             run_weekly_check(args.week_start, args.week_end)
@@ -134,7 +137,8 @@ def main() -> None:
         return
 
     if args.command == "refresh_data_hashes":
-        db.init_db()
+        if hasattr(db, "init_db"):
+            db.init_db()
         db.ensure_cycle_rollover()
         cycle = db.get_active_cycle()
         if not cycle:

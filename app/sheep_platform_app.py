@@ -85,8 +85,7 @@ from sheep_platform_audit import audit_candidate
 
 APP_TITLE = "羊肉爐挖礦分潤任務平台"
 
-_BRAND_WEBM_1 = os.environ.get("SHEEP_BRAND_WEBM_1", "static/brand_1.webm")
-_BRAND_WEBM_2 = os.environ.get("SHEEP_BRAND_WEBM_2", "static/brand_2.webm")
+_BRAND_WEBM_1 = os.environ.get("SHEEP_BRAND_WEBM_1", "static/羊LOGO影片(去背).webm")
 # 注意：舊版 Streamlit 的 st.components.v1.html 不支援 key=
 # 因此不使用 key，並改用更穩的 CSS selector 來固定 iframe
 
@@ -121,13 +120,11 @@ def _read_file_b64(path_str: str) -> str:
 
 def _render_brand_header(animate: bool, dim: bool = False) -> None:
     v1 = _read_file_b64(_BRAND_WEBM_1)
-    v2 = _read_file_b64(_BRAND_WEBM_2)
     dim_css = ""
 
     st.markdown(
         f"""
 <style>
-/* 只佔左上角，不再蓋滿整頁 */
 iframe[data-sheep-brand="1"],
 iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
   position: fixed !important;
@@ -140,7 +137,6 @@ iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
   background: transparent !important;
 }}
 
-/* 小螢幕縮小占用 */
 @media (max-width: 720px) {{
   iframe[data-sheep-brand="1"],
   iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
@@ -149,7 +145,6 @@ iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
   }}
 }}
 
-/* 取消把整頁往下推，避免排版變形 */
 div[data-testid="stAppViewContainer"] > .main {{
   padding-top: 0 !important;
 }}
@@ -160,13 +155,10 @@ div[data-testid="stAppViewContainer"] > .main {{
         unsafe_allow_html=True,
     )
 
-    anim_class = "brand-enter" if bool(animate) else ""
     data_v1 = f"data:video/webm;base64,{v1}" if v1 else ""
-    data_v2 = f"data:video/webm;base64,{v2}" if v2 else ""
 
     html_block = f"""
     <!doctype html>
-    <!-- SHEEP_BRAND_HDR_V3 -->
     <html>
     <head>
     <meta charset="utf-8" />
@@ -180,7 +172,6 @@ div[data-testid="stAppViewContainer"] > .main {{
         font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", Arial;
     }}
 
-    /* 不要任何黑灰框：整個 header 只有左上角一組元件 */
     .brandWrap {{
         position: absolute;
         top: 6px;
@@ -188,49 +179,37 @@ div[data-testid="stAppViewContainer"] > .main {{
         display: flex;
         align-items: center;
         gap: 12px;
-        padding: 6px 12px 6px 6px;
+        padding: 6px 16px 6px 6px;
         border-radius: 9999px;
-        background: #0b0f19;
-        border: 1px solid #1b2a45;
-        box-shadow: 0 12px 28px #000000;
+        background: rgba(10, 14, 23, 0.85);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        transition: background 0.3s ease, border-color 0.3s ease;
     }}
 
-    /* 圓形白底外框 */
-    .logoCircle {{
-        width: 66px;
-        height: 66px;
+    .logoContainer {{
+        width: 72px;
+        height: 72px;
         border-radius: 9999px;
-        background: #ffffff;
-        border: 1px solid #d7dde6;
-        box-shadow: 0 12px 28px rgba(0,0,0,0.20);
+        background: transparent;
         overflow: hidden;
         position: relative;
         flex: 0 0 auto;
+        display: flex;
+        align-items: center;
+        justify-content: center;
     }}
 
-    /* 內圈細節（更像品牌標章，不像貼紙） */
-    .logoCircle::after {{
-        content: "";
-        position: absolute;
-        inset: 0;
-        border-radius: 9999px;
-        box-shadow: inset 0 0 0 1px #e9edf4;
-        pointer-events: none;
-    }}
-
-    /* 影片：固定裁切方式，避免切換時看起來忽大忽小 */
     video {{
         position: absolute;
-        inset: 0;
         width: 100%;
         height: 100%;
         object-fit: cover;
-        transform: scale(1.18);
-        display: none;
-        background: #ffffff;
-    }}
-    video.active {{
+        transform: scale(1.4);
         display: block;
+        background: transparent;
     }}
 
     .fallback {{
@@ -239,67 +218,72 @@ div[data-testid="stAppViewContainer"] > .main {{
         display: none;
         align-items: center;
         justify-content: center;
-        color: rgba(0,0,0,0.62);
+        color: rgba(255,255,255,0.62);
         font-weight: 800;
         letter-spacing: 0.6px;
         font-size: 14px;
     }}
 
-    /* SouperSheep 字樣：做成漂亮且不浮誇的品牌字 */
     .name {{
-        font-size: 20px;
+        font-size: 21px;
         font-weight: 900;
-        letter-spacing: 0.4px;
+        letter-spacing: 0.5px;
         line-height: 1;
         color: #f8fbff;
-        text-shadow: 0 10px 24px #000000;
+        text-shadow: 0 4px 12px rgba(0,0,0,0.8);
         user-select: none;
         white-space: nowrap;
+        transition: filter 0.3s ease;
     }}
+    
     .name .souper {{
         font-weight: 850;
+        background: linear-gradient(135deg, #ffffff 0%, #a0b4ce 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
     }}
+    
     .name .sheep {{
         font-weight: 950;
+        background: linear-gradient(135deg, #78b4ff 0%, #50f0dc 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
     }}
 
-    /* hover：只做細緻變化，不做縮放，避免你說的忽大忽小感 */
-    .brandWrap:hover .logoCircle {{
-        box-shadow: 0 16px 34px rgba(0,0,0,0.24);
+    .brandWrap:hover {{
+        background: rgba(15, 21, 32, 0.95);
+        border-color: rgba(120, 180, 255, 0.3);
     }}
+    
     .brandWrap:hover .name {{
-        filter: brightness(1.06);
+        filter: brightness(1.15);
     }}
 
-    /* pulse：給登入/註冊卡片 hover 同步時用的微弱呼吸光暈 */
-    .brandWrap.pulse .logoCircle {{
-        animation: ringPulse 1550ms ease-in-out infinite;
+    .brandWrap.pulse {{
+        animation: ringPulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
     }}
+    
     @keyframes ringPulse {{
-        0%   {{ box-shadow: 0 12px 28px rgba(0,0,0,0.20); }}
-        50%  {{ box-shadow: 0 18px 44px rgba(0,0,0,0.26), 0 0 18px rgba(255,255,255,0.06); }}
-        100% {{ box-shadow: 0 12px 28px rgba(0,0,0,0.20); }}
+        0%   {{ box-shadow: 0 8px 32px rgba(0,0,0,0.6); border-color: rgba(255,255,255,0.08); }}
+        50%  {{ box-shadow: 0 12px 48px rgba(0,0,0,0.8), 0 0 20px rgba(120,180,255,0.15); border-color: rgba(120,180,255,0.4); }}
+        100% {{ box-shadow: 0 8px 32px rgba(0,0,0,0.6); border-color: rgba(255,255,255,0.08); }}
     }}
 
-    /* 小螢幕縮放 */
     @media (max-width: 720px) {{
-        .brandWrap {{ top: 6px; left: 6px; gap: 10px; }}
-        .logoCircle {{ width: 58px; height: 58px; }}
+        .brandWrap {{ top: 6px; left: 6px; gap: 8px; padding: 4px 12px 4px 4px; }}
+        .logoContainer {{ width: 62px; height: 62px; }}
         .name {{ font-size: 18px; }}
     }}
 
-    /* 尊重減少動效的系統設定 */
     @media (prefers-reduced-motion: reduce) {{
-        video {{ transition: none; }}
-        .brandWrap.pulse .logoCircle {{ animation: none; }}
+        .brandWrap.pulse {{ animation: none; }}
     }}
     </style>
     </head>
     <body>
     <div class="brandWrap" id="brand">
-        <div class="logoCircle" aria-hidden="true">
-        <video id="v1" muted playsinline preload="auto"></video>
-        <video id="v2" muted playsinline preload="auto"></video>
+        <div class="logoContainer" aria-hidden="true">
+        <video id="v1" muted playsinline loop preload="auto"></video>
         <div id="fb" class="fallback">SS</div>
         </div>
         <div class="name" aria-label="SouperSheep">
@@ -317,16 +301,13 @@ div[data-testid="stAppViewContainer"] > .main {{
 
     const brand = document.getElementById("brand");
     const v1 = document.getElementById("v1");
-    const v2 = document.getElementById("v2");
     const fb = document.getElementById("fb");
 
     const hasV1 = { "true" if v1 else "false" };
-    const hasV2 = { "true" if v2 else "false" };
 
     function showFallback() {{
         fb.style.display = "flex";
         try {{ v1.style.display = "none"; }} catch(e) {{}}
-        try {{ v2.style.display = "none"; }} catch(e) {{}}
     }}
 
     function playSafe(v) {{
@@ -338,28 +319,11 @@ div[data-testid="stAppViewContainer"] > .main {{
 
     function setRate(r) {{
         try {{ v1.playbackRate = r; }} catch(e) {{}}
-        try {{ v2.playbackRate = r; }} catch(e) {{}}
     }}
 
-    function activate(to2) {{
-        if (to2) {{
-        v1.classList.remove("active");
-        v2.classList.add("active");
-        try {{ v2.currentTime = 0; }} catch(e) {{}}
-        playSafe(v2);
-        }} else {{
-        v2.classList.remove("active");
-        v1.classList.add("active");
-        try {{ v1.currentTime = 0; }} catch(e) {{}}
-        playSafe(v1);
-        }}
-    }}
-
-    // hover 加速 / 離開恢復
-    brand.addEventListener("mouseenter", () => setRate(1.16));
+    brand.addEventListener("mouseenter", () => setRate(1.15));
     brand.addEventListener("mouseleave", () => setRate(1.00));
 
-    // 接收登入/註冊 hover 同步光暈
     window.addEventListener("message", (ev) => {{
         try {{
         const d = ev.data || {{}};
@@ -369,20 +333,12 @@ div[data-testid="stAppViewContainer"] > .main {{
         }} catch(e) {{}}
     }});
 
-    if (!hasV1 || !hasV2) {{
+    if (!hasV1) {{
         showFallback();
         return;
     }}
 
     v1.src = "{data_v1}";
-    v2.src = "{data_v2}";
-
-    v1.classList.add("active");
-    v2.classList.remove("active");
-
-    v1.addEventListener("ended", () => activate(true));
-    v2.addEventListener("ended", () => activate(false));
-
     setRate(1.00);
     playSafe(v1);
     }})();
@@ -390,8 +346,7 @@ div[data-testid="stAppViewContainer"] > .main {{
     </body>
     </html>
     """
-    st.components.v1.html(html_block, height=84, scrolling=False)
-
+    st.components.v1.html(html_block, height=90, scrolling=False)
 _EXEC_MODE_LABEL = {
     "server": "伺服器",
     "worker": "工作端",
@@ -659,413 +614,278 @@ def _style() -> None:
         """
         <style>
         :root {
-          --bg: #0b0f19;
-          --card: rgba(255,255,255,0.045);
-          --card2: rgba(255,255,255,0.06);
-          --border: rgba(255,255,255,0.14);
-          --text: rgba(255,255,255,0.92);
-          --muted: rgba(255,255,255,0.66);
-          --accent: rgba(120, 180, 255, 0.95);
-          --accent2: rgba(255, 120, 180, 0.65);
-          --shadow: 0 12px 30px rgba(0,0,0,0.35);
+          --bg: #05070a;
+          --card: rgba(20, 24, 32, 0.6);
+          --card-hover: rgba(28, 34, 46, 0.8);
+          --border: rgba(255, 255, 255, 0.08);
+          --border-hover: rgba(120, 180, 255, 0.3);
+          --text: #e2e8f0;
+          --muted: #8492a6;
+          --accent: #3b82f6;
+          --accent-glow: rgba(59, 130, 246, 0.4);
+          --shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
         }
 
         .stApp {
-          background: radial-gradient(1200px 600px at 20% -10%, rgba(120,180,255,0.25), transparent 60%),
-                      radial-gradient(900px 500px at 110% 20%, rgba(255,120,180,0.14), transparent 55%),
+          background: radial-gradient(circle at 15% 0%, rgba(30, 58, 138, 0.15) 0%, transparent 40%),
+                      radial-gradient(circle at 85% 100%, rgba(15, 118, 110, 0.1) 0%, transparent 40%),
                       var(--bg);
           color: var(--text);
         }
 
         html, body, [class*="css"]  {
-          font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial;
+          font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
         }
 
         html { color-scheme: dark; }
 
-        /* In-app browsers (LINE/IG) sometimes force white input backgrounds; enforce readable contrast. */
         div[data-testid="stTextInput"] input,
         div[data-testid="stTextInput"] textarea,
         div[data-testid="stNumberInput"] input,
         div[data-testid="stTextArea"] textarea,
         div[data-testid="stPassword"] input {
-          background: rgba(255,255,255,0.04) !important;
-          border: 1px solid rgba(255,255,255,0.14) !important;
-          border-radius: 12px !important;
+          background: rgba(0, 0, 0, 0.2) !important;
+          border: 1px solid var(--border) !important;
+          border-radius: 8px !important;
           color: var(--text) !important;
-          -webkit-text-fill-color: var(--text) !important;
-          caret-color: var(--text) !important;
+          transition: all 0.2s ease;
+        }
+        div[data-testid="stTextInput"] input:focus,
+        div[data-testid="stTextArea"] textarea:focus,
+        div[data-testid="stPassword"] input:focus {
+          border-color: var(--accent) !important;
+          box-shadow: 0 0 0 1px var(--accent-glow) !important;
         }
         div[data-testid="stTextInput"] input::placeholder,
         div[data-testid="stTextArea"] textarea::placeholder,
         div[data-testid="stPassword"] input::placeholder {
-          color: rgba(255,255,255,0.55) !important;
-          -webkit-text-fill-color: rgba(255,255,255,0.55) !important;
+          color: var(--muted) !important;
         }
 
         div[data-testid="stSidebar"] {
-          background: rgba(255,255,255,0.02);
+          background: rgba(10, 14, 20, 0.95);
           border-right: 1px solid var(--border);
+          backdrop-filter: blur(10px);
+          -webkit-backdrop-filter: blur(10px);
         }
 
         .block-container {
-          padding-top: 1.0rem;
-          padding-bottom: 3.0rem;
-          max-width: 1200px;
+          padding-top: 2rem;
+          padding-bottom: 4rem;
+          max-width: 1280px;
         }
 
         .card {
-          background: linear-gradient(180deg, rgba(255,255,255,0.055), rgba(255,255,255,0.03));
+          background: var(--card);
           border: 1px solid var(--border);
-          border-radius: 16px;
-          padding: 16px 16px 12px 16px;
+          border-radius: 12px;
+          padding: 20px;
           box-shadow: var(--shadow);
+          backdrop-filter: blur(8px);
+          transition: all 0.3s ease;
+        }
+        .card:hover {
+          background: var(--card-hover);
+          border-color: var(--border-hover);
+          transform: translateY(-2px);
         }
 
         .metric-row {
           display: flex;
-          gap: 10px;
+          gap: 16px;
           flex-wrap: wrap;
+          margin-bottom: 24px;
         }
         .metric {
-          padding: 10px 12px;
+          padding: 16px;
           border-radius: 12px;
           border: 1px solid var(--border);
-          background: rgba(255,255,255,0.035);
-          min-width: 160px;
+          background: var(--card);
+          min-width: 180px;
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+          box-shadow: 0 4px 12px rgba(0,0,0,0.2);
         }
-        .metric .k { color: var(--muted); font-size: 12px; }
-        .metric .v { color: var(--text); font-size: 20px; font-weight: 600; }
+        .metric .k { color: var(--muted); font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+        .metric .v { color: #ffffff; font-size: 28px; font-weight: 700; line-height: 1.2; }
 
-        .small-muted { color: var(--muted); font-size: 12px; }
+        .small-muted { color: var(--muted); font-size: 13px; }
 
         .auth_title {
-          font-size: 18px;
-          font-weight: 900;
-          letter-spacing: 0.3px;
-          margin: 0 0 10px 0;
-          color: var(--text);
+          font-size: 24px;
+          font-weight: 800;
+          letter-spacing: 0.5px;
+          margin: 0 0 16px 0;
+          color: #ffffff;
         }
 
-        header[data-testid="stHeader"] { background: rgba(0,0,0,0); }
+        header[data-testid="stHeader"] { background: transparent; }
         footer { visibility: hidden; }
         #MainMenu { visibility: hidden; }
 
-        /* Hide Streamlit chrome (toolbar, status widget) for production look. */
-        div[data-testid="stToolbar"] { display: none !important; }
+        div[data-testid="stToolbar"] { opacity: 0.1; transition: opacity 0.3s ease; }
+        div[data-testid="stToolbar"]:hover { opacity: 1; }
         div[data-testid="stStatusWidget"] { display: none !important; }
         div[data-testid="stDecoration"] { display: none !important; }
 
-        /* Force button palette to never use the default red primary color. */
+        button[data-testid="stSidebarCollapseButton"],
+        button[title*="sidebar"],
+        button[aria-label*="sidebar"] {
+          opacity: 0.6 !important;
+          background: transparent !important;
+          border: 1px solid var(--border) !important;
+          border-radius: 8px !important;
+          transition: all 0.2s ease !important;
+        }
+        button[data-testid="stSidebarCollapseButton"]:hover,
+        button[title*="sidebar"]:hover,
+        button[aria-label*="sidebar"]:hover {
+          opacity: 1 !important;
+          background: rgba(255,255,255,0.05) !important;
+          border-color: rgba(255,255,255,0.2) !important;
+        }
+
         .stButton > button[kind="primary"], .stDownloadButton > button[kind="primary"] {
-          background: linear-gradient(135deg, rgba(120,180,255,0.32), rgba(80,240,220,0.18)) !important;
-          border-color: rgba(120,180,255,0.70) !important;
-          color: var(--text) !important;
+          background: linear-gradient(to right, #2563eb, #3b82f6) !important;
+          border: none !important;
+          color: #ffffff !important;
+          font-weight: 600 !important;
+          letter-spacing: 0.5px !important;
         }
         .stButton > button[kind="primary"]:hover, .stDownloadButton > button[kind="primary"]:hover {
-          border-color: rgba(120,180,255,0.85) !important;
-          filter: brightness(1.08) !important;
+          background: linear-gradient(to right, #1d4ed8, #2563eb) !important;
+          box-shadow: 0 4px 12px var(--accent-glow) !important;
         }
 
         .stButton > button[kind="secondary"], .stDownloadButton > button[kind="secondary"] {
-          background: rgba(255,255,255,0.05) !important;
-          border-color: rgba(255,255,255,0.14) !important;
-          color: var(--text) !important;
+          background: rgba(255, 255, 255, 0.05) !important;
+          border: 1px solid var(--border) !important;
+          color: #e2e8f0 !important;
         }
         .stButton > button[kind="secondary"]:hover, .stDownloadButton > button[kind="secondary"]:hover {
-          border-color: rgba(120,180,255,0.55) !important;
-          filter: brightness(1.05) !important;
-        }
-
-        /* Avoid any red focus ring coming from browser/theme defaults. */
-        .stButton > button:focus, .stDownloadButton > button:focus {
-          box-shadow: 0 0 0 2px rgba(120,180,255,0.35) !important;
+          background: rgba(255, 255, 255, 0.1) !important;
+          border-color: rgba(255, 255, 255, 0.2) !important;
         }
 
         .stButton > button, .stDownloadButton > button {
           width: 100%;
-          border-radius: 12px;
-          border: 1px solid rgba(255,255,255,0.14);
-          background: rgba(255,255,255,0.06);
-          color: var(--text);
-          box-shadow: 0 8px 22px rgba(0,0,0,0.25);
-          transition: transform 120ms ease, border-color 120ms ease, filter 120ms ease;
-        }
-
-        .stButton > button:hover, .stDownloadButton > button:hover {
-          transform: translateY(-1px);
-          border-color: rgba(120,180,255,0.55);
-          filter: brightness(1.05);
-        }
-
-        .stButton > button:focus, .stDownloadButton > button:focus {
-          outline: none;
-          box-shadow: 0 0 0 2px rgba(120,180,255,0.35);
+          border-radius: 8px;
+          padding: 8px 16px;
+          transition: all 0.2s ease;
         }
 
         div[data-baseweb="input"] input,
         div[data-baseweb="textarea"] textarea,
         div[data-baseweb="select"] > div {
-          background: rgba(255,255,255,0.04) !important;
-          border: 1px solid rgba(255,255,255,0.14) !important;
-          border-radius: 12px !important;
+          background: rgba(0, 0, 0, 0.2) !important;
+          border: 1px solid var(--border) !important;
+          border-radius: 8px !important;
           color: var(--text) !important;
         }
 
-        div[data-baseweb="input"] input:focus,
-        div[data-baseweb="textarea"] textarea:focus {
-          border-color: rgba(120,180,255,0.55) !important;
-          box-shadow: 0 0 0 2px rgba(120,180,255,0.25) !important;
-        }
-
-        div[data-baseweb="input"] input,
-        div[data-baseweb="textarea"] textarea {
-          -webkit-text-fill-color: var(--text) !important;
-          caret-color: var(--text) !important;
-        }
-
-        div[data-baseweb="input"] input::placeholder,
-        div[data-baseweb="textarea"] textarea::placeholder {
-          color: rgba(255,255,255,0.40) !important;
-          -webkit-text-fill-color: rgba(255,255,255,0.40) !important;
-          opacity: 1 !important;
-        }
-
-        input:-webkit-autofill,
-        textarea:-webkit-autofill,
-        select:-webkit-autofill {
-          -webkit-text-fill-color: var(--text) !important;
-          transition: background-color 99999s ease-in-out 0s;
-          box-shadow: 0 0 0px 1000px rgba(255,255,255,0.04) inset !important;
-          border: 1px solid rgba(255,255,255,0.14) !important;
-        }
-
-        /* Sidebar navigation as full-width product-style buttons (st.radio). */
-
-        /* Hide the default radio dot and turn each option into a clean button. */
-        div[data-testid="stSidebar"] label[data-baseweb="radio"] > div > div:first-child {
-          display: none !important;
-        }
-        div[data-testid="stSidebar"] input[type="radio"] {
-          position: absolute !important;
-          opacity: 0 !important;
-          width: 0 !important;
-          height: 0 !important;
-        }
-        div[data-testid="stSidebar"] label[data-baseweb="radio"] svg {
-          display: none !important;
-        }
+        div[data-testid="stSidebar"] label[data-baseweb="radio"] > div > div:first-child { display: none !important; }
+        div[data-testid="stSidebar"] input[type="radio"] { opacity: 0 !important; width: 0 !important; height: 0 !important; }
+        div[data-testid="stSidebar"] label[data-baseweb="radio"] svg { display: none !important; }
+        
         div[data-testid="stSidebar"] label[data-baseweb="radio"] {
           width: 100%;
-          border: 1px solid rgba(255,255,255,0.14);
-          border-radius: 12px;
-          padding: 0.55rem 0.7rem;
-          margin: 0.35rem 0;
-          background: rgba(255,255,255,0.03);
+          border: 1px solid transparent;
+          border-radius: 8px;
+          padding: 10px 16px;
+          margin: 4px 0;
+          background: transparent;
+          color: var(--muted);
+          transition: all 0.2s ease;
         }
         div[data-testid="stSidebar"] label[data-baseweb="radio"]:hover {
-          border-color: rgba(120,180,255,0.45);
+          background: rgba(255,255,255,0.03);
+          color: var(--text);
         }
         div[data-testid="stSidebar"] label[data-baseweb="radio"]:has(input:checked) {
-          background: rgba(120,180,255,0.12);
-          border-color: rgba(120,180,255,0.55);
-        }
-        div[data-testid="stSidebar"] label[data-baseweb="radio"] > div {
-          width: 100%;
+          background: rgba(59, 130, 246, 0.1);
+          border-color: rgba(59, 130, 246, 0.3);
+          color: #ffffff;
+          font-weight: 600;
         }
 
-
-        /* Global progress partition map */
-        .pm_legend {
-          display: flex;
-          gap: 0.8rem;
-          flex-wrap: wrap;
-          margin: 0.25rem 0 0.6rem 0;
-        }
-        .pm_item { display: inline-flex; align-items: center; gap: 0.35rem; }
-        .pm_swatch { width: 10px; height: 10px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.18); }
-        .pm_swatch.done { background: rgba(120,180,255,0.55); }
-        .pm_swatch.running { background: rgba(120,255,180,0.45); }
-        .pm_swatch.reserved { background: rgba(255,200,120,0.45); }
-        .pm_swatch.available { background: rgba(255,255,255,0.12); }
-
-        .pm_grid {
-          display: grid;
-          gap: 3px;
-          padding: 0.4rem 0.2rem;
-        }
+        .pm_legend { display: flex; gap: 12px; flex-wrap: wrap; margin: 8px 0 16px 0; }
+        .pm_key { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
+        
+        .pm_grid { display: grid; gap: 4px; padding: 8px 0; }
         .pm_cell {
-          width: 10px;
-          height: 10px;
-          border-radius: 3px;
-          border: 1px solid rgba(255,255,255,0.12);
-          background: rgba(255,255,255,0.10);
-        }
-        .pm_cell.done { background: rgba(120,180,255,0.60); }
-        .pm_cell.running { background: rgba(120,255,180,0.50); }
-        .pm_cell.reserved { background: rgba(255,200,120,0.50); }
-        .pm_cell.available { background: rgba(255,255,255,0.12); }
-
-        
-        /* Reserve space in sidebar for bottom HUD */
-        div[data-testid="stSidebarContent"]{
-          padding-bottom: 190px !important;
-        }
-
-/* Help tooltip icon */
-        .metric { overflow: visible; }
-
-        .metric .k { display: flex; align-items: center; gap: 6px; }
-
-        .help_wrap {
-          display: inline-flex;
-          position: relative;
-          align-items: center;
-          justify-content: center;
-          margin-left: 6px;
-          z-index: 20;
-        }
-        .help_icon {
-          width: 18px;
-          height: 18px;
-          border-radius: 999px;
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          font-size: 12px;
-          font-weight: 800;
-          line-height: 1;
-          border: 1px solid rgba(255,255,255,0.20);
+          width: 12px; height: 12px; border-radius: 2px;
+          border: 1px solid rgba(255,255,255,0.05);
           background: rgba(255,255,255,0.05);
-          color: rgba(255,255,255,0.84);
-          cursor: help;
-          user-select: none;
+          transition: transform 0.2s ease;
         }
-        .help_wrap:hover .help_icon {
-          border-color: rgba(120,180,255,0.75);
-          background: rgba(120,180,255,0.12);
+        .pm_cell:hover { transform: scale(1.2); z-index: 2; border-color: rgba(255,255,255,0.5); }
+        .pm_cell.pm_done { background: #3b82f6; border-color: #2563eb; }
+        .pm_cell.pm_running { background: #10b981; border-color: #059669; }
+        .pm_cell.pm_reserved { background: #f59e0b; border-color: #d97706; }
+        .pm_cell.pm_available { background: rgba(255,255,255,0.1); }
+
+        div[data-testid="stSidebarContent"] { padding-bottom: 220px !important; }
+
+        .help_wrap { display: inline-flex; position: relative; align-items: center; margin-left: 8px; z-index: 50; }
+        .help_icon {
+          width: 20px; height: 20px; border-radius: 50%;
+          display: inline-flex; align-items: center; justify-content: center;
+          font-size: 12px; font-weight: 700;
+          border: 1px solid var(--border);
+          background: rgba(255,255,255,0.05); color: var(--muted);
+          cursor: help; transition: all 0.2s ease;
         }
+        .help_wrap:hover .help_icon { border-color: var(--accent); background: var(--accent-glow); color: #ffffff; }
         .help_tip {
-          position: absolute;
-          left: 50%;
-          top: -10px;
-          transform: translate(-50%, -100%);
-          min-width: 220px;
-          max-width: 360px;
-          padding: 10px 12px;
-          border-radius: 12px;
-          background: rgba(20,24,35,0.92);
-          border: 1px solid rgba(255,255,255,0.14);
-          box-shadow: 0 14px 40px rgba(0,0,0,0.45);
-          color: rgba(255,255,255,0.90);
-          font-size: 12px;
-          line-height: 1.55;
-          opacity: 0;
-          pointer-events: none;
-          transition: opacity 140ms ease, transform 140ms ease;
-          z-index: 100000;
-          pointer-events: auto;
+          position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%) translateY(4px);
+          width: max-content; max-width: 320px; padding: 12px 16px;
+          border-radius: 8px; background: rgba(15, 23, 42, 0.95);
+          border: 1px solid var(--border); box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+          color: #e2e8f0; font-size: 13px; line-height: 1.5;
+          opacity: 0; pointer-events: none; transition: all 0.2s ease; backdrop-filter: blur(4px);
         }
-        .help_tip:after {
-          content: "";
-          position: absolute;
-          left: 50%;
-          bottom: -8px;
-          transform: translateX(-50%);
-          border-width: 8px 8px 0 8px;
-          border-style: solid;
-          border-color: rgba(20,24,35,0.92) transparent transparent transparent;
-        }
-        .help_wrap:hover .help_tip {
-          opacity: 1;
-          pointer-events: auto;
-          transform: translate(-50%, -108%);
+        .help_wrap:hover .help_tip { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+        .sec_h3 { font-size: 24px; font-weight: 800; color: #ffffff; margin: 32px 0 16px 0; display: flex; align-items: center; }
+        .sec_h4 { font-size: 18px; font-weight: 700; color: #e2e8f0; margin: 24px 0 12px 0; display: flex; align-items: center; }
+
+        .panel {
+          border-radius: 12px; border: 1px solid var(--border);
+          background: var(--card); padding: 24px;
+          margin: 16px 0; box-shadow: var(--shadow);
         }
 
-        /* Section titles with integrated help icon */
-        .sec_h3 {
-          font-size: 28px;
-          font-weight: 900;
-          letter-spacing: 0.2px;
-          margin: 0.2rem 0 0.8rem 0;
-          display: inline-flex;
-          align-items: center;
-          gap: 8px;
-        }
-        .sec_h4 {
-          font-size: 18px;
-          font-weight: 850;
-          letter-spacing: 0.15px;
-          margin: 0.9rem 0 0.5rem 0;
-          display: inline-flex;
-          align-items: center;
-          gap: 8px;
-        }
-
-        
-        /* Panel wrapper (replaces legacy card blocks) */
-        .panel{
-          border-radius: 16px;
-          border: 1px solid rgba(255,255,255,0.12);
-          background: rgba(255,255,255,0.04);
-          padding: 14px 14px 12px 14px;
-          margin: 10px 0 12px 0;
-          box-shadow: 0 14px 44px rgba(0,0,0,0.28);
-        }
-
-/* Bottom-left user HUD */
         .user_hud {
-          position: fixed;
-          left: 18px;
-          bottom: 18px;
-          width: 260px;
-          padding: 12px 12px 10px 12px;
-          border-radius: 16px;
-          border: 1px solid rgba(255,255,255,0.14);
-          background: rgba(255,255,255,0.06);
-          box-shadow: 0 18px 50px rgba(0,0,0,0.45);
-          backdrop-filter: blur(14px);
-          -webkit-backdrop-filter: blur(14px);
+          position: fixed; left: 16px; bottom: 16px; width: 268px;
+          padding: 16px; border-radius: 12px;
+          border: 1px solid var(--border);
+          background: rgba(15, 23, 42, 0.85);
+          box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+          backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
           z-index: 100000;
-          pointer-events: auto;
         }
-        .user_hud .hud_name {
-          font-size: 14px;
-          font-weight: 900;
-          letter-spacing: 0.2px;
-          color: rgba(255,255,255,0.92);
+        .user_hud .hud_name { font-size: 15px; font-weight: 700; color: #ffffff; margin-bottom: 12px; }
+        .user_hud .hud_row { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
+        .user_hud .hud_k { font-size: 13px; color: var(--muted); }
+        .user_hud .hud_v { font-size: 15px; font-weight: 700; color: #ffffff; }
+        .user_hud .hud_div { height: 1px; background: var(--border); margin: 12px 0; }
+        
+        .pill {
+            display: inline-block; padding: 4px 10px; border-radius: 6px;
+            font-size: 12px; font-weight: 600; text-transform: uppercase;
+            letter-spacing: 0.5px;
         }
-        .user_hud .hud_row {
-          display: flex;
-          align-items: baseline;
-          justify-content: space-between;
-          margin-top: 8px;
-          gap: 12px;
-        }
-        .user_hud .hud_k {
-          font-size: 12px;
-          color: rgba(255,255,255,0.65);
-          display: inline-flex;
-          align-items: center;
-          gap: 6px;
-        }
-        .user_hud .hud_v {
-          font-size: 14px;
-          font-weight: 850;
-          color: rgba(255,255,255,0.92);
-        }
-        .user_hud .hud_div {
-          margin-top: 10px;
-          height: 1px;
-          background: rgba(255,255,255,0.10);
-        }
-
+        .pill-ok { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+        .pill-info { background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); }
+        .pill-warn { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
+        .pill-bad { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+        .pill-neutral { background: rgba(255, 255, 255, 0.1); color: #94a3b8; border: 1px solid rgba(255, 255, 255, 0.2); }
         </style>
         """,
         unsafe_allow_html=True,
     )
-
-
 
 _LAST_ROLLOVER_CHECK = 0.0
 
@@ -1077,7 +897,8 @@ def _init_once() -> None:
     Streamlit 會一直 rerun 腳本；把 init 放在 cache_resource 可以讓每次 rerun 直接略過，
     讓頁面刷新快很多、DB 壓力也小很多。
     """
-    db.init_db()
+    if hasattr(db, "init_db"):
+        db.init_db()
 
     # Ensure admin account is present and credentials are deterministic.
     admin_username = str(os.environ.get("SHEEP_BOOTSTRAP_ADMIN_USER", "sheep") or "sheep").strip() or "sheep"

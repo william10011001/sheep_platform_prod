@@ -16,8 +16,8 @@ import backtest_panel2 as bt
 from sheep_platform_rate_limit import RateLimiter
 from sheep_platform_version import semver_gte
 
-
-db.init_db()
+if hasattr(db, "init_db"):
+    db.init_db()
 
 API_ROOT_PATH = os.environ.get("SHEEP_API_ROOT_PATH", "").strip()
 
