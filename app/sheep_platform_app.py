@@ -725,21 +725,29 @@ def _style() -> None:
         div[data-testid="stStatusWidget"] { display: none !important; }
         div[data-testid="stDecoration"] { display: none !important; }
 
+        /* [專家修復] 將 Streamlit 展開/收起按鈕的控制區塊往下推，避開左上角 Logo 的遮擋 */
+        [data-testid="collapsedControl"] {
+          top: 90px !important;
+          z-index: 999999 !important;
+        }
+        
         button[data-testid="stSidebarCollapseButton"],
         button[title*="sidebar"],
         button[aria-label*="sidebar"] {
-          opacity: 0.6 !important;
-          background: transparent !important;
-          border: 1px solid var(--border) !important;
+          opacity: 0.8 !important;
+          background: rgba(15, 23, 42, 0.8) !important;
+          border: 1px solid rgba(120, 180, 255, 0.4) !important;
           border-radius: 8px !important;
           transition: all 0.2s ease !important;
+          z-index: 999999 !important;
         }
         button[data-testid="stSidebarCollapseButton"]:hover,
         button[title*="sidebar"]:hover,
         button[aria-label*="sidebar"]:hover {
           opacity: 1 !important;
-          background: rgba(255,255,255,0.05) !important;
-          border-color: rgba(255,255,255,0.2) !important;
+          background: rgba(59, 130, 246, 0.2) !important;
+          border-color: rgba(120, 180, 255, 0.8) !important;
+          box-shadow: 0 0 10px rgba(59, 130, 246, 0.4) !important;
         }
 
         .stButton > button[kind="primary"], .stDownloadButton > button[kind="primary"] {
@@ -836,12 +844,23 @@ def _style() -> None:
         .help_tip {
           position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%) translateY(4px);
           width: max-content; max-width: 320px; padding: 12px 16px;
-          border-radius: 8px; background: rgba(15, 23, 42, 0.95);
-          border: 1px solid var(--border); box-shadow: 0 10px 25px rgba(0,0,0,0.5);
-          color: #e2e8f0; font-size: 13px; line-height: 1.5;
-          opacity: 0; pointer-events: none; transition: all 0.2s ease; backdrop-filter: blur(4px);
+          border-radius: 8px; background: #1e293b;
+          border: 1px solid #334155; box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+          color: #f8fafc; font-size: 13px; line-height: 1.5;
+          opacity: 0; pointer-events: none; transition: all 0.2s ease; backdrop-filter: blur(8px);
+          z-index: 999999;
+          white-space: normal;
         }
         .help_wrap:hover .help_tip { opacity: 1; transform: translateX(-50%) translateY(0); }
+        
+        /* [專家修復] 針對左下角 User HUD 內的提示框，強制向右展開，避免被螢幕左側切斷 */
+        .user_hud .help_tip {
+          left: 0;
+          transform: translateY(4px);
+        }
+        .user_hud .help_wrap:hover .help_tip {
+          transform: translateY(0);
+        }
 
         .sec_h3 { font-size: 24px; font-weight: 800; color: #ffffff; margin: 32px 0 16px 0; display: flex; align-items: center; }
         .sec_h4 { font-size: 18px; font-weight: 700; color: #e2e8f0; margin: 24px 0 12px 0; display: flex; align-items: center; }
@@ -1662,17 +1681,17 @@ def _page_auth() -> None:
 
     st.markdown('<div class="auth_scope">', unsafe_allow_html=True)
 
-    top_l, top_r = st.columns([1.0, 0.48])
+    top_l, top_r = st.columns([1.0, 0.55])
     with top_l:
-        st.markdown('<div class="small-muted">登入或註冊後即可開始參與運算任務。</div>', unsafe_allow_html=True)
+        st.markdown('<div class="small-muted" style="margin-top: 10px;">登入或註冊後即可開始參與運算任務。</div>', unsafe_allow_html=True)
     with top_r:
-        b1, b2 = st.columns([1, 1])
+        b1, b2 = st.columns([1.1, 1])
         with b1:
-            if st.button("流程與操作要點", key="auth_open_onboarding"):
+            if st.button("流程與操作要點", key="auth_open_onboarding", type="primary", use_container_width=True):
                 st.session_state["auth_dialog"] = "onboarding"
                 st.rerun()
         with b2:
-            if st.button("查看服務條款", key="auth_open_tos"):
+            if st.button("服務條款", key="auth_open_tos", type="secondary", use_container_width=True):
                 st.session_state["auth_dialog"] = "tos"
                 st.rerun()
 
@@ -1883,7 +1902,16 @@ def _render_global_progress(cycle_id: int) -> None:
         by_bucket: Dict[str, float] = {}
         for t in tasks:
             est = float(t.get("estimated_combos") or 0.0)
-            prog = (t.get("progress") or t.get("progress_json") or {})
+            # [專家修復] 安全解析 DB 傳回的 JSON 字串，避免 AttributeError: 'str' object has no attribute 'get'
+            prog_raw = t.get("progress") or t.get("progress_json") or "{}"
+            if isinstance(prog_raw, str):
+                try:
+                    prog = json.loads(prog_raw)
+                except Exception:
+                    prog = {}
+            else:
+                prog = prog_raw if isinstance(prog_raw, dict) else {}
+                
             done = float(prog.get("combos_done") or 0.0)
             status = str(t.get("status") or "")
 
@@ -3806,24 +3834,26 @@ def main() -> None:
 
     page = str(st.session_state.get("nav_page") or pages[0])
 
-    if page == "新手教學":
-        _page_tutorial(user)
-        return
-    if page == "控制台":
-        _page_dashboard(user)
-        return
-    if page == "任務":
-        _page_tasks(user, job_mgr)
-        return
-    if page == "提交":
-        _page_submissions(user)
-        return
-    if page == "結算":
-        _page_rewards(user)
-        return
-    if page == "管理" and role == "admin":
-        _page_admin(user, job_mgr)
-        return
+    # [專家修復] 全域頁面路由錯誤攔截，最大化顯示錯誤細節與 Traceback，便於光速除錯
+    import traceback
+    try:
+        if page == "新手教學":
+            _page_tutorial(user)
+        elif page == "控制台":
+            _page_dashboard(user)
+        elif page == "任務":
+            _page_tasks(user, job_mgr)
+        elif page == "提交":
+            _page_submissions(user)
+        elif page == "結算":
+            _page_rewards(user)
+        elif page == "管理" and role == "admin":
+            _page_admin(user, job_mgr)
+    except Exception as route_err:
+        st.error(f"頁面「{page}」發生錯誤，已觸發全域保護機制。")
+        st.info("請將下方錯誤訊息截圖提供給開發人員：")
+        st.code(traceback.format_exc(), language="python")
+    return
 
 
 if __name__ == "__main__":
