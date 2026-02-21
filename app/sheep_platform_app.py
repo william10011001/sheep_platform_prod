@@ -928,64 +928,76 @@ def _style() -> None:
 
         /* [專家級防護] 自訂側邊欄呼叫按鈕樣式 (當原生按鈕死掉時的無敵防線) */
         #custom-sidebar-trigger {
-            position: fixed;
-            top: 0px;
-            left: 0px;
-            width: 52px;
-            height: 52px;
-            background: rgba(30, 41, 59, 0.95);
-            border-bottom-right-radius: 12px;
-            border: 1px solid rgba(255,255,255,0.15);
-            border-top: none;
-            border-left: none;
-            z-index: 2147483647;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            box-shadow: 4px 4px 16px rgba(0,0,0,0.8);
-            transition: all 0.2s ease;
+            position: fixed !important;
+            top: 10px !important;
+            left: 10px !important;
+            width: 48px !important;
+            height: 48px !important;
+            background: rgba(30, 41, 59, 0.98) !important;
+            border-radius: 8px !important;
+            border: 1px solid rgba(255,255,255,0.25) !important;
+            z-index: 2147483647 !important;
+            cursor: pointer !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            box-shadow: 0px 4px 16px rgba(0,0,0,0.8) !important;
+            transition: all 0.2s ease !important;
+            pointer-events: auto !important;
         }
         #custom-sidebar-trigger:hover {
-            background: rgba(59, 130, 246, 0.95);
+            background: rgba(59, 130, 246, 0.95) !important;
+            transform: scale(1.05) !important;
         }
         #custom-sidebar-trigger svg {
-            fill: #fff;
-            width: 28px;
-            height: 28px;
+            fill: #fff !important;
+            width: 28px !important;
+            height: 28px !important;
         }
         </style>
         
         <script>
         // [專家級防護] 動態注入備用側邊欄展開按鈕，徹底解決原生按鈕被隱藏或框架更新導致失效的問題
         (function() {
-            if (window.parent.document.getElementById('custom-sidebar-trigger')) return;
-            const btn = window.parent.document.createElement('div');
+            const parentDoc = window.parent.document;
+            if (parentDoc.getElementById('custom-sidebar-trigger')) return;
+            const btn = parentDoc.createElement('div');
             btn.id = 'custom-sidebar-trigger';
             btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"></path></svg>';
             btn.title = "展開側邊欄 (系統備護按鈕)";
-            btn.onclick = function() {
-                // 優先嘗試點擊 Streamlit 原生按鈕
-                const nativeBtn = window.parent.document.querySelector('button[aria-label="Open sidebar"], div[data-testid="stSidebarCollapsedControl"] button, div[data-testid="collapsedControl"] button');
+            
+            btn.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                
+                // 優先嘗試點擊 Streamlit 原生按鈕 (涵蓋新舊版本 selector)
+                let nativeBtn = parentDoc.querySelector('button[aria-label="Open sidebar"]') || 
+                                parentDoc.querySelector('div[data-testid="stSidebarCollapsedControl"] button') || 
+                                parentDoc.querySelector('div[data-testid="collapsedControl"] button') ||
+                                parentDoc.querySelector('button[kind="headerNoPadding"]');
+                                
                 if (nativeBtn) {
-                    nativeBtn.click();
+                    // React 需要原生 MouseEvent 才能觸發 state 更新
+                    nativeBtn.dispatchEvent(new MouseEvent('click', {view: window.parent, bubbles: true, cancelable: true}));
                 } else {
-                    // 若原生按鈕完全消失，直接暴力控制側邊欄 DOM 的寬度與顯示狀態
-                    const sidebar = window.parent.document.querySelector('section[data-testid="stSidebar"]');
+                    // 若原生按鈕完全消失，直接暴力控制側邊欄 DOM
+                    const sidebar = parentDoc.querySelector('section[data-testid="stSidebar"]');
                     if(sidebar) {
-                        sidebar.style.display = 'block';
-                        sidebar.style.visibility = 'visible';
-                        sidebar.style.minWidth = '16rem';
-                        sidebar.style.transform = 'translateX(0px)';
+                        sidebar.style.setProperty('display', 'block', 'important');
+                        sidebar.style.setProperty('visibility', 'visible', 'important');
+                        sidebar.style.setProperty('min-width', '16rem', 'important');
+                        sidebar.style.setProperty('transform', 'translateX(0px)', 'important');
+                    } else {
+                        alert("嚴重異常：找不到側邊欄組件，請重新整理頁面！");
                     }
                 }
-            };
-            window.parent.document.body.appendChild(btn);
+            });
+            parentDoc.body.appendChild(btn);
             
-            // 定期監聽側邊欄狀態，若「已經展開」，則自動隱藏此備用按鈕，避免畫面重複
+            // 定期監聽側邊欄狀態，若「已經展開」，則自動隱藏此備用按鈕
             setInterval(() => {
-                const sidebar = window.parent.document.querySelector('section[data-testid="stSidebar"]');
-                const trigger = window.parent.document.getElementById('custom-sidebar-trigger');
+                const sidebar = parentDoc.querySelector('section[data-testid="stSidebar"]');
+                const trigger = parentDoc.getElementById('custom-sidebar-trigger');
                 if (sidebar && trigger) {
                     const rect = sidebar.getBoundingClientRect();
                     // 若側邊欄寬度正常且在畫面內，代表已展開，隱藏 Trigger
@@ -1209,10 +1221,12 @@ def _login_form() -> None:
     hash_stored = user.get("password_hash", "")
     
     if isinstance(hash_stored, str):
-        if hash_stored.startswith("b'") and hash_stored.endswith("'"):
-            hash_stored = hash_stored[2:-1]
-        elif hash_stored.startswith('b"') and hash_stored.endswith('"'):
-            hash_stored = hash_stored[2:-1]
+        import ast
+        if hash_stored.startswith("b'") or hash_stored.startswith('b"'):
+            try:
+                hash_stored = ast.literal_eval(hash_stored).decode("utf-8")
+            except Exception:
+                hash_stored = hash_stored[2:-1]
             
     try:
         is_valid = verify_password(password, hash_stored)

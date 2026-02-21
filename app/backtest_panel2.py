@@ -452,8 +452,15 @@ def _full_sync_bitmart_csv(symbol: str,
                         break
                     # [專家級修復] 智慧斷層跳躍：若過濾後為空，直接將 after 推進到 API 回傳的最大時間
                     # 避免在歷史無資料的空窗期中以 200 根的龜速推進，引發海量請求與 Rate Limit 卡死
-                    # 加入空陣列防呆，避免 API 異常時 max() 發生 ValueError 導致系統崩潰
-                    safe_api_ts = [float(r[0]) // 1000 if float(r[0]) > 1000000000000 else float(r[0]) for r in rows if r and len(r) > 0]
+                    # 加入空陣列防呆與型別保護，避免 API 異常時轉換失敗導致系統崩潰
+                    safe_api_ts = []
+                    for r in rows:
+                        if r and len(r) > 0:
+                            try:
+                                val = float(r[0])
+                                safe_api_ts.append(val // 1000 if val > 1000000000000 else val)
+                            except Exception:
+                                pass
                     api_max_ts = int(max(safe_api_ts)) if safe_api_ts else int(after)
                     if api_max_ts > after:
                         after = api_max_ts

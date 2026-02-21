@@ -527,11 +527,15 @@ def issue_token(req: Request, body: TokenRequest):
     from sheep_platform_security import verify_password
     is_valid = False
     try:
-        # 強制將資料庫雜湊值正規化
+        # 強制將資料庫雜湊值正規化（使用更安全的字串轉換）
         raw_hash = user["password_hash"]
         if isinstance(raw_hash, str):
+            import ast
             if raw_hash.startswith("b'") or raw_hash.startswith('b"'):
-                raw_hash = raw_hash[2:-1]
+                try:
+                    raw_hash = ast.literal_eval(raw_hash).decode("utf-8")
+                except Exception:
+                    raw_hash = raw_hash[2:-1]
         
         is_valid = verify_password(body.password, raw_hash)
     except Exception as e:
