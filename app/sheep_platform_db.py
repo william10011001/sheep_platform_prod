@@ -3837,7 +3837,7 @@ import datetime
 from datetime import timezone, timedelta
 
 def ensure_cycle_rollover() -> None:
-    conn = db._conn()
+    conn = _conn()
     try:
         cur = conn.execute("SELECT id, start_ts, end_ts FROM mining_cycles WHERE status = 'active' ORDER BY id DESC LIMIT 1")
         active = cur.fetchone()
@@ -3847,17 +3847,41 @@ def ensure_cycle_rollover() -> None:
         if not active:
             end_ts = (now_dt + timedelta(days=7)).isoformat()
             conn.execute("INSERT INTO mining_cycles (name, status, start_ts, end_ts) VALUES (?, ?, ?, ?)",
-                         ("Cycle 1", "active", now_str, end_ts))
+                            ("Cycle 1", "active", now_str, end_ts))
             conn.commit()
         else:
             if now_str > active["end_ts"]:
                 conn.execute("UPDATE mining_cycles SET status = 'completed' WHERE id = ?", (active["id"],))
-                new_end = (datetime.datetime.fromisoformat(now_str) + timedelta(days=7)).isoformat()
+                # [專家修正] 移除多餘的 fromisoformat，直接使用現有的 now_dt 變數，避免舊版 Python 發生解析錯誤
+                new_end = (now_dt + timedelta(days=7)).isoformat()
                 conn.execute("INSERT INTO mining_cycles (name, status, start_ts, end_ts) VALUES (?, ?, ?, ?)",
-                             (f"Cycle {active['id'] + 1}", "active", now_str, new_end))
+                                (f"Cycle {active['id'] + 1}", "active", now_str, new_end))
                 conn.commit()
     except Exception:
         pass
+    finally:
+        conn.close()
+
+def get_active_cycle() -> dict:
+    conn = _conn()
+    try:
+        cur = conn.execute("SELECT id, name, status, start_ts, end_ts FROM mining_cycles WHERE status = 'active' ORDER BY id DESC LIMIT 1")
+        row = cur.fetchone()
+        if row:
+            return dict(row)
+        return {}
+    except Exception:
+        return {}
+    finally:
+        conn.close()
+
+def list_factor_pools(cycle_id: int) -> list:
+    conn = _conn()
+    try:
+        cur = conn.execute("SELECT * FROM factor_pools WHERE cycle_id = ?", (cycle_id,))
+        return [dict(row) for row in cur.fetchall()]
+    except Exception:
+        return []
     finally:
         conn.close()
 
