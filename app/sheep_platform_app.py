@@ -3660,43 +3660,74 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
                         st.code(traceback.format_exc(), language="text")
                         st.stop()
 
-        st.markdown("新增 Pool")
-        with st.form("pool_create", clear_on_submit=False):
-            name = st.text_input("create_name", value="New Pool")
-            symbol = st.text_input("create_symbol", value="BTC_USDT")
-            tf_min = st.number_input("create_timeframe_min", min_value=1, max_value=1440, value=30, step=1)
-            years = st.number_input("create_years", min_value=1, max_value=10, value=3, step=1)
-            family = st.text_input("create_family", value="RSI")
-            num_partitions = st.number_input("create_num_partitions", min_value=8, max_value=2048, value=128, step=8)
-            seed = st.number_input("create_seed", min_value=0, value=int(time.time()) & 0x7FFFFFFF, step=1)
-            grid_spec_json = st.text_area("create_grid_spec_json", value='{"rsi_p_min":6,"rsi_p_max":21,"rsi_p_step":1,"rsi_lv_min":10,"rsi_lv_max":35,"rsi_lv_step":1}', height=120)
-            risk_spec_json = st.text_area("create_risk_spec_json", value='{"tp_min":0.30,"tp_max":1.20,"tp_step":0.10,"sl_min":0.30,"sl_max":1.20,"sl_step":0.10,"max_hold_min":4,"max_hold_max":80,"max_hold_step":4,"fee_side":0.0002,"slippage":0.0,"worst_case":true,"reverse_mode":false}', height=120)
-            active = st.checkbox("create_active", value=True)
-            submitted = st.form_submit_button("建立")
+        st.markdown("🚀 新增 Pool (單筆或批量 JSON)")
+        with st.expander("展開批量匯入或手動建立", expanded=False):
+            batch_json = st.text_area("貼上 Pool JSON 陣列 (選填)", value="", height=200, help='格式需為 [{"name": "...", "symbol": "...", ...}, ...]')
+            
+            st.markdown("---")
+            col1, col2 = st.columns(2)
+            with col1:
+                name = st.text_input("單筆: create_name", value="New Pool")
+                symbol = st.text_input("單筆: create_symbol", value="BTC_USDT")
+                tf_min = st.number_input("單筆: timeframe_min", min_value=1, max_value=1440, value=30)
+                years = st.number_input("單筆: create_years", min_value=1, max_value=10, value=3)
+            with col2:
+                family = st.text_input("單筆: create_family", value="TEMA_RSI")
+                num_partitions = st.number_input("單筆: num_partitions", min_value=8, max_value=4096, value=128)
+                seed = st.number_input("單筆: create_seed", value=int(time.time()) & 0x7FFFFFFF)
+                active = st.checkbox("單筆: create_active", value=True)
 
-        if submitted:
-            try:
-                grid_spec = json.loads(grid_spec_json)
-                risk_spec = json.loads(risk_spec_json)
-            except Exception:
-                st.error("JSON 格式錯誤。")
-                st.stop()
-
-            pid = db.create_factor_pool(
-                cycle_id=cycle_id,
-                name=str(name),
-                symbol=str(symbol),
-                timeframe_min=int(tf_min),
-                years=int(years),
-                family=str(family),
-                grid_spec=dict(grid_spec),
-                risk_spec=dict(risk_spec),
-                num_partitions=int(num_partitions),
-                seed=int(seed),
-                active=bool(active),
-            )
-            db.write_audit_log(int(user["id"]), "pool_create", {"pool_id": int(pid)})
-            st.rerun()
+            grid_spec_json = st.text_area("單筆: grid_spec_json", value='{"fast_min":3,"fast_max":3,"slow_min":100,"slow_max":100,"rsi_thr_min":20,"rsi_thr_max":20}', height=100)
+            risk_spec_json = st.text_area("單筆: risk_spec_json", value='{"tp_min":2.2,"sl_min":6.0,"max_hold_min":10,"max_hold_max":60,"max_hold_step":10}', height=100)
+            
+            if st.button("確認執行新增", type="primary", use_container_width=True):
+                try:
+                    if batch_json.strip():
+                        # 批量模式
+                        raw_data = json.loads(batch_json)
+                        pool_list = raw_data if isinstance(raw_data, list) else [raw_data]
+                        success_count = 0
+                        for p_item in pool_list:
+                            pid = db.create_factor_pool(
+                                cycle_id=cycle_id,
+                                name=str(p_item.get("name", "Imported Pool")),
+                                symbol=str(p_item.get("symbol", "BTC_USDT")),
+                                timeframe_min=int(p_item.get("timeframe_min", 30)),
+                                years=int(p_item.get("years", 3)),
+                                family=str(p_item.get("family", "TEMA_RSI")),
+                                grid_spec=p_item.get("grid_spec", {}),
+                                risk_spec=p_item.get("risk_spec", {}),
+                                num_partitions=int(p_item.get("num_partitions", 128)),
+                                seed=int(p_item.get("seed", 0)),
+                                active=bool(p_item.get("active", True))
+                            )
+                            success_count += 1
+                        st.success(f"成功批量匯入 {success_count} 個策略池！")
+                    else:
+                        # 單筆模式
+                        grid_spec = json.loads(grid_spec_json)
+                        risk_spec = json.loads(risk_spec_json)
+                        pid = db.create_factor_pool(
+                            cycle_id=cycle_id,
+                            name=str(name),
+                            symbol=str(symbol),
+                            timeframe_min=int(tf_min),
+                            years=int(years),
+                            family=str(family),
+                            grid_spec=dict(grid_spec),
+                            risk_spec=dict(risk_spec),
+                            num_partitions=int(num_partitions),
+                            seed=int(seed),
+                            active=bool(active),
+                        )
+                        st.success(f"成功建立策略池 ID: {pid}")
+                    
+                    db.write_audit_log(int(user["id"]), "pool_batch_create", {"count": len(batch_json.strip()) if batch_json.strip() else 1})
+                    time.sleep(1)
+                    st.rerun()
+                except Exception as fatal_e:
+                    st.error(f"建立失敗：{str(fatal_e)}")
+                    st.code(traceback.format_exc())
 
         st.markdown("同步任務")
         st.caption("依目前設定，為所有用戶分配缺少的任務。")

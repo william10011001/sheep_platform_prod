@@ -345,12 +345,20 @@ class JobManager:
                 return
 
             combos = bt_module.grid_combinations_from_ui(family, grid_spec)
-            # [專家修復] 防止舊任務或異常資料導致 task["cycle_id"] 為 None 引發 TypeError
-            cycle_id_val = int(task.get("cycle_id") or 0)
-            seed = int(pool.get("seed") or 0) ^ (cycle_id_val & 0x7FFFFFFF)
-            rng = random.Random(seed)
+            
+            # [深度防御] 確保所有參與種子計算的數值皆非 None 且型別正確
+            safe_cycle_id = int(task.get("cycle_id") if task.get("cycle_id") is not None else 0)
+            safe_pool_seed = int(pool.get("seed") if pool.get("seed") is not None else 0)
+            safe_partition_idx = int(partition_idx if partition_idx is not None else 0)
+            safe_num_parts = int(num_partitions if num_partitions is not None else 1)
+            
+            final_seed = safe_pool_seed ^ (safe_cycle_id & 0x7FFFFFFF)
+            rng = random.Random(final_seed)
             rng.shuffle(combos)
-            part = combos[partition_idx::num_partitions]
+            
+            # 嚴格分片，防止 partition_idx 超出 num_partitions
+            if safe_num_parts <= 0: safe_num_parts = 1
+            part = combos[safe_partition_idx % safe_num_parts :: safe_num_parts]
 
             risk_grid = _build_risk_grid(risk_spec)
             if family in ("TEMA_RSI", "LaguerreRSI_TEMA"):

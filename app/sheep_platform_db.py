@@ -578,9 +578,8 @@ def ensure_cycle_rollover() -> None:
                                 (f"Cycle {active['id'] + 1}", "active", now_str, new_end))
                 new_cycle_id = cur2.lastrowid
                 
-                # 3. 深度繼承：不僅複製 Pool，還要檢查是否存在重複，確保算力連續性
+                # 3. 深度繼承：使用 NOT EXISTS 確保幂等性（重複執行也不會爆炸）
                 try:
-                    # 使用 INSERT INTO ... SELECT 語法進行原子操作
                     conn.execute("""
                         INSERT INTO factor_pools (
                             cycle_id, name, symbol, timeframe_min, years, family, 
@@ -590,9 +589,15 @@ def ensure_cycle_rollover() -> None:
                         SELECT ?, name, symbol, timeframe_min, years, family, 
                                grid_spec_json, risk_spec_json, num_partitions, seed, 
                                1, ?
-                        FROM factor_pools 
-                        WHERE cycle_id = ? AND active = 1
-                    """, (new_cycle_id, now_str, active["id"]))
+                        FROM factor_pools src
+                        WHERE src.cycle_id = ? AND src.active = 1
+                        AND NOT EXISTS (
+                            SELECT 1 FROM factor_pools target 
+                            WHERE target.cycle_id = ? 
+                            AND target.name = src.name 
+                            AND target.symbol = src.symbol
+                        )
+                    """, (new_cycle_id, now_str, active["id"], new_cycle_id))
                     
                     # 4. 審計日誌
                     conn.execute(

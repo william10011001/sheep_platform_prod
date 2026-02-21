@@ -689,20 +689,23 @@ def claim_task(
             )
             
             # 2. 檔案存取安全檢查 (FileLock 會在 bt 模組內處理)
-            if os.path.exists(csv_main) and os.path.getsize(csv_main) > 1024:
-                local_hash = _sha256_file(csv_main)
-                # 3. 原子化寫入 DB
-                db.set_data_hash(
-                    str(task.get("symbol") or ""), 
-                    int(task.get("timeframe_min") or 0), 
-                    int(years), 
-                    local_hash, 
-                    ts=_utc_iso()
-                )
-                # 重新抓取
-                dh = db.get_data_hash(str(task.get("symbol") or ""), int(task.get("timeframe_min") or 0), int(years))
+            if os.path.exists(csv_main):
+                file_size = os.path.getsize(csv_main)
+                if file_size > 1024:
+                    local_hash = _sha256_file(csv_main)
+                    # 3. 原子化寫入 DB
+                    db.set_data_hash(
+                        str(task.get("symbol") or ""), 
+                        int(task.get("timeframe_min") or 0), 
+                        int(years), 
+                        local_hash, 
+                        ts=_utc_iso()
+                    )
+                    dh = db.get_data_hash(str(task.get("symbol") or ""), int(task.get("timeframe_min") or 0), int(years))
+                else:
+                    raise RuntimeError(f"行情檔案損壞：路徑 {csv_main} 存在但大小僅 {file_size} Bytes，低於安全門檻。")
             else:
-                raise RuntimeError(f"行情檔案無效或過小: {csv_main}")
+                raise RuntimeError(f"行情檔案遺失：預期路徑 {csv_main} 不存在。")
         except Exception as hash_err:
             import traceback
             # [最大化顯示]
