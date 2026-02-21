@@ -158,6 +158,10 @@ def init_db() -> None:
                 updated_at TEXT
             );
             
+            /* Indexes: 讓全域進度與派發查詢在資料量大時仍維持可用速度 */
+            CREATE INDEX IF NOT EXISTS idx_mining_tasks_pool_cycle_part ON mining_tasks (pool_id, cycle_id, partition_idx);
+            CREATE INDEX IF NOT EXISTS idx_mining_tasks_cycle_status ON mining_tasks (cycle_id, status);
+            
             CREATE TABLE IF NOT EXISTS submissions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 candidate_id INTEGER,
@@ -1040,22 +1044,73 @@ def delete_tasks_for_pool(cycle_id: int, pool_id: int) -> int:
 def get_global_progress_snapshot(cycle_id: int) -> dict:
     conn = _conn()
     try:
-        pools = list_factor_pools(cycle_id)
+        pools = list_factor_pools(int(cycle_id))
+
+        def _status_rank(s: str) -> int:
+            if s == "completed":
+                return 3
+            if s == "running":
+                return 2
+            if s == "assigned":
+                return 1
+            return 0
+
+        def _pick_better(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
+            sa = str(a.get("status") or "")
+            sb = str(b.get("status") or "")
+            ra = _status_rank(sa)
+            rb = _status_rank(sb)
+            if rb != ra:
+                return b if rb > ra else a
+            ta = str(a.get("updated_at") or a.get("created_at") or "")
+            tb = str(b.get("updated_at") or b.get("created_at") or "")
+            if tb != ta:
+                return b if tb > ta else a
+            ia = int(a.get("id") or 0)
+            ib = int(b.get("id") or 0)
+            return b if ib > ia else a
+
         for p in pools:
-            cur = conn.execute("SELECT * FROM mining_tasks WHERE pool_id = ?", (p["id"],))
-            tasks_list = []
+            pool_id = int(p.get("id") or 0)
+
+            # 注意：mining_tasks 可能會有同一 partition_idx 多筆紀錄（斷線接手/重派）。
+            # 這裡直接在 DB 層去重，避免前端統計被放大，且讓分割分佈顯示更貼近真實狀態。
+            cur = conn.execute(
+                """
+                SELECT t.*, u.username AS username
+                FROM mining_tasks t
+                LEFT JOIN users u ON u.id = t.user_id
+                WHERE t.pool_id = ? AND t.cycle_id = ?
+                """,
+                (pool_id, int(cycle_id)),
+            )
+
+            best: Dict[int, Dict[str, Any]] = {}
             for row in cur.fetchall():
                 t = dict(row)
-                # 移除虛假的 estimated_combos，改由前端依照策略動態精準計算真實數量
                 try:
                     t["progress"] = json.loads(t.get("progress_json") or "{}")
                 except Exception:
                     t["progress"] = {}
-                tasks_list.append(t)
+
+                try:
+                    idx = int(t.get("partition_idx") or 0)
+                except Exception:
+                    idx = 0
+
+                if idx not in best:
+                    best[idx] = t
+                else:
+                    best[idx] = _pick_better(best[idx], t)
+
+            # 依 partition_idx 排序，讓前端顯示穩定
+            tasks_list = [best[k] for k in sorted(best.keys())]
             p["tasks"] = tasks_list
+
         return {"system_user_id": 0, "pools": pools}
     except Exception as e:
-        print(f"[DB ERROR] get_global_progress_snapshot: {e}")
+        import traceback
+        print(f"[DB ERROR] get_global_progress_snapshot: {e}\n{traceback.format_exc()}")
         return {"system_user_id": 0, "pools": []}
     finally:
         conn.close()
@@ -1063,9 +1118,25 @@ def get_global_progress_snapshot(cycle_id: int) -> dict:
 def get_global_paid_payout_sum_usdt(cycle_id: int) -> float:
     conn = _conn()
     try:
-        cur = conn.execute("SELECT SUM(amount_usdt) as s FROM payouts WHERE status = 'paid'")
-        row = cur.fetchone()
-        return float(row["s"] or 0.0) if row else 0.0
+        # 優先以 cycle_id 精準計算（payouts -> strategies -> factor_pools）
+        try:
+            cur = conn.execute(
+                """
+                SELECT SUM(p.amount_usdt) as s
+                FROM payouts p
+                JOIN strategies s ON s.id = p.strategy_id
+                JOIN factor_pools fp ON fp.id = s.pool_id
+                WHERE p.status = 'paid' AND fp.cycle_id = ?
+                """,
+                (int(cycle_id),),
+            )
+            row = cur.fetchone()
+            return float(row["s"] or 0.0) if row else 0.0
+        except Exception:
+            # 後備：若舊資料結構無法 join，退回全站累計（至少不炸）
+            cur = conn.execute("SELECT SUM(amount_usdt) as s FROM payouts WHERE status = 'paid'")
+            row = cur.fetchone()
+            return float(row["s"] or 0.0) if row else 0.0
     except Exception:
         return 0.0
     finally:

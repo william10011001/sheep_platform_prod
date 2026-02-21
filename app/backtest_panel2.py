@@ -6398,6 +6398,145 @@ def grid_combinations_from_ui(family: str, ui: Dict) -> List[Dict]:
     return combos
 
 
+def grid_combinations_count_from_ui(family: str, ui: Dict) -> int:
+    import bisect
+    """
+    回傳該指標家族在 UI 設定下的「格點組合數量」(不展開成巨大 list)。
+    目的：全域進度/預估總量計算必須精準且快速，避免 grid_combinations_from_ui 產生超大列表造成卡頓。
+    """
+    def _ir_count(a, b, step=1) -> int:
+        try:
+            a = int(a); b = int(b); step = int(step)
+        except Exception:
+            return 0
+        if step == 0:
+            return 0
+        if (b - a) * step < 0:
+            return 0
+        # range 是含頭含尾
+        return int(((b - a) // step) + 1)
+
+    def _fr_count(a, b, step) -> int:
+        try:
+            a = float(a); b = float(b); step = float(step)
+        except Exception:
+            return 0
+        if step <= 0:
+            return 0
+        if b < a:
+            return 0
+        # frange: while x <= b + 1e-12
+        return int(math.floor(((b - a) / step) + 1e-12)) + 1
+
+    def _pair_count_fast_lt_slow(fmin, fmax, fstep, smin, smax, sstep) -> int:
+        try:
+            fmin = int(fmin); fmax = int(fmax); fstep = int(fstep) or 1
+            smin = int(smin); smax = int(smax); sstep = int(sstep) or 1
+        except Exception:
+            return 0
+        if fstep == 0 or sstep == 0:
+            return 0
+        fast_vals = list(range(fmin, fmax + (1 if fstep > 0 else -1), fstep))
+        slow_vals = list(range(smin, smax + (1 if sstep > 0 else -1), sstep))
+        slow_vals.sort()
+        c = 0
+        for f in fast_vals:
+            # count of slow > f
+            k = bisect.bisect_right(slow_vals, f)
+            c += max(0, len(slow_vals) - k)
+        return int(c)
+
+    fam = str(family or "").strip()
+
+    if fam == "RSI":
+        return _ir_count(ui.get("rsi_p_min"), ui.get("rsi_p_max"), ui.get("rsi_p_step")) * _ir_count(ui.get("rsi_lv_min"), ui.get("rsi_lv_max"), ui.get("rsi_lv_step"))
+
+    elif fam in ["SMA_Cross", "EMA_Cross", "HMA_Cross", "DEMA_Cross", "TEMA_Cross", "WMA_Cross"]:
+        return _pair_count_fast_lt_slow(ui.get("fast_min"), ui.get("fast_max"), ui.get("fast_step"), ui.get("slow_min"), ui.get("slow_max"), ui.get("slow_step"))
+
+    elif fam in ["MACD_Cross", "PPO_Cross", "PVO_Cross"]:
+        pairs = _pair_count_fast_lt_slow(ui.get("fast_min"), ui.get("fast_max"), ui.get("fast_step"), ui.get("slow_min"), ui.get("slow_max"), ui.get("slow_step"))
+        sig_n = _ir_count(ui.get("sig_min"), ui.get("sig_max"), ui.get("sig_step"))
+        return int(pairs * sig_n)
+
+    elif fam == "Bollinger_Touch":
+        return _ir_count(ui.get("bb_p_min"), ui.get("bb_p_max"), ui.get("bb_p_step")) * _fr_count(ui.get("bb_n_min"), ui.get("bb_n_max"), ui.get("bb_n_step"))
+
+    elif fam in ["Stoch_Oversold"]:
+        return _ir_count(ui.get("k_min"), ui.get("k_max"), ui.get("k_step")) * _ir_count(ui.get("d_min"), ui.get("d_max"), ui.get("d_step")) * _ir_count(ui.get("stoch_lv_min"), ui.get("stoch_lv_max"), ui.get("stoch_lv_step"))
+
+    elif fam in ["CCI_Oversold", "WillR_Oversold", "MFI_Oversold"]:
+        return _ir_count(ui.get("p_min"), ui.get("p_max"), ui.get("p_step")) * _ir_count(ui.get("lv_min"), ui.get("lv_max"), ui.get("lv_step"))
+
+    elif fam in ["Donchian_Breakout"]:
+        return _ir_count(ui.get("look_min"), ui.get("look_max"), ui.get("look_step"))
+
+    elif fam in ["ADX_DI_Cross", "Aroon_Cross", "Aroon_Osc_Threshold"]:
+        p_n = _ir_count(ui.get("p_min"), ui.get("p_max"), ui.get("p_step"))
+        if fam == "Aroon_Osc_Threshold":
+            thr_n = _fr_count(ui.get("thr_min"), ui.get("thr_max"), ui.get("thr_step"))
+            return int(p_n * thr_n)
+        return int(p_n)
+
+    elif fam in ["ROC_Threshold", "CMF_Threshold", "EFI_Threshold", "BB_PercentB_Revert"]:
+        p_n = _ir_count(ui.get("p_min"), ui.get("p_max"), ui.get("p_step"))
+        thr_n = _fr_count(ui.get("thr_min"), ui.get("thr_max"), ui.get("thr_step"))
+        return int(p_n * thr_n)
+
+    elif fam in ["KAMA_Cross", "TRIX_Cross", "DPO_Revert", "ATR_Band_Break", "Vortex_Cross", "Volatility_Squeeze"]:
+        p_n = _ir_count(ui.get("p_min"), ui.get("p_max"), ui.get("p_step"))
+        if fam == "ATR_Band_Break":
+            mult_n = _fr_count(ui.get("mult_min"), ui.get("mult_max"), ui.get("mult_step"))
+            return int(p_n * mult_n)
+        if fam == "Volatility_Squeeze":
+            nstd_n = _fr_count(ui.get("nstd_min"), ui.get("nstd_max"), ui.get("nstd_step"))
+            q_n = _fr_count(ui.get("q_min"), ui.get("q_max"), ui.get("q_step"))
+            return int(p_n * nstd_n * q_n)
+        return int(p_n)
+
+    elif fam == "OB_FVG":
+        return (
+            _ir_count(ui.get("obfvg_n_min"), ui.get("obfvg_n_max"), ui.get("obfvg_n_step"))
+            * _fr_count(ui.get("obfvg_r_min"), ui.get("obfvg_r_max"), ui.get("obfvg_r_step"))
+            * _ir_count(ui.get("obfvg_h_min"), ui.get("obfvg_h_max"), ui.get("obfvg_h_step"))
+            * _fr_count(ui.get("obfvg_g_min"), ui.get("obfvg_g_max"), ui.get("obfvg_g_step"))
+            * _fr_count(ui.get("obfvg_a_min"), ui.get("obfvg_a_max"), ui.get("obfvg_a_step"))
+            * _fr_count(ui.get("obfvg_thr_min"), ui.get("obfvg_thr_max"), ui.get("obfvg_thr_step"))
+            * _ir_count(ui.get("obfvg_w_min", 20), ui.get("obfvg_w_max", 20), ui.get("obfvg_w_step", 10))
+            * _ir_count(ui.get("obfvg_rsi_p_min", 14), ui.get("obfvg_rsi_p_max", 14), ui.get("obfvg_rsi_p_step", 1))
+            * _fr_count(ui.get("obfvg_rsi_diff_min", 0.0), ui.get("obfvg_rsi_diff_max", 0.0), ui.get("obfvg_rsi_diff_step", 0.05))
+        )
+
+    elif fam == "SMC":
+        return _ir_count(ui.get("smc_len_min"), ui.get("smc_len_max"), ui.get("smc_len_step")) * _ir_count(ui.get("smc_limit_min"), ui.get("smc_limit_max"), ui.get("smc_limit_step"))
+
+    elif fam == "LaguerreRSI_TEMA":
+        return (
+            _fr_count(ui.get("gamma_min"), ui.get("gamma_max"), ui.get("gamma_step"))
+            * _ir_count(ui.get("tema_min"), ui.get("tema_max"), ui.get("tema_step"))
+            * _fr_count(ui.get("sl_c_min"), ui.get("sl_c_max"), ui.get("sl_c_step"))
+            * _fr_count(ui.get("tp_c_min"), ui.get("tp_c_max"), ui.get("tp_c_step"))
+            * _fr_count(ui.get("tsd_min"), ui.get("tsd_max"), ui.get("tsd_step"))
+            * _fr_count(ui.get("tsa_min"), ui.get("tsa_max"), ui.get("tsa_step"))
+        )
+
+    elif fam == "TEMA_RSI":
+        return (
+            _ir_count(ui.get("fast_min", 3), ui.get("fast_max", 3), ui.get("fast_step", 1))
+            * _ir_count(ui.get("slow_min", 100), ui.get("slow_max", 100), ui.get("slow_step", 10))
+            * _ir_count(ui.get("rsi_thr_min", 20), ui.get("rsi_thr_max", 20), ui.get("rsi_thr_step", 5))
+            * _fr_count(ui.get("tp_min", 2.2), ui.get("tp_max", 2.2), ui.get("tp_step", 0.1))
+            * _fr_count(ui.get("sl_min", 6.0), ui.get("sl_max", 6.0), ui.get("sl_step", 0.1))
+            * _fr_count(ui.get("act_min", 1.0), ui.get("act_max", 1.0), ui.get("act_step", 0.1))
+            * _ir_count(ui.get("tr_tick_min", 800), ui.get("tr_tick_max", 800), ui.get("tr_tick_step", 100))
+        )
+
+    elif fam in ["OBV_Slope", "ADL_Slope"]:
+        return 1
+
+    raise ValueError(f"未為 {fam} 設定格點參數")
+
+
 # ----------------------------- UI 與主流程 ----------------------------- #
 
 def load_and_validate_csv(path: str) -> pd.DataFrame:

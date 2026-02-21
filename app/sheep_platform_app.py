@@ -747,8 +747,22 @@ def _style() -> None:
         footer { visibility: hidden; }
         #MainMenu { visibility: hidden; }
 
-        div[data-testid="stToolbar"] { opacity: 0.1; transition: opacity 0.3s ease; }
+        div[data-testid="stToolbar"] {
+          opacity: 0.1;
+          transition: opacity 0.3s ease;
+          /* 避免透明工具列覆蓋左上角，導致側邊欄收起/展開按鈕點不到 */
+          pointer-events: none !important;
+          left: auto !important;
+          right: 12px !important;
+          width: fit-content !important;
+        }
         div[data-testid="stToolbar"]:hover { opacity: 1; }
+        div[data-testid="stToolbar"] button,
+        div[data-testid="stToolbar"] a,
+        div[data-testid="stToolbar"] input,
+        div[data-testid="stToolbar"] [role="button"] {
+          pointer-events: auto !important;
+        }
         div[data-testid="stStatusWidget"] { display: none !important; }
         div[data-testid="stDecoration"] { display: none !important; }
 
@@ -785,7 +799,9 @@ def _style() -> None:
 
         /* 3. 修正側邊欄內部的收起按鈕，防止它跟展開按鈕在同一位置重疊 */
         button[data-testid="stSidebarCollapseButton"] {
+            position: relative !important;
             z-index: 2147483647 !important;
+            pointer-events: auto !important;
             background: rgba(255,255,255,0.1) !important;
         }
 
@@ -1882,6 +1898,75 @@ def _cached_global_paid_payout_sum(cycle_id: int) -> float:
     return float(db.get_global_paid_payout_sum_usdt(int(cycle_id)))
 
 
+@st.cache_data(ttl=300)
+def _cached_pool_total_combos(family: str, grid_spec_json: Any, risk_spec_json: Any) -> int:
+    """計算策略池的總組合數（精準、可快取、避免展開超大列表）。"""
+    try:
+        fam = str(family or "").strip()
+        g_raw = grid_spec_json if grid_spec_json is not None else "{}"
+        r_raw = risk_spec_json if risk_spec_json is not None else "{}"
+
+        try:
+            grid_s = json.loads(g_raw) if isinstance(g_raw, str) else g_raw
+        except Exception:
+            grid_s = {}
+
+        try:
+            risk_s = json.loads(r_raw) if isinstance(r_raw, str) else r_raw
+        except Exception:
+            risk_s = {}
+
+        # Grid 組合數
+        if isinstance(grid_s, list):
+            g_size = int(len(grid_s))
+        else:
+            if hasattr(bt, "grid_combinations_count_from_ui"):
+                g_size = int(bt.grid_combinations_count_from_ui(fam, grid_s or {}))
+            else:
+                g_size = int(len(bt.grid_combinations_from_ui(fam, grid_s or {})))
+        g_size = max(0, int(g_size))
+
+        # Risk 組合數
+        def _fr_count(a: Any, b: Any, step: Any) -> int:
+            try:
+                a = float(a); b = float(b); step = float(step)
+            except Exception:
+                return 0
+            if step <= 0:
+                return 0
+            if b < a:
+                return 0
+            return int(math.floor(((b - a) / step) + 1e-12)) + 1
+
+        r_size = 1
+        if fam in ["TEMA_RSI", "LaguerreRSI_TEMA"]:
+            mh_min = int((risk_s or {}).get("max_hold_min", 4))
+            mh_max = int((risk_s or {}).get("max_hold_max", 80))
+            mh_step = max(1, int((risk_s or {}).get("max_hold_step", 4)))
+            if mh_max < mh_min:
+                r_size = 0
+            else:
+                r_size = int(((mh_max - mh_min) // mh_step) + 1)
+        else:
+            if isinstance(risk_s, dict) and "tp_list" in risk_s and "sl_list" in risk_s and "max_hold_list" in risk_s:
+                r_size = max(0, len(risk_s.get("tp_list") or [])) * max(0, len(risk_s.get("sl_list") or [])) * max(0, len(risk_s.get("max_hold_list") or []))
+            else:
+                t_s = _fr_count((risk_s or {}).get("tp_min", 0.3), (risk_s or {}).get("tp_max", 1.2), (risk_s or {}).get("tp_step", 0.1))
+                s_s = _fr_count((risk_s or {}).get("sl_min", 0.3), (risk_s or {}).get("sl_max", 1.2), (risk_s or {}).get("sl_step", 0.1))
+                mh_min = int((risk_s or {}).get("max_hold_min", 4))
+                mh_max = int((risk_s or {}).get("max_hold_max", 80))
+                mh_step = max(1, int((risk_s or {}).get("max_hold_step", 4)))
+                if mh_max < mh_min:
+                    m_s = 0
+                else:
+                    m_s = int(((mh_max - mh_min) // mh_step) + 1)
+                r_size = int(t_s) * int(s_s) * int(m_s)
+
+        return int(g_size * max(0, int(r_size)))
+    except Exception:
+        return 0
+
+
 def _partition_bucket(task: Dict[str, Any], system_user_id: int) -> str:
     status = str(task.get("status") or "")
     uid = int(task.get("user_id") or 0)
@@ -1896,25 +1981,71 @@ def _partition_bucket(task: Dict[str, Any], system_user_id: int) -> str:
     return "其他"
 
 
-def _partition_map_html(tasks: List[Dict[str, Any]], system_user_id: int) -> str:
-    n = len(tasks)
+def _partition_map_html(tasks: List[Dict[str, Any]], num_partitions: int, system_user_id: int) -> str:
+    n = int(num_partitions or 0)
     if n <= 0:
         return '<div class="small-muted">無分割資料</div>'
 
+    # 同一分割可能存在多筆任務紀錄（斷線接手、重派等），這裡做去重，避免顯示與統計被放大
+    best: Dict[int, Dict[str, Any]] = {}
+
+    def _status_rank(s: str) -> int:
+        if s == "completed":
+            return 3
+        if s == "running":
+            return 2
+        if s == "assigned":
+            return 1
+        return 0
+
+    def _pick_better(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
+        sa = str(a.get("status") or "")
+        sb = str(b.get("status") or "")
+        ra = _status_rank(sa)
+        rb = _status_rank(sb)
+        if rb != ra:
+            return b if rb > ra else a
+        ta = str(a.get("updated_at") or a.get("created_at") or "")
+        tb = str(b.get("updated_at") or b.get("created_at") or "")
+        if tb != ta:
+            return b if tb > ta else a
+        ia = int(a.get("id") or 0)
+        ib = int(b.get("id") or 0)
+        return b if ib > ia else a
+
+    for t in tasks or []:
+        try:
+            idx = int(t.get("partition_idx") or 0)
+        except Exception:
+            idx = 0
+        if idx < 0 or idx >= n:
+            continue
+        if idx not in best:
+            best[idx] = t
+        else:
+            best[idx] = _pick_better(best[idx], t)
+
     cols = int(min(48, max(12, int(math.sqrt(n)) + 1)))
     cells: List[str] = []
-    for t in tasks:
-        idx = int(t.get("partition_idx") or 0)
-        bucket = _partition_bucket(t, system_user_id)
+    for idx in range(n):
+        t = best.get(idx)
+        if t:
+            bucket = _partition_bucket(t, system_user_id)
+            user_name = str(t.get("username") or "")
+        else:
+            bucket = "待挖掘"
+            user_name = ""
+
         cls = {
             "已完成": "pm_done",
             "執行中": "pm_running",
             "已預訂": "pm_reserved",
             "待挖掘": "pm_available",
         }.get(bucket, "pm_other")
-        user_name = str(t.get("username") or "")
+
         title = f"分割 {idx+1}/{n} · {bucket}" + (f" · {user_name}" if user_name else "")
         cells.append(f'<div class="pm_cell {cls}" title="{html.escape(title, quote=True)}"></div>')
+
     return f'<div class="pm_grid" style="grid-template-columns: repeat({cols}, 10px);">{"".join(cells)}</div>'
 
 
@@ -1931,44 +2062,6 @@ def _render_global_progress(cycle_id: int) -> None:
         st.markdown('<div class="small-muted">目前沒有可用的進度資料。</div>', unsafe_allow_html=True)
         return
 
-    # [專家級修復] 精準動態計算策略池的真實組合總數，支援使用者自訂的極端 JSON 列表 (徹底解決 5120 問題)
-    def _calc_pool_est(p_data: dict) -> float:
-        try:
-            fam = str(p_data.get("family", ""))
-            g_str = p_data.get("grid_spec_json") or "{}"
-            r_str = p_data.get("risk_spec_json") or "{}"
-            grid_s = json.loads(g_str) if isinstance(g_str, str) else g_str
-            risk_s = json.loads(r_str) if isinstance(r_str, str) else r_str
-            
-            # 若使用者傳入的是明確的 JSON 列表 (List)，直接取長度；否則走 UI 範圍演算
-            if isinstance(grid_s, list):
-                g_size = max(1, len(grid_s))
-            else:
-                gc = bt.grid_combinations_from_ui(fam, grid_s)
-                g_size = max(1, len(gc))
-            
-            # 計算 Risk 組合大小 (同步支援使用者傳入自訂風控列表)
-            if fam in ["TEMA_RSI", "LaguerreRSI_TEMA"]:
-                mh_min = int(risk_s.get("max_hold_min", 4))
-                mh_max = int(risk_s.get("max_hold_max", 80))
-                mh_step = max(1, int(risk_s.get("max_hold_step", 4)))
-                r_size = max(1, len(list(range(mh_min, mh_max + 1, mh_step))))
-            else:
-                if isinstance(risk_s, dict) and "tp_list" in risk_s and "sl_list" in risk_s and "max_hold_list" in risk_s:
-                    r_size = max(1, len(risk_s["tp_list"])) * max(1, len(risk_s["sl_list"])) * max(1, len(risk_s["max_hold_list"]))
-                else:
-                    def fr(a, b, step): return max(1, int(round((float(b) - float(a)) / float(step))) + 1) if float(step) > 0 else 1
-                    t_s = fr(risk_s.get("tp_min",0.3), risk_s.get("tp_max",1.2), risk_s.get("tp_step",0.1))
-                    s_s = fr(risk_s.get("sl_min",0.3), risk_s.get("sl_max",1.2), risk_s.get("sl_step",0.1))
-                    mh_min = int(risk_s.get("max_hold_min", 4))
-                    mh_max = int(risk_s.get("max_hold_max", 80))
-                    mh_step = max(1, int(risk_s.get("max_hold_step", 4)))
-                    m_s = max(1, len(list(range(mh_min, mh_max + 1, mh_step))))
-                    r_size = t_s * s_s * m_s
-            return float(g_size * r_size)
-        except Exception:
-            return 0.0
-
     families = sorted({str(p.get("family") or "").strip() for p in pools_all if str(p.get("family") or "").strip()})
     family_opts = ["全部策略"] + families
     sel_family = st.selectbox("查看策略全域進度", options=family_opts, index=0, key=f"gp_family_{int(cycle_id)}")
@@ -1976,125 +2069,189 @@ def _render_global_progress(cycle_id: int) -> None:
     pools = pools_all
     if sel_family != "全部策略":
         pools = [p for p in pools_all if str(p.get("family") or "").strip() == sel_family]
-        
-    total_est = 0.0
-    total_done = 0.0
+
+    # ── 聚合（以「分割」為單位，而不是以「目前有幾筆 mining_tasks」為單位）
+    # 重要：任務表可能只有被領取過的分割才會出現資料列，所以統計一定要補上「尚未出現的分割」。
+    total_true = 0
+    total_done = 0
     total_running = 0
-    total_assigned = 0
     total_completed = 0
     total_reserved = 0
 
-    for p in pools:
-        pool_true_total = _calc_pool_est(p)
-        num_parts = max(1, int(p.get("num_partitions") or 1))
-        est_per_task = pool_true_total / num_parts
-        
-        for t in p.get("tasks") or []:
-            est = est_per_task
-            prog_raw = t.get("progress") or t.get("progress_json") or "{}"
-            if isinstance(prog_raw, str):
-                try:
-                    prog = json.loads(prog_raw)
-                except Exception:
-                    prog = {}
-            else:
-                prog = prog_raw if isinstance(prog_raw, dict) else {}
-                
-            # 若任務有回報真實 combos_total，則以回報的為主更精準
-            reported_total = float(prog.get("combos_total") or 0.0)
-            if reported_total > 0:
-                est = reported_total
-                
-            done = float(prog.get("combos_done") or 0.0)
-            status = str(t.get("status") or "")
-
-            total_est += est
-            total_done += done
-
-            if status == "running":
-                total_running += 1
-            elif status == "completed":
-                total_completed += 1
-            elif status == "assigned":
-                total_assigned += 1
-                if int(t.get("user_id") or 0) != int(system_uid):
-                    total_reserved += 1
-
-    ratio = (total_done / total_est) if total_est > 0 else 0.0
-    paid_sum = 0.0
-    try:
-        paid_sum = float(_cached_global_paid_payout_sum(int(cycle_id)) or 0.0)
-    except Exception:
-        paid_sum = 0.0
-
-    st.markdown(_section_title_html("全域挖掘進度", "統計全部用戶已跑組合數、任務完成數與全域進度。下方圖表顯示各策略池分割狀態。", level=4), unsafe_allow_html=True)
-    st.progress(min(1.0, max(0.0, float(ratio))))
-
-    kcols = st.columns(4)
-    with kcols[0]:
-        st.markdown(_render_kpi("全球已跑組合數", f"{int(total_done):,}", f"預估總量 {int(total_est):,}", help_text="累計所有用戶已測試的參數組合數。預估總量來自策略池的工作量精準估計。"), unsafe_allow_html=True)
-    with kcols[1]:
-        st.markdown(_render_kpi("全球任務完成總數", f"{int(total_completed):,}", f"執行中 {int(total_running):,}", help_text="完成代表分割任務已跑完並上傳結果。執行中表示目前有工作端或伺服器正在運算。"), unsafe_allow_html=True)
-    with kcols[2]:
-        st.markdown(_render_kpi("全球挖礦進度", f"{ratio*100:.1f}%", f"策略範圍 {sel_family}", help_text="已跑組合數 / 預估總量。可用上方選單切換策略範圍。"), unsafe_allow_html=True)
-    with kcols[3]:
-        st.markdown(_render_kpi("全用戶已實現分潤", f"{paid_sum:,.6f}", "USDT", help_text="本週期已完成發放並標記為已支付的分潤總額。"), unsafe_allow_html=True)
-
-    recs: List[Dict[str, Any]] = []
     pool_rows: List[Dict[str, Any]] = []
-    for p in pools:
-        pool_name = str(p.get("pool_name") or "") or f"Pool {p.get('pool_id')}"
-        tasks = list(p.get("tasks") or [])
-        
-        pool_true_total = _calc_pool_est(p)
-        num_parts = max(1, int(p.get("num_partitions") or 1))
-        est_per_task = pool_true_total / num_parts
+    recs: List[Dict[str, Any]] = []
 
-        est_sum = 0.0
-        done_sum = 0.0
-        running = 0
-        
-        by_bucket: Dict[str, float] = {}
+    # 為了後面顯示分割分佈，只保留 pool_id -> (pool, num_parts, tasks)
+    pools_for_map: List[Dict[str, Any]] = []
+
+    def _status_rank(s: str) -> int:
+        if s == "completed":
+            return 3
+        if s == "running":
+            return 2
+        if s == "assigned":
+            return 1
+        return 0
+
+    def _pick_better(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
+        sa = str(a.get("status") or "")
+        sb = str(b.get("status") or "")
+        ra = _status_rank(sa)
+        rb = _status_rank(sb)
+        if rb != ra:
+            return b if rb > ra else a
+        ta = str(a.get("updated_at") or a.get("created_at") or "")
+        tb = str(b.get("updated_at") or b.get("created_at") or "")
+        if tb != ta:
+            return b if tb > ta else a
+        ia = int(a.get("id") or 0)
+        ib = int(b.get("id") or 0)
+        return b if ib > ia else a
+
+    for p in pools:
+        pool_id = int(p.get("id") or p.get("pool_id") or 0)
+        pool_name = str(p.get("name") or p.get("pool_name") or "") or f"Pool {pool_id}"
+        fam = str(p.get("family") or "").strip()
+        num_parts = max(1, int(p.get("num_partitions") or 1))
+
+        # 精準總量：完全由策略/風控規格推導，不依賴 mining_tasks 是否存在
+        pool_total = int(_cached_pool_total_combos(fam, p.get("grid_spec_json"), p.get("risk_spec_json")))
+        pool_total = max(0, int(pool_total))
+
+        # 去重後的任務：同一 partition_idx 可能有多筆紀錄（重派/接手），只取最合理的那筆
+        tasks = list(p.get("tasks") or [])
+        best: Dict[int, Dict[str, Any]] = {}
         for t in tasks:
-            est = est_per_task
-            prog_raw = t.get("progress") or t.get("progress_json") or "{}"
-            if isinstance(prog_raw, str):
+            try:
+                idx = int(t.get("partition_idx") or 0)
+            except Exception:
+                idx = 0
+            if idx < 0 or idx >= num_parts:
+                continue
+            if idx not in best:
+                best[idx] = t
+            else:
+                best[idx] = _pick_better(best[idx], t)
+
+        # 進度 done（只算每個分割的最佳紀錄一次）
+        done_sum = 0
+        known_total_sum = 0  # 已回報 combos_total 的分割總量
+        bucket_known: Dict[str, float] = {}
+        bucket_unknown_parts: Dict[str, int] = {}
+
+        bucket_counts: Dict[str, int] = {"已完成": 0, "執行中": 0, "已預訂": 0, "待挖掘": 0, "其他": 0}
+
+        for idx, t in best.items():
+            bucket = _partition_bucket(t, system_uid)
+            bucket_counts[bucket] = bucket_counts.get(bucket, 0) + 1
+
+            prog = t.get("progress") or t.get("progress_json") or {}
+            if isinstance(prog, str):
                 try:
-                    prog = json.loads(prog_raw)
+                    prog = json.loads(prog)
                 except Exception:
                     prog = {}
+
+            try:
+                done_i = int(float(prog.get("combos_done") or 0))
+            except Exception:
+                done_i = 0
+            if done_i < 0:
+                done_i = 0
+
+            try:
+                rep_total = float(prog.get("combos_total") or 0.0)
+            except Exception:
+                rep_total = 0.0
+
+            if rep_total > 0:
+                known_total_sum += float(rep_total)
+                bucket_known[bucket] = bucket_known.get(bucket, 0.0) + float(rep_total)
+                if done_i > int(rep_total):
+                    done_i = int(rep_total)
             else:
-                prog = prog_raw if isinstance(prog_raw, dict) else {}
-                
-            reported_total = float(prog.get("combos_total") or 0.0)
-            if reported_total > 0:
-                est = reported_total
-                
-            done = float(prog.get("combos_done") or 0.0)
-            status = str(t.get("status") or "")
+                bucket_unknown_parts[bucket] = bucket_unknown_parts.get(bucket, 0) + 1
 
-            est_sum += est
-            done_sum += done
-            if status == "running":
-                running += 1
+            done_sum += int(done_i)
 
-            b = _partition_bucket(t, system_uid)
-            by_bucket[b] = by_bucket.get(b, 0.0) + est
+        # 尚未被領取過的分割，一律視為「待挖掘」
+        missing = max(0, int(num_parts - len(best)))
+        if missing > 0:
+            bucket_counts["待挖掘"] = bucket_counts.get("待挖掘", 0) + missing
+            bucket_unknown_parts["待挖掘"] = bucket_unknown_parts.get("待挖掘", 0) + missing
 
-        r = (done_sum / est_sum) if est_sum > 0 else 0.0
+        # 將未回報 combos_total 的分割，用「剩餘總量」按分割數量比例分配，確保總量精準等於 pool_total
+        remaining = float(max(0, pool_total)) - float(max(0.0, known_total_sum))
+        if remaining < 0:
+            remaining = 0.0
+        unk_parts_total = int(sum(bucket_unknown_parts.values()))
+        bucket_est: Dict[str, float] = {}
+        for b, v in bucket_known.items():
+            bucket_est[b] = float(bucket_est.get(b, 0.0) + float(v))
+        if unk_parts_total > 0 and remaining > 0:
+            for b, n_unk in bucket_unknown_parts.items():
+                bucket_est[b] = float(bucket_est.get(b, 0.0) + (remaining * (float(n_unk) / float(unk_parts_total))))
+
+        # 若全部分割都回報 combos_total，就 bucket_est 可能為空：補上 bucket_known 以外的 0
+        for b in ["已完成", "執行中", "已預訂", "待挖掘"]:
+            bucket_est.setdefault(b, 0.0)
+
+        # Pool KPI
+        pool_ratio = (float(done_sum) / float(pool_total)) if pool_total > 0 else 0.0
+        if pool_ratio < 0:
+            pool_ratio = 0.0
+        if pool_ratio > 1:
+            pool_ratio = 1.0
+
+        total_true += int(pool_total)
+        total_done += int(done_sum)
+
+        total_running += int(bucket_counts.get("執行中", 0))
+        total_completed += int(bucket_counts.get("已完成", 0))
+        total_reserved += int(bucket_counts.get("已預訂", 0))
+
         pool_rows.append(
             {
                 "策略池": pool_name,
                 "標的": str(p.get("symbol") or ""),
                 "週期": f"{int(p.get('timeframe_min') or 0)}m",
-                "策略": str(p.get("family") or ""),
-                "進度": f"{r*100:.1f}%",
-                "執行中": running,
+                "策略": fam,
+                "分割數": int(num_parts),
+                "進度": f"{pool_ratio*100:.1f}%",
+                "執行中": int(bucket_counts.get("執行中", 0)),
+                "已完成": int(bucket_counts.get("已完成", 0)),
+                "待挖掘": int(bucket_counts.get("待挖掘", 0)),
             }
         )
 
-        for b, v in by_bucket.items():
-            recs.append({"策略池": f"{pool_name}", "狀態": b, "預估組合": v})
+        for b, v in bucket_est.items():
+            recs.append({"策略池": pool_name, "狀態": b, "預估組合": float(v)})
+
+        pools_for_map.append({"pool_id": pool_id, "pool_name": pool_name, "meta": f"{p.get('symbol')} · {p.get('timeframe_min')}m · {fam}", "num_partitions": num_parts, "tasks": tasks})
+
+    ratio = (float(total_done) / float(total_true)) if total_true > 0 else 0.0
+    if ratio < 0:
+        ratio = 0.0
+    if ratio > 1:
+        ratio = 1.0
+
+    try:
+        paid_sum = float(_cached_global_paid_payout_sum(int(cycle_id)) or 0.0)
+    except Exception:
+        paid_sum = 0.0
+
+    st.markdown(_section_title_html("全域挖掘進度", "統計全部用戶已跑組合數、任務完成數與全域進度。", level=4), unsafe_allow_html=True)
+    st.progress(float(ratio))
+
+    kcols = st.columns(4)
+    with kcols[0]:
+        st.markdown(_render_kpi("全球已跑組合數", f"{int(total_done):,}", f"總量 {int(total_true):,}", help_text="累計所有用戶已測試的參數組合數。總量由策略池規格精準推導，與任務表是否存在無關。"), unsafe_allow_html=True)
+    with kcols[1]:
+        st.markdown(_render_kpi("全球任務完成總數", f"{int(total_completed):,}", f"執行中 {int(total_running):,}", help_text="完成/執行中以『分割』為單位統計。若分割被重派或接手，只會計一次。"), unsafe_allow_html=True)
+    with kcols[2]:
+        st.markdown(_render_kpi("全球挖礦進度", f"{ratio*100:.1f}%", f"策略範圍 {sel_family}", help_text="已跑組合數 / 總量。可用上方選單切換策略範圍。"), unsafe_allow_html=True)
+    with kcols[3]:
+        st.markdown(_render_kpi("全用戶已實現分潤", f"{paid_sum:,.6f}", "USDT", help_text="本週期已完成發放並標記為已支付的分潤總額。"), unsafe_allow_html=True)
 
     if recs:
         df = pd.DataFrame(recs)
@@ -2102,25 +2259,24 @@ def _render_global_progress(cycle_id: int) -> None:
         st.plotly_chart(fig, use_container_width=True)
 
     if pool_rows:
-        st.markdown(_section_title_html("策略池概覽", "列出每個策略池的目標、週期、策略族與進度。進度是該池已跑組合數占預估總量的比例。", level=4), unsafe_allow_html=True)
+        st.markdown(_section_title_html("策略池概覽", "列出每個策略池的目標、週期、策略族與進度。", level=4), unsafe_allow_html=True)
         st.dataframe(pd.DataFrame(pool_rows), use_container_width=True, hide_index=True)
 
-    st.markdown(_section_title_html("分割分佈", "每個策略池會被切成多個分割。方格顯示各分割目前狀態：待挖掘、已預訂、執行中、已完成。", level=4), unsafe_allow_html=True)
-    for p in pools:
-        pool_name = str(p.get("pool_name") or "") or f"Pool {p.get('pool_id')}"
-        meta = f"{p.get('symbol')} · {p.get('timeframe_min')}m · {p.get('family')}"
-        with st.expander(f"{pool_name}（{meta}）", expanded=False):
-            tasks = list(p.get("tasks") or [])
-            st.markdown(_partition_map_html(tasks, system_uid), unsafe_allow_html=True)
-            st.markdown(
-                '<div class="pm_legend">'
-                '<span class="pm_key"><span class="pm_cell pm_available"></span>待挖掘</span>'
-                '<span class="pm_key"><span class="pm_cell pm_reserved"></span>已預訂</span>'
-                '<span class="pm_key"><span class="pm_cell pm_running"></span>執行中</span>'
-                '<span class="pm_key"><span class="pm_cell pm_done"></span>已完成</span>'
-                '</div>',
-                unsafe_allow_html=True,
-            )
+    st.markdown(_section_title_html("分割分佈", "只顯示一個策略池的分割格，避免一次渲染大量格子導致載入變慢。", level=4), unsafe_allow_html=True)
+    if pools_for_map:
+        labels = [f'{x["pool_name"]}（{x["meta"]}）' for x in pools_for_map]
+        sel = st.selectbox("選擇策略池", options=list(range(len(labels))), format_func=lambda i: labels[i], index=0, key=f"pm_sel_{int(cycle_id)}_{sel_family}")
+        chosen = pools_for_map[int(sel)]
+        st.markdown(_partition_map_html(chosen["tasks"], int(chosen["num_partitions"]), system_uid), unsafe_allow_html=True)
+        st.markdown(
+            '<div class="pm_legend">'
+            '<span class="pm_dot pm_available"></span>待挖掘'
+            '<span class="pm_dot pm_reserved"></span>已預訂'
+            '<span class="pm_dot pm_running"></span>執行中'
+            '<span class="pm_dot pm_done"></span>已完成'
+            '</div>',
+            unsafe_allow_html=True,
+        )
 def _page_tutorial(user: Optional[Dict[str, Any]] = None) -> None:
     st.markdown(f"### {APP_TITLE} · 使用指引")
 
@@ -2523,9 +2679,9 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                             "task_queue_all",
                             {"queued": int(result.get("queued") or 0), "skipped": int(result.get("skipped") or 0)},
                         )
-                        st.toast(f"已成功排程 {len(to_queue)} 個任務", icon=" ")
+                        st.toast(f"已成功排程 {len(to_queue)} 個任務", icon="恭喜")
                     else:
-                        st.toast("目前無可執行的任務", icon="ℹ️")
+                        st.toast("目前無可執行的任務", icon="再等等吧")
                     
                     time.sleep(0.5)
                     st.rerun()
