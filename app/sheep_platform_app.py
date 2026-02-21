@@ -914,16 +914,19 @@ def _init_once() -> None:
         if row:
             conn = db._conn()
             try:
+                pw_hash = hash_password(admin_password)
+                pw_hash_str = pw_hash.decode('utf-8') if isinstance(pw_hash, bytes) else str(pw_hash)
                 conn.execute(
                     "UPDATE users SET password_hash = ?, role = 'admin', disabled = 0 WHERE id = ?",
-                    (hash_password(admin_password), int(row["id"])),
+                    (pw_hash_str, int(row["id"])),
                 )
                 conn.commit()
             finally:
                 conn.close()
         else:
-            db.create_user(username=admin_username, password_hash=hash_password(admin_password), role="admin", wallet_address="", wallet_chain="TRC20")
-
+            pw_hash = hash_password(admin_password)
+            pw_hash_str = pw_hash.decode('utf-8') if isinstance(pw_hash, bytes) else str(pw_hash)
+            db.create_user(username=admin_username, password_hash=pw_hash_str, role="admin", wallet_address="", wallet_chain="TRC20")
         try:
             db.write_audit_log(None, "ensure_admin", {"username": admin_username})
         except Exception:
@@ -1082,14 +1085,31 @@ def _login_form() -> None:
         st.error("帳號已停用。")
         return
 
-    if db.is_user_locked(user):
+    if db.is_user_locked(int(user["id"])):
         st.error("登入已鎖定。")
         return
 
+    # [專家除錯] 強化密碼驗證邏輯，完美處理資料庫儲存為 bytes/str 以及字串化 bytes (如 "b'...'") 的潛在錯誤
+    is_valid = False
+    hash_stored = user.get("password_hash", "")
+    
+    if isinstance(hash_stored, str):
+        if hash_stored.startswith("b'") and hash_stored.endswith("'"):
+            hash_stored = hash_stored[2:-1]
+        elif hash_stored.startswith('b"') and hash_stored.endswith('"'):
+            hash_stored = hash_stored[2:-1]
+            
     try:
-        is_valid = verify_password(password, user["password_hash"])
+        is_valid = verify_password(password, hash_stored)
     except TypeError:
-        is_valid = verify_password(password.encode("utf-8"), user["password_hash"])
+        pw_bytes = password.encode("utf-8") if isinstance(password, str) else password
+        hash_bytes = hash_stored.encode("utf-8") if isinstance(hash_stored, str) else hash_stored
+        try:
+            is_valid = verify_password(pw_bytes, hash_bytes)
+        except Exception:
+            is_valid = False
+    except Exception:
+        is_valid = False
 
     if not is_valid:
         db.update_user_login_state(int(user["id"]), success=False)

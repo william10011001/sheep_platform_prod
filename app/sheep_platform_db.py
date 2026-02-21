@@ -1511,7 +1511,7 @@ def _login_form() -> None:
         st.error("帳號已停用。")
         return
 
-    if db.is_user_locked(user):
+    if db.is_user_locked(int(user["id"])):
         st.error("登入已鎖定。")
         return
 
@@ -2157,8 +2157,10 @@ def _page_auth() -> None:
     st.markdown("</div>", unsafe_allow_html=True)
 
     if dlg_name == "onboarding":
+        st.session_state["auth_dialog"] = ""
         _render_auth_onboarding_dialog()
     elif dlg_name == "tos":
+        st.session_state["auth_dialog"] = ""
         _render_tos_dialog()
 
 def _help_icon_html(text: str) -> str:
