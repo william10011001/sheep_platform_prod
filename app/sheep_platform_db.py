@@ -1084,7 +1084,7 @@ def create_factor_pool(cycle_id: int, name: str, symbol: str, timeframe_min: int
     conn = _conn()
     try:
         for s, t in targets:
-            # 檢查是否已存在
+            # 修正：精準檢查是否已存在於該週期，避免重複建立導致任務派發混亂
             exist = conn.execute("SELECT id FROM factor_pools WHERE cycle_id=? AND symbol=? AND timeframe_min=? AND family=?", (cycle_id, s, t, family)).fetchone()
             if exist:
                 ids.append(exist["id"])
@@ -1096,11 +1096,14 @@ def create_factor_pool(cycle_id: int, name: str, symbol: str, timeframe_min: int
                 INSERT INTO factor_pools (cycle_id, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (cycle_id, expanded_name, s, t, years, family, json.dumps(grid_spec, ensure_ascii=False), json.dumps(risk_spec, ensure_ascii=False), num_partitions, seed, 1 if active else 0, _now_iso())
+                (cycle_id, expanded_name, s, t, int(years), family, json.dumps(grid_spec, ensure_ascii=False), json.dumps(risk_spec, ensure_ascii=False), int(num_partitions), int(seed), 1 if active else 0, _now_iso())
             )
             ids.append(cur.lastrowid)
         conn.commit()
         return ids
+    except Exception as e:
+        print(f"[DB ERROR] create_factor_pool fatal: {e}")
+        raise
     finally:
         conn.close()
 

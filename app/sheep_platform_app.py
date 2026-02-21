@@ -3689,28 +3689,6 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
                     if batch_json.strip():
                         # 批量模式 - 專家級容錯解析
                         clean_json = batch_json.strip()
-                        # ... (原有的 JSON 解析邏輯保持不變) ...
-                        pool_list = raw_data if isinstance(raw_data, list) else [raw_data]
-                        success_count = 0
-                        for p_idx, p_item in enumerate(pool_list):
-                            try:
-                                pids = db.create_factor_pool(
-                                    cycle_id=cycle_id,
-                                    name=str(p_item.get("name", f"Imported Pool {p_idx+1}")),
-                                    symbol=str(p_item.get("symbol", "BTC_USDT")),
-                                    timeframe_min=int(p_item.get("timeframe_min", 30)),
-                                    years=int(p_item.get("years", 3)),
-                                    family=str(p_item.get("family", "TEMA_RSI")),
-                                    grid_spec=p_item.get("grid_spec", {}),
-                                    risk_spec=p_item.get("risk_spec", {}),
-                                    num_partitions=int(p_item.get("num_partitions", 128)),
-                                    seed=int(p_item.get("seed", 0)),
-                                    active=bool(p_item.get("active", True)),
-                                    auto_expand=auto_expand_all # 注入自動擴展參數
-                                )
-                                success_count += len(pids)
-                            except Exception as item_e:
-                                st.error(f"第 {p_idx+1} 個物件匯入失敗：{item_e}")
                         # 自動修正常見的手寫 JSON 結尾錯誤（如最後多出的逗號或錯誤的括號）
                         if clean_json.endswith('}') and clean_json.count('[') > clean_json.count(']'):
                             clean_json += ']'
@@ -3719,7 +3697,7 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
                             raw_data = json.loads(clean_json)
                         except json.JSONDecodeError as je:
                             st.error(f"❌ JSON 語法錯誤：{je.msg} (行 {je.lineno}, 列 {je.colno})")
-                            st.info("💡 提示：請檢查第 1046 行附近是否有遺漏的逗號或多餘的括號。")
+                            st.info("💡 提示：請檢查 JSON 格式是否正確，括號是否對齊。")
                             with st.expander("查看錯誤位置上下文"):
                                 lines = clean_json.split('\n')
                                 start_err = max(0, je.lineno - 3)
@@ -3733,7 +3711,8 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
                         success_count = 0
                         for p_idx, p_item in enumerate(pool_list):
                             try:
-                                pid = db.create_factor_pool(
+                                # 這裡修正了原先重複定義 pool_list 的錯誤，並統一口徑使用 auto_expand 參數
+                                pids = db.create_factor_pool(
                                     cycle_id=cycle_id,
                                     name=str(p_item.get("name", f"Imported Pool {p_idx+1}")),
                                     symbol=str(p_item.get("symbol", "BTC_USDT")),
@@ -3744,31 +3723,33 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
                                     risk_spec=p_item.get("risk_spec", {}),
                                     num_partitions=int(p_item.get("num_partitions", 128)),
                                     seed=int(p_item.get("seed", 0)),
-                                    active=bool(p_item.get("active", True))
+                                    active=bool(p_item.get("active", True)),
+                                    auto_expand=auto_expand_all
                                 )
-                                success_count += 1
+                                success_count += len(pids)
                             except Exception as item_e:
                                 st.error(f"第 {p_idx+1} 個物件匯入失敗：{item_e}")
                         
-                        st.success(f"✅ 成功批量匯入 {success_count} 個策略池！")
+                        st.success(f"✅ 成功處理 {success_count} 個策略分片！")
                     else:
                         # 單筆模式
                         grid_spec = json.loads(grid_spec_json)
                         risk_spec = json.loads(risk_spec_json)
-                        pid = db.create_factor_pool(
+                        pids = db.create_factor_pool(
                             cycle_id=cycle_id,
                             name=str(name),
                             symbol=str(symbol),
                             timeframe_min=int(tf_min),
-                            years=int(years),
+                            years=int(years), # 修正：原先誤寫為 tf_min
                             family=str(family),
                             grid_spec=dict(grid_spec),
                             risk_spec=dict(risk_spec),
                             num_partitions=int(num_partitions),
                             seed=int(seed),
                             active=bool(active),
+                            auto_expand=auto_expand_all
                         )
-                        st.success(f"成功建立策略池 ID: {pid}")
+                        st.success(f"成功建立 {len(pids)} 個策略池（含自動擴展分片）")
                     
                     db.write_audit_log(int(user["id"]), "pool_batch_create", {"count": len(batch_json.strip()) if batch_json.strip() else 1})
                     time.sleep(1)
