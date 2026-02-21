@@ -4326,8 +4326,7 @@ def main() -> None:
         return
 
 
-if __name__ == "__main__":
-    main()
+# [專家修復] 移除誤貼的 Streamlit 執行區塊，防止 DB 模組被當作主程式遞迴執行而引發崩潰
 import sqlite3
 from datetime import datetime as _safe_dt, timezone as _safe_tz, timedelta as _safe_td
 
@@ -4866,8 +4865,7 @@ def get_global_progress_snapshot(cycle_id: int) -> dict:
             tasks_list = []
             for row in cur.fetchall():
                 t = dict(row)
-                t["estimated_combos"] = p.get("num_partitions", 1) * 10
-                # [專家修復] 在資料庫層級就確保 progress_json 被正確解析為 dict，根絕前端所有字串解析引發的崩潰
+                # 移除虛假的 estimated_combos，改由前端依照策略動態精準計算真實數量
                 try:
                     t["progress"] = json.loads(t.get("progress_json") or "{}")
                 except Exception:

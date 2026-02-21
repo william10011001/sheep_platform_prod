@@ -725,60 +725,80 @@ def _style() -> None:
         div[data-testid="stStatusWidget"] { display: none !important; }
         div[data-testid="stDecoration"] { display: none !important; }
 
-        /* [極端專家修復] 徹底解決收起/展開按鈕被遮擋與難以點擊的問題 */
-        /* 1. 展開按鈕 (Collapsed Control)：強制下移避開 Logo 並放大感應區與層級 */
+        /* [頂級專家防擋修復] 側邊欄收起/展開按鈕 UI/UX 徹底重構 */
+        /* 解除側邊欄的溢出隱藏限制，讓按鈕可以凸出去而不被切斷 */
+        section[data-testid="stSidebar"] {
+            overflow: visible !important;
+        }
+        section[data-testid="stSidebar"] > div:first-child {
+            overflow: visible !important;
+        }
+        
+        /* 1. 展開按鈕 (側邊欄收起時)：固定在畫面最左側中央，明顯的藍色懸浮拉環 */
         [data-testid="collapsedControl"] {
-          top: 100px !important;
-          left: 10px !important;
-          z-index: 2147483647 !important;
-          background-color: rgba(15, 23, 42, 0.9) !important;
-          border: 2px solid rgba(59, 130, 246, 0.6) !important;
-          border-radius: 12px !important;
-          box-shadow: 0 4px 16px rgba(0, 0, 0, 0.8), 0 0 12px rgba(59, 130, 246, 0.4) !important;
-          padding: 4px !important;
-          transition: all 0.2s ease !important;
+            display: flex !important;
+            opacity: 1 !important;
+            visibility: visible !important;
+            position: fixed !important;
+            top: 50% !important;
+            left: 0 !important;
+            transform: translateY(-50%) !important;
+            z-index: 2147483647 !important;
+            background: rgba(37, 99, 235, 0.95) !important;
+            border: 2px solid rgba(96, 165, 250, 0.8) !important;
+            border-left: none !important;
+            border-radius: 0 12px 12px 0 !important;
+            width: 40px !important;
+            height: 70px !important;
+            align-items: center !important;
+            justify-content: center !important;
+            box-shadow: 4px 0 20px rgba(0,0,0,0.8), 0 0 15px rgba(59,130,246,0.6) !important;
+            transition: all 0.2s ease !important;
         }
         [data-testid="collapsedControl"]:hover {
-          background-color: rgba(30, 58, 138, 1) !important;
-          border-color: rgba(96, 165, 250, 1) !important;
-          transform: scale(1.1) !important;
+            background: rgba(29, 78, 216, 1) !important;
+            width: 48px !important;
+            border-color: #ffffff !important;
+            box-shadow: 4px 0 25px rgba(0,0,0,0.9), 0 0 20px rgba(96,165,250,0.8) !important;
+            cursor: pointer !important;
         }
         [data-testid="collapsedControl"] svg {
-          fill: #ffffff !important;
-          width: 24px !important;
-          height: 24px !important;
+            fill: #ffffff !important;
+            width: 24px !important;
+            height: 24px !important;
         }
 
-        /* 2. 收起按鈕 (Collapse Button 內部)：移至側邊欄右側中間邊緣，極度顯眼防誤觸 */
-        button[data-testid="stSidebarCollapseButton"] {
-          position: fixed !important;
-          top: 50% !important;
-          right: -16px !important;
-          transform: translateY(-50%) !important;
-          opacity: 1 !important;
-          background: linear-gradient(90deg, rgba(15, 23, 42, 0.9), rgba(30, 58, 138, 0.9)) !important;
-          border: 1px solid rgba(120, 180, 255, 0.5) !important;
-          border-right: none !important;
-          border-radius: 12px 0 0 12px !important;
-          width: 36px !important;
-          height: 80px !important;
-          display: flex !important;
-          align-items: center !important;
-          justify-content: center !important;
-          z-index: 2147483647 !important;
-          box-shadow: -4px 0 12px rgba(0, 0, 0, 0.5) !important;
-          transition: all 0.2s ease !important;
+        /* 2. 收起按鈕 (側邊欄打開時)：釘在側邊欄的最右側邊緣中間（一半在內一半在外） */
+        [data-testid="stSidebarCollapseButton"] {
+            display: flex !important;
+            opacity: 1 !important;
+            visibility: visible !important;
+            position: absolute !important;
+            top: 50% !important;
+            right: -20px !important; 
+            transform: translateY(-50%) !important;
+            z-index: 2147483647 !important;
+            background: rgba(15, 23, 42, 1) !important;
+            border: 2px solid rgba(120, 180, 255, 0.8) !important;
+            border-radius: 50% !important;
+            width: 40px !important;
+            height: 40px !important;
+            align-items: center !important;
+            justify-content: center !important;
+            box-shadow: 0 0 16px rgba(0,0,0,0.8), 0 0 12px rgba(120,180,255,0.4) !important;
+            transition: all 0.2s ease !important;
         }
-        button[data-testid="stSidebarCollapseButton"]:hover {
-          right: 0 !important;
-          background: linear-gradient(90deg, rgba(30, 58, 138, 1), rgba(59, 130, 246, 1)) !important;
-          border-color: rgba(120, 180, 255, 0.9) !important;
-          box-shadow: -6px 0 16px rgba(59, 130, 246, 0.5) !important;
+        [data-testid="stSidebarCollapseButton"]:hover {
+            background: rgba(30, 58, 138, 1) !important;
+            border-color: #ffffff !important;
+            transform: translateY(-50%) scale(1.15) !important;
+            box-shadow: 0 0 20px rgba(59,130,246,0.8) !important;
+            cursor: pointer !important;
         }
-        button[data-testid="stSidebarCollapseButton"] svg {
-          fill: #ffffff !important;
-          width: 20px !important;
-          height: 20px !important;
+        [data-testid="stSidebarCollapseButton"] svg {
+            fill: #ffffff !important;
+            width: 20px !important;
+            height: 20px !important;
         }
 
         .stButton > button[kind="primary"], .stDownloadButton > button[kind="primary"] {
@@ -1857,8 +1877,8 @@ def _partition_map_html(tasks: List[Dict[str, Any]], system_user_id: int) -> str
 def _render_global_progress(cycle_id: int) -> None:
     try:
         snap = _cached_global_progress_snapshot(int(cycle_id))
-    except Exception:
-        st.warning("全域進度暫時無法讀取。")
+    except Exception as e:
+        st.warning(f"全域進度暫時無法讀取：{e}")
         return
 
     system_uid = int(snap.get("system_user_id") or 0)
@@ -1867,6 +1887,44 @@ def _render_global_progress(cycle_id: int) -> None:
         st.markdown('<div class="small-muted">目前沒有可用的進度資料。</div>', unsafe_allow_html=True)
         return
 
+    # [專家級修復] 精準動態計算策略池的真實組合總數，支援使用者自訂的極端 JSON 列表 (徹底解決 5120 問題)
+    def _calc_pool_est(p_data: dict) -> float:
+        try:
+            fam = str(p_data.get("family", ""))
+            g_str = p_data.get("grid_spec_json") or "{}"
+            r_str = p_data.get("risk_spec_json") or "{}"
+            grid_s = json.loads(g_str) if isinstance(g_str, str) else g_str
+            risk_s = json.loads(r_str) if isinstance(r_str, str) else r_str
+            
+            # 若使用者傳入的是明確的 JSON 列表 (List)，直接取長度；否則走 UI 範圍演算
+            if isinstance(grid_s, list):
+                g_size = max(1, len(grid_s))
+            else:
+                gc = bt.grid_combinations_from_ui(fam, grid_s)
+                g_size = max(1, len(gc))
+            
+            # 計算 Risk 組合大小 (同步支援使用者傳入自訂風控列表)
+            if fam in ["TEMA_RSI", "LaguerreRSI_TEMA"]:
+                mh_min = int(risk_s.get("max_hold_min", 4))
+                mh_max = int(risk_s.get("max_hold_max", 80))
+                mh_step = max(1, int(risk_s.get("max_hold_step", 4)))
+                r_size = max(1, len(list(range(mh_min, mh_max + 1, mh_step))))
+            else:
+                if isinstance(risk_s, dict) and "tp_list" in risk_s and "sl_list" in risk_s and "max_hold_list" in risk_s:
+                    r_size = max(1, len(risk_s["tp_list"])) * max(1, len(risk_s["sl_list"])) * max(1, len(risk_s["max_hold_list"]))
+                else:
+                    def fr(a, b, step): return max(1, int(round((float(b) - float(a)) / float(step))) + 1) if float(step) > 0 else 1
+                    t_s = fr(risk_s.get("tp_min",0.3), risk_s.get("tp_max",1.2), risk_s.get("tp_step",0.1))
+                    s_s = fr(risk_s.get("sl_min",0.3), risk_s.get("sl_max",1.2), risk_s.get("sl_step",0.1))
+                    mh_min = int(risk_s.get("max_hold_min", 4))
+                    mh_max = int(risk_s.get("max_hold_max", 80))
+                    mh_step = max(1, int(risk_s.get("max_hold_step", 4)))
+                    m_s = max(1, len(list(range(mh_min, mh_max + 1, mh_step))))
+                    r_size = t_s * s_s * m_s
+            return float(g_size * r_size)
+        except Exception:
+            return 0.0
+
     families = sorted({str(p.get("family") or "").strip() for p in pools_all if str(p.get("family") or "").strip()})
     family_opts = ["全部策略"] + families
     sel_family = st.selectbox("查看策略全域進度", options=family_opts, index=0, key=f"gp_family_{int(cycle_id)}")
@@ -1874,6 +1932,7 @@ def _render_global_progress(cycle_id: int) -> None:
     pools = pools_all
     if sel_family != "全部策略":
         pools = [p for p in pools_all if str(p.get("family") or "").strip() == sel_family]
+        
     total_est = 0.0
     total_done = 0.0
     total_running = 0
@@ -1882,10 +1941,12 @@ def _render_global_progress(cycle_id: int) -> None:
     total_reserved = 0
 
     for p in pools:
+        pool_true_total = _calc_pool_est(p)
+        num_parts = max(1, int(p.get("num_partitions") or 1))
+        est_per_task = pool_true_total / num_parts
+        
         for t in p.get("tasks") or []:
-            est = float(t.get("estimated_combos") or 0.0)
-            
-            # [極端專家修復] 安全解析 DB 傳回的 JSON 字串，徹底避免 AttributeError: 'str' object has no attribute 'get'
+            est = est_per_task
             prog_raw = t.get("progress") or t.get("progress_json") or "{}"
             if isinstance(prog_raw, str):
                 try:
@@ -1894,6 +1955,11 @@ def _render_global_progress(cycle_id: int) -> None:
                     prog = {}
             else:
                 prog = prog_raw if isinstance(prog_raw, dict) else {}
+                
+            # 若任務有回報真實 combos_total，則以回報的為主更精準
+            reported_total = float(prog.get("combos_total") or 0.0)
+            if reported_total > 0:
+                est = reported_total
                 
             done = float(prog.get("combos_done") or 0.0)
             status = str(t.get("status") or "")
@@ -1922,7 +1988,7 @@ def _render_global_progress(cycle_id: int) -> None:
 
     kcols = st.columns(4)
     with kcols[0]:
-        st.markdown(_render_kpi("全球已跑組合數", f"{int(total_done):,}", f"預估總量 {int(total_est):,}", help_text="累計所有用戶已測試的參數組合數。預估總量來自策略池的工作量估計。"), unsafe_allow_html=True)
+        st.markdown(_render_kpi("全球已跑組合數", f"{int(total_done):,}", f"預估總量 {int(total_est):,}", help_text="累計所有用戶已測試的參數組合數。預估總量來自策略池的工作量精準估計。"), unsafe_allow_html=True)
     with kcols[1]:
         st.markdown(_render_kpi("全球任務完成總數", f"{int(total_completed):,}", f"執行中 {int(total_running):,}", help_text="完成代表分割任務已跑完並上傳結果。執行中表示目前有工作端或伺服器正在運算。"), unsafe_allow_html=True)
     with kcols[2]:
@@ -1935,6 +2001,10 @@ def _render_global_progress(cycle_id: int) -> None:
     for p in pools:
         pool_name = str(p.get("pool_name") or "") or f"Pool {p.get('pool_id')}"
         tasks = list(p.get("tasks") or [])
+        
+        pool_true_total = _calc_pool_est(p)
+        num_parts = max(1, int(p.get("num_partitions") or 1))
+        est_per_task = pool_true_total / num_parts
 
         est_sum = 0.0
         done_sum = 0.0
@@ -1942,8 +2012,7 @@ def _render_global_progress(cycle_id: int) -> None:
         
         by_bucket: Dict[str, float] = {}
         for t in tasks:
-            est = float(t.get("estimated_combos") or 0.0)
-            # [專家修復] 安全解析 DB 傳回的 JSON 字串，避免 AttributeError: 'str' object has no attribute 'get'
+            est = est_per_task
             prog_raw = t.get("progress") or t.get("progress_json") or "{}"
             if isinstance(prog_raw, str):
                 try:
@@ -1952,6 +2021,10 @@ def _render_global_progress(cycle_id: int) -> None:
                     prog = {}
             else:
                 prog = prog_raw if isinstance(prog_raw, dict) else {}
+                
+            reported_total = float(prog.get("combos_total") or 0.0)
+            if reported_total > 0:
+                est = reported_total
                 
             done = float(prog.get("combos_done") or 0.0)
             status = str(t.get("status") or "")
@@ -2004,7 +2077,6 @@ def _render_global_progress(cycle_id: int) -> None:
                 '</div>',
                 unsafe_allow_html=True,
             )
-
 def _page_tutorial(user: Optional[Dict[str, Any]] = None) -> None:
     st.markdown(f"### {APP_TITLE} · 使用指引")
 
@@ -2255,39 +2327,29 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
         return
 
 def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
-    try:
-        cycle = db.get_active_cycle()
-        if not cycle or "id" not in cycle:
-            st.warning(" 週期尚未初始化，系統正在嘗試建立新週期...")
-            db.ensure_cycle_rollover()
-            cycle = db.get_active_cycle()
-            if not cycle:
-                st.error(" 週期建立失敗，請確認資料庫是否已正確初始化。")
-                return
-    except Exception as e:
-        st.error(f" 讀取任務週期時發生錯誤：{str(e)}")
-        import traceback
-        st.code(traceback.format_exc(), language="text")
-        return
+    cycle = db.get_active_cycle()
+    if not cycle:
+            st.error("週期未初始化。")
+            return
 
-    conn = db._conn()
-    try:
-        min_tasks = int(db.get_setting(conn, "min_tasks_per_user", 2))
-        max_tasks = int(db.get_setting(conn, "max_tasks_per_user", 6))
-        max_concurrent_jobs = int(db.get_setting(conn, "max_concurrent_jobs", 2))
-        min_trades = int(db.get_setting(conn, "min_trades", 40))
-        min_total_return_pct = float(db.get_setting(conn, "min_total_return_pct", 15.0))
-        max_drawdown_pct = float(db.get_setting(conn, "max_drawdown_pct", 25.0))
-        min_sharpe = float(db.get_setting(conn, "min_sharpe", 0.6))
-        exec_mode = str(db.get_setting(conn, "execution_mode", "server") or "server").strip().lower()
-        api_url = str(db.get_setting(conn, "worker_api_url", "http://127.0.0.1:8001") or "http://127.0.0.1:8001").strip()
-    finally:
-        conn.close()
+        conn = db._conn()
+        try:
+            min_tasks = int(db.get_setting(conn, "min_tasks_per_user", 2))
+            max_tasks = int(db.get_setting(conn, "max_tasks_per_user", 6))
+            max_concurrent_jobs = int(db.get_setting(conn, "max_concurrent_jobs", 2))
+            min_trades = int(db.get_setting(conn, "min_trades", 40))
+            min_total_return_pct = float(db.get_setting(conn, "min_total_return_pct", 15.0))
+            max_drawdown_pct = float(db.get_setting(conn, "max_drawdown_pct", 25.0))
+            min_sharpe = float(db.get_setting(conn, "min_sharpe", 0.6))
+            exec_mode = str(db.get_setting(conn, "execution_mode", "server") or "server").strip().lower()
+            api_url = str(db.get_setting(conn, "worker_api_url", "http://127.0.0.1:8001") or "http://127.0.0.1:8001").strip()
+        finally:
+            conn.close()
 
-    if exec_mode not in ("server", "worker"):
-        exec_mode = "server"
+        if exec_mode not in ("server", "worker"):
+            exec_mode = "server"
 
-    st.markdown("### 任務")
+        st.markdown("### 任務")
 
     pools_meta = db.list_factor_pools(int(cycle["id"]))
     fams = sorted({str(p.get("family") or "").strip() for p in pools_meta if str(p.get("family") or "").strip()})
@@ -2773,14 +2835,14 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
         keep_polling = bool(run_enabled)
 
         # - any_active=True：有人在跑 / 在隊列 -> 正常刷新
-    # - keep_polling=True：使用者點過「開始全部任務」(server) 或 run_enabled=True(worker)
-    #   即使暫時沒任務，也會持續刷新，才能無縫接新任務。
-    if auto_refresh and (any_active or keep_polling):
-        try:
-            time.sleep(float(refresh_s))
-        except Exception:
-            time.sleep(1.0)
-        st.rerun()
+        # - keep_polling=True：使用者點過「開始全部任務」(server) 或 run_enabled=True(worker)
+        #   即使暫時沒任務，也會持續刷新，才能無縫接新任務。
+        if auto_refresh and (any_active or keep_polling):
+            try:
+                time.sleep(float(refresh_s))
+            except Exception:
+                time.sleep(1.0)
+            st.rerun()
 
 
 def _render_candidates_and_submit(user: Dict[str, Any], task_row: Dict[str, Any]) -> None:

@@ -8628,7 +8628,8 @@ def app():
             st.caption("結果已保留。完成下載後可解除鎖定並返回設定。")
             if st.button("解除鎖定並返回設定", type="primary", use_container_width=True, key="confirm_next"):
                 # 解鎖：恢復 UI 互動
-                st.session_state["freeze_after_run"]
+                st.session_state["freeze_after_run"] = False
+                st.rerun()
 
         # [教授修正] 匯整 DataFrame - 移除獨立 TP/SL/MaxHold 欄位，改用 Risk JSON
         rows = []
