@@ -750,7 +750,36 @@ def _style() -> None:
         header[data-testid="stHeader"] { background: rgba(0,0,0,0); }
         footer { visibility: hidden; }
         #MainMenu { visibility: hidden; }
+        /* Hide Streamlit chrome (toolbar, status widget) for production look. */
+        div[data-testid="stToolbar"] { display: none !important; }
+        div[data-testid="stStatusWidget"] { display: none !important; }
+        div[data-testid="stDecoration"] { display: none !important; }
 
+        /* Force button palette to never use the default red primary color. */
+        .stButton > button[kind="primary"], .stDownloadButton > button[kind="primary"] {
+          background: linear-gradient(135deg, rgba(120,180,255,0.32), rgba(80,240,220,0.18)) !important;
+          border-color: rgba(120,180,255,0.70) !important;
+          color: var(--text) !important;
+        }
+        .stButton > button[kind="primary"]:hover, .stDownloadButton > button[kind="primary"]:hover {
+          border-color: rgba(120,180,255,0.85) !important;
+          filter: brightness(1.08) !important;
+        }
+
+        .stButton > button[kind="secondary"], .stDownloadButton > button[kind="secondary"] {
+          background: rgba(255,255,255,0.05) !important;
+          border-color: rgba(255,255,255,0.14) !important;
+          color: var(--text) !important;
+        }
+        .stButton > button[kind="secondary"]:hover, .stDownloadButton > button[kind="secondary"]:hover {
+          border-color: rgba(120,180,255,0.55) !important;
+          filter: brightness(1.05) !important;
+        }
+
+        /* Avoid any red focus ring coming from browser/theme defaults. */
+        .stButton > button:focus, .stDownloadButton > button:focus {
+          box-shadow: 0 0 0 2px rgba(120,180,255,0.35) !important;
+        }
         .stButton > button, .stDownloadButton > button {
           width: 100%;
           border-radius: 12px;
@@ -3540,17 +3569,23 @@ def main() -> None:
         st.markdown(f"### {APP_TITLE}")
         st.markdown(f'<div class="small-muted">{user["username"]} · {role}</div>', unsafe_allow_html=True)
 
-        page = st.radio(
-            "導航",
-            options=pages,
-            key="nav_page",
-            label_visibility="collapsed",
-        )
-        if st.button("登出"):
+        # Navigation (custom buttons instead of st.radio) to avoid default red dot indicator
+        current_page = str(st.session_state.get("nav_page") or pages[0])
+
+        for p in pages:
+            is_active = (p == current_page)
+            btn_type = "primary" if is_active else "secondary"
+            if st.button(p, key=f"nav_btn_{p}", type=btn_type, use_container_width=True):
+                st.session_state["nav_page"] = p
+                st.rerun()
+
+        st.markdown('<div style="height: 10px"></div>', unsafe_allow_html=True)
+
+        if st.button("登出", key="logout_btn", type="secondary", use_container_width=True):
             _logout()
             st.rerun()
 
-    page = str(page or pages[0])
+    page = str(st.session_state.get("nav_page") or pages[0])
 
     if page == "新手教學":
         _page_tutorial(user)
