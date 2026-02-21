@@ -133,39 +133,48 @@ iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
   pointer-events: none !important;
 }}
 
-/* [專家級終極修復] 強制側邊欄控制鈕永久顯示，提供高對比度底色，並阻絕任何 Hover 隱藏機制 */
-/* [專家級終極修復] 兼容新舊版 Streamlit，強制側邊欄控制鈕永久顯示，解決被隱藏或移出邊界問題 */
+/* [專家級終極修復] 徹底解決左側選單按鈕消失或無法點擊的問題 */
         div[data-testid="stSidebarCollapsedControl"],
         div[data-testid="collapsedControl"],
         button[kind="headerNoPadding"] {{
             position: fixed !important;
-            left: 15px !important; /* 避免緊貼邊緣導致被裁切 */
-            top: 15px !important;  /* 避開視窗最頂端 */
-            z-index: 2147483647 !important; /* 提至瀏覽器極限最高層級 */
-            padding: 8px 12px !important;
-    background: linear-gradient(135deg, rgba(37, 99, 235, 0.9) 0%, rgba(15, 23, 42, 0.9) 100%) !important;
-    border-bottom-right-radius: 14px !important;
-    border-right: 1px solid rgba(255,255,255,0.2) !important;
-    border-bottom: 1px solid rgba(255,255,255,0.2) !important;
-    box-shadow: 2px 2px 12px rgba(0,0,0,0.8) !important;
-    opacity: 1 !important;
-    visibility: visible !important;
-    display: flex !important;
-    transition: transform 0.2s ease, filter 0.2s ease !important;
-    cursor: pointer !important;
-    pointer-events: auto !important;
-}}
-div[data-testid="stSidebarCollapsedControl"]:hover,
-div[data-testid="collapsedControl"]:hover {{
-    transform: scale(1.05) !important;
-    filter: brightness(1.2) !important;
-}}
-div[data-testid="stSidebarCollapsedControl"] svg,
-div[data-testid="collapsedControl"] svg {{
-    fill: #ffffff !important;
-    width: 24px !important;
-    height: 24px !important;
-}}
+            left: 0px !important;
+            top: 0px !important;
+            z-index: 2147483647 !important;
+            padding: 12px 16px !important;
+            background: rgba(30, 41, 59, 0.95) !important;
+            border-bottom-right-radius: 12px !important;
+            border-right: 1px solid rgba(255,255,255,0.15) !important;
+            border-bottom: 1px solid rgba(255,255,255,0.15) !important;
+            box-shadow: 4px 4px 16px rgba(0,0,0,0.8) !important;
+            opacity: 1 !important;
+            visibility: visible !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            transition: all 0.2s ease !important;
+            cursor: pointer !important;
+            pointer-events: auto !important;
+        }}
+        div[data-testid="stSidebarCollapsedControl"]:hover,
+        div[data-testid="collapsedControl"]:hover,
+        button[kind="headerNoPadding"]:hover {{
+            background: rgba(59, 130, 246, 0.95) !important;
+            transform: scale(1.05) !important;
+            transform-origin: top left !important;
+        }}
+        div[data-testid="stSidebarCollapsedControl"] svg,
+        div[data-testid="collapsedControl"] svg,
+        button[kind="headerNoPadding"] svg {{
+            fill: #ffffff !important;
+            width: 28px !important;
+            height: 28px !important;
+        }}
+        /* 確保 Streamlit 頂部導覽列不遮擋此按鈕 */
+        header[data-testid="stHeader"] {{
+            pointer-events: none !important;
+            z-index: 2147483640 !important; 
+        }}
 
 @media (max-width: 720px) {{
   iframe[data-sheep-brand="1"],
@@ -751,31 +760,23 @@ def _style() -> None:
           color: #ffffff;
         }
 
-        header[data-testid="stHeader"] { background: transparent; }
-        footer { visibility: hidden; }
-        #MainMenu { visibility: hidden; }
+        header[data-testid="stHeader"] { background: transparent !important; pointer-events: none !important; z-index: 2147483640 !important; }
+        footer { visibility: hidden !important; }
+        #MainMenu { visibility: hidden !important; }
 
         /* [專家級修復] 徹底隱藏 Toolbar 避免任何層級遮擋側邊欄按鈕 */
-        div[data-testid="stToolbar"] {
-          display: none !important;
-        }
+        div[data-testid="stToolbar"] { display: none !important; }
         div[data-testid="stStatusWidget"] { display: none !important; }
         div[data-testid="stDecoration"] { display: none !important; }
-
-        
 
         /* 3. 修正主內容區塊的 Padding，防止內容被固定的 Brand Header 遮擋 */
         .main .block-container {
             padding-top: 100px !important;
         }
 
-        header[data-testid="stHeader"] {
-            background: transparent !important;
-            pointer-events: none !important; /* 讓 header 不擋住下方的點擊，但內部按鈕需設為 auto */
-            z-index: 2147483646 !important; /* 確保不阻擋側邊欄按鈕，但仍在前景 */
-        }
+        /* 讓 header 內部的元素（如按鈕）可點擊，但自身不阻擋滑鼠 */
         header[data-testid="stHeader"] * {
-            pointer-events: auto !important; /* 強制所有子元素可點擊 */
+            pointer-events: auto !important;
         }
 
         .stButton > button[kind="primary"], .stDownloadButton > button[kind="primary"] {
@@ -924,12 +925,82 @@ def _style() -> None:
         .pill-warn { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
         .pill-bad { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
         .pill-neutral { background: rgba(255, 255, 255, 0.1); color: #94a3b8; border: 1px solid rgba(255, 255, 255, 0.2); }
+
+        /* [專家級防護] 自訂側邊欄呼叫按鈕樣式 (當原生按鈕死掉時的無敵防線) */
+        #custom-sidebar-trigger {
+            position: fixed;
+            top: 0px;
+            left: 0px;
+            width: 52px;
+            height: 52px;
+            background: rgba(30, 41, 59, 0.95);
+            border-bottom-right-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.15);
+            border-top: none;
+            border-left: none;
+            z-index: 2147483647;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 4px 4px 16px rgba(0,0,0,0.8);
+            transition: all 0.2s ease;
+        }
+        #custom-sidebar-trigger:hover {
+            background: rgba(59, 130, 246, 0.95);
+        }
+        #custom-sidebar-trigger svg {
+            fill: #fff;
+            width: 28px;
+            height: 28px;
+        }
         </style>
+        
+        <script>
+        // [專家級防護] 動態注入備用側邊欄展開按鈕，徹底解決原生按鈕被隱藏或框架更新導致失效的問題
+        (function() {
+            if (window.parent.document.getElementById('custom-sidebar-trigger')) return;
+            const btn = window.parent.document.createElement('div');
+            btn.id = 'custom-sidebar-trigger';
+            btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"></path></svg>';
+            btn.title = "展開側邊欄 (系統備護按鈕)";
+            btn.onclick = function() {
+                // 優先嘗試點擊 Streamlit 原生按鈕
+                const nativeBtn = window.parent.document.querySelector('button[aria-label="Open sidebar"], div[data-testid="stSidebarCollapsedControl"] button, div[data-testid="collapsedControl"] button');
+                if (nativeBtn) {
+                    nativeBtn.click();
+                } else {
+                    // 若原生按鈕完全消失，直接暴力控制側邊欄 DOM 的寬度與顯示狀態
+                    const sidebar = window.parent.document.querySelector('section[data-testid="stSidebar"]');
+                    if(sidebar) {
+                        sidebar.style.display = 'block';
+                        sidebar.style.visibility = 'visible';
+                        sidebar.style.minWidth = '16rem';
+                        sidebar.style.transform = 'translateX(0px)';
+                    }
+                }
+            };
+            window.parent.document.body.appendChild(btn);
+            
+            // 定期監聽側邊欄狀態，若「已經展開」，則自動隱藏此備用按鈕，避免畫面重複
+            setInterval(() => {
+                const sidebar = window.parent.document.querySelector('section[data-testid="stSidebar"]');
+                const trigger = window.parent.document.getElementById('custom-sidebar-trigger');
+                if (sidebar && trigger) {
+                    const rect = sidebar.getBoundingClientRect();
+                    // 若側邊欄寬度正常且在畫面內，代表已展開，隱藏 Trigger
+                    if (rect.width > 50 && rect.left >= 0) {
+                        trigger.style.display = 'none';
+                    } else {
+                        trigger.style.display = 'flex';
+                    }
+                }
+            }, 500);
+        })();
+        </script>
         """,
         unsafe_allow_html=True,
     )
-
-    
 
 _LAST_ROLLOVER_CHECK = 0.0
 
