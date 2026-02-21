@@ -515,19 +515,34 @@ class JobManager:
             db.update_task_status(task_id, "completed", finished=True)
 
         except Exception as e:
-            import traceback
+            import traceback, sys
             err_trace = traceback.format_exc()
-            print(f"[JOB ERROR] Task {task_id} 發生嚴重錯誤:\n{err_trace}")
+            
+            # [專家級最大化顯示] 同時輸出到終端、審計日誌與任務進度 JSON
+            print(f"\n{'!'*60}\n[FATAL TASK ERROR] Task ID: {task_id}\n{err_trace}\n{'!'*60}", file=sys.stderr)
+            
             try:
-                prog = _json_load((db.get_task(task_id) or {}).get("progress_json") or "{}")
-                # 遵循最大化顯示錯誤指示，將完整的 traceback 寫入資料庫
-                prog["last_error"] = f"{str(e)}\n\n詳細追蹤:\n{err_trace}"
-                prog["updated_at"] = db.utc_now_iso()
+                # 嘗試從 DB 抓取最新任務狀態
+                current_t = db.get_task(task_id)
+                prog = _json_load(current_t.get("progress_json") or "{}") if current_t else {}
+                
+                # 記錄極致詳細的錯誤現場
+                prog["phase"] = "error"
+                prog["last_error"] = f"RuntimeError: {str(e)}"
+                prog["debug_traceback"] = err_trace
+                prog["error_ts"] = db.utc_now_iso()
+                
                 db.update_task_progress(task_id, prog)
-            except Exception as inner_e:
-                print(f"[JOB ERROR] 無法更新任務進度: {inner_e}")
-            db.update_task_status(task_id, "error", finished=True)
-            db.write_audit_log(None, "task_error", {"task_id": int(task_id), "error": str(e), "trace": err_trace})
+                db.update_task_status(task_id, "error")
+                
+                # 寫入系統審計表，便於 Admin 搜尋
+                db.write_audit_log(
+                    user_id=int(current_t["user_id"]) if current_t else None,
+                    action="task_execution_failed",
+                    payload={"task_id": task_id, "exception": str(e), "trace": err_trace[:2000]}
+                )
+            except Exception as nested_err:
+                print(f"[CRITICAL] 錯誤處理器本身也發生錯誤: {nested_err}")
 
 
 JOB_MANAGER = JobManager()

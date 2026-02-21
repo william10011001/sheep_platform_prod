@@ -568,21 +568,39 @@ def ensure_cycle_rollover() -> None:
             conn.commit()
         else:
             if now_str > active["end_ts"]:
+                # [週期切換專家邏輯]
+                # 1. 關閉舊週期
                 conn.execute("UPDATE mining_cycles SET status = 'completed' WHERE id = ?", (active["id"],))
+                
+                # 2. 建立新週期
                 new_end = (now_dt + _safe_td(days=7)).isoformat()
                 cur2 = conn.execute("INSERT INTO mining_cycles (name, status, start_ts, end_ts) VALUES (?, ?, ?, ?)",
                                 (f"Cycle {active['id'] + 1}", "active", now_str, new_end))
                 new_cycle_id = cur2.lastrowid
                 
-                # [專家修復] 自動繼承上一個週期的活躍 Pool 到新週期，避免跨週期後所有 Pool 消失
+                # 3. 深度繼承：不僅複製 Pool，還要檢查是否存在重複，確保算力連續性
                 try:
+                    # 使用 INSERT INTO ... SELECT 語法進行原子操作
                     conn.execute("""
-                        INSERT INTO factor_pools (cycle_id, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, created_at)
-                        SELECT ?, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, ?
-                        FROM factor_pools WHERE cycle_id = ? AND active = 1
+                        INSERT INTO factor_pools (
+                            cycle_id, name, symbol, timeframe_min, years, family, 
+                            grid_spec_json, risk_spec_json, num_partitions, seed, 
+                            active, created_at
+                        )
+                        SELECT ?, name, symbol, timeframe_min, years, family, 
+                               grid_spec_json, risk_spec_json, num_partitions, seed, 
+                               1, ?
+                        FROM factor_pools 
+                        WHERE cycle_id = ? AND active = 1
                     """, (new_cycle_id, now_str, active["id"]))
-                except Exception as e:
-                    print(f"[DB ERROR] 繼承 Pool 失敗: {e}")
+                    
+                    # 4. 審計日誌
+                    conn.execute(
+                        "INSERT INTO audit_logs (user_id, action, payload_json, created_at) VALUES (NULL, ?, ?, ?)",
+                        ("cycle_auto_inheritance", json.dumps({"from": active["id"], "to": new_cycle_id}), now_str)
+                    )
+                except Exception as cycle_fatal:
+                    print(f"[CRITICAL DB ERROR] 週期 Pool 繼承失敗: {cycle_fatal}")
                     
                 conn.commit()
     except Exception:

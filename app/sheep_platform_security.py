@@ -81,30 +81,32 @@ def hash_password(password) -> str:
 
 
 def verify_password(password, pw_hash) -> bool:
-    """專家級強健密碼校驗：自動清理資料庫汙染字串並處理多種編碼格式"""
+    """[專家級防禦校驗] 極致強健的密碼驗證，主動修正 DB 字串汙染並支援 Python 跨版本 Hash"""
+    if not password or not pw_hash:
+        return False
     try:
-        if not password or not pw_hash:
-            return False
-            
-        # 轉為 bytes
+        # 1. 統一將輸入密碼轉為 bytes
         p_bytes = password.encode("utf-8") if isinstance(password, str) else password
         
-        # 清理 pw_hash 可能出現的 "b'...' " 殘留引號
+        # 2. 深層清理 pw_hash：處理 SQLite 讀取時可能誤抓的字串化 bytes (例如 "b'$2b$12...'" )
         if isinstance(pw_hash, str):
-            cleaned_hash = pw_hash.strip()
-            if (cleaned_hash.startswith("b'") or cleaned_hash.startswith('b"')) and len(cleaned_hash) > 3:
-                cleaned_hash = cleaned_hash[2:-1]
-            h_bytes = cleaned_hash.encode("utf-8")
+            h_str = pw_hash.strip()
+            # 遞迴移除可能嵌套的引號
+            while (h_str.startswith(("b'", 'b"', "'", '"')) and h_str.endswith(("'", '"'))):
+                if h_str.startswith(("b'", 'b"')): h_str = h_str[2:-1]
+                else: h_str = h_str[1:-1]
+            h_bytes = h_str.encode("utf-8")
         else:
             h_bytes = pw_hash
 
-        # 執行校驗
+        # 3. 最終安全性檢查與執行
         return bcrypt.checkpw(p_bytes, h_bytes)
-    except Exception as e:
-        import traceback
-        # 最大化錯誤顯示：在 API 端點紀錄詳細原因
-        print(f"[SECURITY CRITICAL] 密碼校驗邏輯崩潰 (pw_hash type: {type(pw_hash)}): {str(e)}")
-        print(traceback.format_exc())
+    except Exception as fatal_sec:
+        # [最大化顯示] 輸出至系統標準錯誤流，確保 Admin 能在日誌抓到關鍵 Trace
+        import sys, traceback
+        sys.stderr.write(f"\n[!!! SECURITY ALERT !!!] verify_password 執行崩潰\n")
+        sys.stderr.write(f"Hash 來源類型: {type(pw_hash)} | 內容長度: {len(str(pw_hash))}\n")
+        traceback.print_exc(file=sys.stderr)
         return False
 
 

@@ -721,33 +721,40 @@ def _style() -> None:
         div[data-testid="stStatusWidget"] { display: none !important; }
         div[data-testid="stDecoration"] { display: none !important; }
 
-        /* [專家級強制可見修復] 側邊欄控制鈕 UI 重構 */
-        /* 確保原生按鈕在任何層級下都擁有最高 z-index 且絕對不會被遮擋 */
-        [data-testid="collapsedControl"], 
-        [data-testid="stSidebarCollapsedControl"],
-        button[aria-label="Open sidebar"],
-        button[title="Open sidebar"] {
+        /* [專家級 UI 終極修復] 側邊欄與按鈕層級控制 */
+        /* 1. 強制讓 Streamlit 原生展開按鈕穿透所有 iframe 與自定義層 */
+        div[data-testid="stSidebarCollapsedControl"],
+        button[kind="headerNoPadding"] {
+            z-index: 2147483647 !important;
+            background: #2563eb !important;
+            border-radius: 0 10px 10px 0 !important;
+            width: 42px !important;
+            height: 48px !important;
+            left: 0 !important;
+            top: 10px !important;
             display: flex !important;
-            visibility: visible !important;
-            opacity: 1 !important;
-            position: fixed !important;
-            top: 15px !important;
-            left: 15px !important;
-            z-index: 999999999 !important;
-            background-color: #2563eb !important;
-            border-radius: 8px !important;
-            width: 45px !important;
-            height: 45px !important;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.5) !important;
-            border: 1px solid rgba(255,255,255,0.2) !important;
+            align-items: center !important;
+            justify-content: center !important;
+            box-shadow: 4px 0 15px rgba(0,0,0,0.4) !important;
+        }
+        
+        /* 讓展開按鈕內的 SVG 圖示強制顯示為白色 */
+        div[data-testid="stSidebarCollapsedControl"] svg {
+            fill: white !important;
+            width: 24px !important;
+            height: 24px !important;
         }
 
-        /* 當側邊欄展開時，收起按鈕應清晰出現在側邊欄頂部 */
-        [data-testid="stSidebarCollapseButton"],
-        button[aria-label="Close sidebar"] {
-            z-index: 999999999 !important;
-            background-color: rgba(255,255,255,0.1) !important;
-            border-radius: 50% !important;
+        /* 2. 側邊欄展開時，收起鈕的樣式優化 */
+        button[data-testid="stSidebarCollapseButton"] {
+            z-index: 2147483647 !important;
+            background: rgba(255,255,255,0.05) !important;
+            border: 1px solid rgba(255,255,255,0.1) !important;
+        }
+
+        /* 3. 修正主內容區塊的 Padding，防止內容被固定的 Brand Header 遮擋 */
+        .main .block-container {
+            padding-top: 100px !important;
         }
 
         header[data-testid="stHeader"] {

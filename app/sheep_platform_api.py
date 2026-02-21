@@ -675,31 +675,41 @@ def claim_task(
     except Exception:
             dh = {"data_hash": "", "data_hash_ts": ""}
 
-    # [專家除錯] 強化 Data Hash 產生邏輯，確保 Worker 絕不會因為 Server 故障而被 Ban
+    # [專家級行情校驗護城河]
+    # 如果 Hash 為空，啟動「強同步模式」：確保 Server 行情檔案完整後再發放任務
     if not str(dh.get("data_hash") or "").strip():
         try:
-            # 強制檢查數據目錄與同步狀態
+            # 1. 阻斷式同步：在發放前確保主週期與 1m 資料皆就緒
+            # 這裡不使用 progress_cb 避免阻塞 API thread，但確保 timeout 邏輯正確
             csv_main, _ = bt.ensure_bitmart_data(
                 symbol=str(task.get("symbol") or ""),
                 main_step_min=int(task.get("timeframe_min") or 0),
                 years=int(years),
-                auto_sync=True,
-                force_full=False,
+                auto_sync=True
             )
-            if not os.path.exists(csv_main):
-                raise FileNotFoundError(f"行情檔案生成失敗: {csv_main}")
-                
-            local_hash = _sha256_file(csv_main)
-            if local_hash:
-                db.set_data_hash(str(task.get("symbol") or ""), int(task.get("timeframe_min") or 0), int(years), local_hash, ts=_utc_iso())
+            
+            # 2. 檔案存取安全檢查 (FileLock 會在 bt 模組內處理)
+            if os.path.exists(csv_main) and os.path.getsize(csv_main) > 1024:
+                local_hash = _sha256_file(csv_main)
+                # 3. 原子化寫入 DB
+                db.set_data_hash(
+                    str(task.get("symbol") or ""), 
+                    int(task.get("timeframe_min") or 0), 
+                    int(years), 
+                    local_hash, 
+                    ts=_utc_iso()
+                )
+                # 重新抓取
                 dh = db.get_data_hash(str(task.get("symbol") or ""), int(task.get("timeframe_min") or 0), int(years))
-        except Exception as hash_fatal:
+            else:
+                raise RuntimeError(f"行情檔案無效或過小: {csv_main}")
+        except Exception as hash_err:
             import traceback
-            # 最大化錯誤顯示：API 端需印出致命追蹤
-            err_msg = f"[CRITICAL API ERROR] Data Hash 產生失敗，這將導致 Worker 被誤判為作弊! (Task: {task.get('id')})\n"
-            print(err_msg + traceback.format_exc())
-            # 透過 progress 傳遞錯誤訊息給 Worker，防止 Worker 提交錯誤結果
-            db.update_task_progress(int(task["id"]), {"phase": "error", "last_error": f"Server Hash Calculation Failed: {str(hash_fatal)}"})
+            # [最大化顯示]
+            error_detail = f"Server Hash Sync Failed: {str(hash_err)}\n{traceback.format_exc()}"
+            print(f"\n[!!! DATA INTEGRITY ALERT !!!]\n{error_detail}")
+            # 通知 DB 該任務暫時不可領取或標記錯誤，防止 Worker 浪費算力
+            db.update_task_progress(int(task["id"]), {"phase": "error", "last_error": "SERVER_DATA_NOT_READY", "detail": str(hash_err)})
 
     return TaskOut(
         task_id=int(task["id"]),
