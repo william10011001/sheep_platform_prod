@@ -71,16 +71,25 @@ def decrypt_text(token: Optional[bytes]) -> Optional[str]:
         return None
 
 
-def hash_password(password: str) -> str:
-    pw = password.encode("utf-8")
+def hash_password(password) -> str:
+    if isinstance(password, str):
+        pw = password.encode("utf-8")
+    else:
+        pw = password
     salt = bcrypt.gensalt(rounds=12)
     return bcrypt.hashpw(pw, salt).decode("utf-8")
 
 
-def verify_password(password: str, pw_hash: str) -> bool:
+def verify_password(password, pw_hash) -> bool:
     try:
-        return bcrypt.checkpw(password.encode("utf-8"), pw_hash.encode("utf-8"))
-    except Exception:
+        if isinstance(password, str):
+            password = password.encode("utf-8")
+        if isinstance(pw_hash, str):
+            pw_hash = pw_hash.encode("utf-8")
+        return bcrypt.checkpw(password, pw_hash)
+    except Exception as e:
+        import traceback
+        print(f"[Security Error] verify_password failed: {e}\n{traceback.format_exc()}")
         return False
 
 

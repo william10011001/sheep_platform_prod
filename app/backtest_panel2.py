@@ -8620,9 +8620,11 @@ def app():
                                 progress.progress(min(1.0, min(len(all_jobs), idx)/max(1, len(all_jobs))))
                     ui_logger("CPU 路徑：逐組計算完成")
         except Exception as e:
-            st.error("發生錯誤，已停止。")
+            st.error("回測核心發生致命錯誤，已停止執行。")
             ui_logger(f"錯誤：{e}\n{traceback.format_exc()}")
-            raise
+            # 將完整錯誤軌跡直接印在前端畫面上，確保錯誤「最大化顯示」
+            st.code(traceback.format_exc(), language="python")
+            st.stop()
         t1 = time.time()
         st.success(f"計算完成：{t1-t0:.2f} 秒")
         # 鎖住當前結果畫面：直到按下「確認並下一步」才清空

@@ -33,33 +33,31 @@ def _get_orig_dataframe():
     return cur
 
 def _dataframe_compat(data=None, **kwargs):
-    if "use_container_width" in kwargs:
-        u = kwargs.pop("use_container_width")
-        kwargs.setdefault("width", "stretch" if bool(u) else "content")
-
-    orig = _get_orig_dataframe()
-    if orig is None:
-        orig = st.dataframe
-
+    orig = getattr(st, "_sheep_orig_dataframe", None)
+    if orig is None or getattr(orig, "__name__", "") == "_dataframe_compat":
+        # 如果無法取得原方法，強制退回 Streamlit 原始方法
+        import streamlit.elements.dataframe_selector as ds
+        orig = ds.DataFrameMixin.dataframe if hasattr(ds, "DataFrameMixin") else getattr(st, "dataframe")
+        
+    if "width" in kwargs and str(kwargs["width"]) == "stretch":
+        kwargs.pop("width")
+        kwargs["use_container_width"] = True
+        
     try:
         return orig(data, **kwargs)
-    except TypeError:
-        if "width" in kwargs:
-            w = kwargs.pop("width")
-            kwargs["use_container_width"] = (str(w) == "stretch")
+    except TypeError as e:
+        if "hide_index" in kwargs:
+            kwargs.pop("hide_index")
         try:
             return orig(data, **kwargs)
-        except TypeError:
-            kwargs.pop("hide_index", None)
-            return orig(data, **kwargs)
+        except Exception as e2:
+            import streamlit as _internal_st
+            # 如果 dataframe 完全渲染失敗，退回最原始的靜態 table 保證資料可見
+            return _internal_st.table(data)
 
 if getattr(st.dataframe, "__name__", "") != "_dataframe_compat":
     try:
-        st._sheep_orig_dataframe = _get_orig_dataframe()
-    except Exception:
-        pass
-    try:
-        _dataframe_compat._sheep_orig = _get_orig_dataframe()
+        st._sheep_orig_dataframe = st.dataframe
     except Exception:
         pass
     st.dataframe = _dataframe_compat
@@ -734,8 +732,8 @@ def _style() -> None:
             overflow: visible !important;
         }
         
-        /* 1. 展開按鈕 (側邊欄收起時)：固定在畫面最左側中央，明顯的藍色懸浮拉環 */
-        [data-testid="collapsedControl"] {
+        /* 1. 展開按鈕 (側邊欄收起時)：固定在畫面最左側中央，明顯的藍色懸浮拉環。升級支援新版 Streamlit 選擇器 */
+        [data-testid="collapsedControl"], [data-testid="stSidebarCollapsedControl"] {
             display: flex !important;
             opacity: 1 !important;
             visibility: visible !important;
@@ -755,17 +753,22 @@ def _style() -> None:
             box-shadow: 4px 0 20px rgba(0,0,0,0.8), 0 0 15px rgba(59,130,246,0.6) !important;
             transition: all 0.2s ease !important;
         }
-        [data-testid="collapsedControl"]:hover {
+        [data-testid="collapsedControl"]:hover, [data-testid="stSidebarCollapsedControl"]:hover {
             background: rgba(29, 78, 216, 1) !important;
             width: 48px !important;
             border-color: #ffffff !important;
             box-shadow: 4px 0 25px rgba(0,0,0,0.9), 0 0 20px rgba(96,165,250,0.8) !important;
             cursor: pointer !important;
         }
-        [data-testid="collapsedControl"] svg {
+        [data-testid="collapsedControl"] svg, [data-testid="stSidebarCollapsedControl"] svg {
             fill: #ffffff !important;
             width: 24px !important;
             height: 24px !important;
+        }
+        /* 確保側邊欄按鈕不會被頂部導航組件遮擋而無法點擊 */
+        [data-testid="stHeader"] {
+            z-index: 100 !important;
+            pointer-events: none !important;
         }
 
         /* 2. 收起按鈕 (側邊欄打開時)：釘在側邊欄的最右側邊緣中間（一半在內一半在外） */
@@ -2318,7 +2321,11 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
 
         st.markdown(_section_title_html("全域進度", "顯示全站所有用戶的整體挖礦進度與分潤統計。可依策略篩選觀察。", level=3), unsafe_allow_html=True)
         # 呼叫此函式也被包裝在最外層的 try-except 中，確保不再出現裸奔錯誤
-        _render_global_progress(int(cycle.get("id") or 0))
+        cycle_id = int(cycle.get("id") or 0) if cycle else 0
+        if cycle_id > 0:
+            _render_global_progress(cycle_id)
+        else:
+            st.info("尚未建立有效的結算週期，目前無全域進度可顯示。")
 
     except Exception as dashboard_e:
         # [極端專家修復] 最強保護網：不論是上述哪一行程式碼出錯（包含_render_global_progress），都會被攔截並印出精準 Traceback
