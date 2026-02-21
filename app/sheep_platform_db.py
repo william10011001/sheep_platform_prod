@@ -656,488 +656,346 @@ def _week_bounds_last_completed(now_utc: datetime) -> Dict[str, str]:
 
 def _style() -> None:
     st.markdown(
-        """
-        <style>
-        :root {
-          --bg: #0b0f19;
-          --card: rgba(255,255,255,0.045);
-          --card2: rgba(255,255,255,0.06);
-          --border: rgba(255,255,255,0.14);
-          --text: rgba(255,255,255,0.92);
-          --muted: rgba(255,255,255,0.66);
-          --accent: rgba(120, 180, 255, 0.95);
-          --accent2: rgba(255, 120, 180, 0.65);
-          --shadow: 0 12px 30px rgba(0,0,0,0.35);
-        }
+    """
+    <style>
+    :root {
+    --bg: #06090e;
+    --surface: #101520;
+    --surface-hover: #181f2f;
+    --border: rgba(255, 255, 255, 0.08);
+    --border-active: rgba(80, 160, 255, 0.6);
+    --text-primary: #ffffff;
+    --text-secondary: #94a3b8;
+    --accent: #2563eb;
+    --accent-hover: #3b82f6;
+    --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.25);
+    --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.45);
+    --radius: 12px;
+    }
 
-        .stApp {
-          background: radial-gradient(1200px 600px at 20% -10%, rgba(120,180,255,0.25), transparent 60%),
-                      radial-gradient(900px 500px at 110% 20%, rgba(255,120,180,0.14), transparent 55%),
-                      var(--bg);
-          color: var(--text);
-        }
+    html, body, [class*="css"] {
+      font-family: "Inter", "Roboto", ui-sans-serif, system-ui, -apple-system, sans-serif;
+      background-color: var(--bg);
+      color: var(--text-primary);
+    }
 
-        html, body, [class*="css"]  {
-          font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial;
-        }
+    .stApp {
+      background: var(--bg);
+      background-image: 
+        radial-gradient(circle at top left, rgba(37, 99, 235, 0.06) 0%, transparent 40%),
+        radial-gradient(circle at bottom right, rgba(16, 185, 129, 0.04) 0%, transparent 40%);
+    }
 
-        html { color-scheme: dark; }
+    .block-container {
+      padding-top: 2rem;
+      padding-bottom: 4rem;
+      max-width: 1440px;
+    }
 
-        /* In-app browsers (LINE/IG) sometimes force white input backgrounds; enforce readable contrast. */
-        div[data-testid="stTextInput"] input,
-        div[data-testid="stTextInput"] textarea,
-        div[data-testid="stNumberInput"] input,
-        div[data-testid="stTextArea"] textarea,
-        div[data-testid="stPassword"] input {
-          background: rgba(255,255,255,0.04) !important;
-          border: 1px solid rgba(255,255,255,0.14) !important;
-          border-radius: 12px !important;
-          color: var(--text) !important;
-          -webkit-text-fill-color: var(--text) !important;
-          caret-color: var(--text) !important;
-        }
-        div[data-testid="stTextInput"] input::placeholder,
-        div[data-testid="stTextArea"] textarea::placeholder,
-        div[data-testid="stPassword"] input::placeholder {
-          color: rgba(255,255,255,0.55) !important;
-          -webkit-text-fill-color: rgba(255,255,255,0.55) !important;
-        }
+    div[data-testid="stTextInput"] input,
+    div[data-testid="stNumberInput"] input,
+    div[data-testid="stTextArea"] textarea,
+    div[data-testid="stPassword"] input {
+      background-color: rgba(0, 0, 0, 0.3) !important;
+      border: 1px solid var(--border) !important;
+      border-radius: 8px !important;
+      color: var(--text-primary) !important;
+      transition: all 0.2s ease;
+      font-family: "Inter", "Roboto", monospace;
+    }
 
-        div[data-testid="stSidebar"] {
-          background: rgba(255,255,255,0.02);
-          border-right: 1px solid var(--border);
-        }
+    div[data-testid="stTextInput"] input:focus,
+    div[data-testid="stNumberInput"] input:focus,
+    div[data-testid="stTextArea"] textarea:focus {
+      border-color: var(--border-active) !important;
+      box-shadow: 0 0 0 1px var(--border-active) !important;
+    }
 
-        .block-container {
-          padding-top: 1.0rem;
-          padding-bottom: 3.0rem;
-          max-width: 1200px;
-        }
+    .stButton > button {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+      border-radius: 8px;
+      font-weight: 600;
+      letter-spacing: 0.3px;
+      transition: all 0.2s ease;
+    }
+    
+    .stButton > button:hover {
+      background: var(--surface-hover);
+      border-color: var(--border-active);
+      transform: translateY(-2px);
+      box-shadow: var(--shadow-sm);
+    }
 
-        .card {
-          background: linear-gradient(180deg, rgba(255,255,255,0.055), rgba(255,255,255,0.03));
-          border: 1px solid var(--border);
-          border-radius: 16px;
-          padding: 16px 16px 12px 16px;
-          box-shadow: var(--shadow);
-        }
+    .stButton > button[kind="primary"] {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #ffffff;
+    }
 
-        .metric-row {
-          display: flex;
-          gap: 10px;
-          flex-wrap: wrap;
-        }
-        .metric {
-          padding: 10px 12px;
-          border-radius: 12px;
-          border: 1px solid var(--border);
-          background: rgba(255,255,255,0.035);
-          min-width: 160px;
-        }
-        .metric .k { color: var(--muted); font-size: 12px; }
-        .metric .v { color: var(--text); font-size: 20px; font-weight: 600; }
+    .stButton > button[kind="primary"]:hover {
+      background: var(--accent-hover);
+      border-color: var(--accent-hover);
+    }
 
-        .small-muted { color: var(--muted); font-size: 12px; }
+    div[data-testid="stDataFrame"] {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      box-shadow: var(--shadow-sm);
+    }
 
-        .auth_title {
-          font-size: 18px;
-          font-weight: 900;
-          letter-spacing: 0.3px;
-          margin: 0 0 10px 0;
-          color: var(--text);
-        }
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      margin-bottom: 24px;
+      box-shadow: var(--shadow-sm);
+      transition: border-color 0.2s ease;
+    }
 
-        header[data-testid="stHeader"] { background: rgba(0,0,0,0); }
-        footer { visibility: hidden; }
-        #MainMenu { visibility: hidden; }
+    .panel:hover {
+      border-color: rgba(255, 255, 255, 0.15);
+    }
 
-        /* Streamlit chrome: keep toolbar visible for sidebar expand control, but make it subtle. */
-        div[data-testid="stToolbar"] { opacity: 0.35; }
-        div[data-testid="stToolbar"]:hover { opacity: 0.95; }
-        div[data-testid="stStatusWidget"] { display: none !important; }
-        div[data-testid="stDecoration"] { display: none !important; }
+    .metric-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+      margin-bottom: 32px;
+    }
 
-        /* Sidebar collapse/expand controls: keep visible and stable. */
-        button[data-testid="stSidebarCollapseButton"],
-        button[data-testid="stSidebarCollapsedControl"],
-        button[title="Close sidebar"],
-        button[title="Open sidebar"],
-        button[aria-label="Close sidebar"],
-        button[aria-label="Open sidebar"],
-        button[title*="sidebar"],
-        button[aria-label*="sidebar"]{
-          opacity: 1 !important;
-          background: rgba(255,255,255,0.06) !important;
-          border: 1px solid rgba(255,255,255,0.14) !important;
-          border-radius: 12px !important;
-          width: 34px !important;
-          height: 34px !important;
-          box-shadow: 0 10px 28px rgba(0,0,0,0.32) !important;
-        }
-        button[data-testid="stSidebarCollapseButton"]:hover,
-        button[data-testid="stSidebarCollapsedControl"]:hover,
-        button[title="Close sidebar"]:hover,
-        button[title="Open sidebar"]:hover,
-        button[aria-label="Close sidebar"]:hover,
-        button[aria-label="Open sidebar"]:hover,
-        button[title*="sidebar"]:hover,
-        button[aria-label*="sidebar"]:hover{
-          background: rgba(120,180,255,0.12) !important;
-          border-color: rgba(120,180,255,0.55) !important;
-          filter: brightness(1.06) !important;
-        }
-        button[data-testid="stSidebarCollapseButton"] svg,
-        button[data-testid="stSidebarCollapsedControl"] svg,
-        button[title="Close sidebar"] svg,
-        button[title="Open sidebar"] svg,
-        button[aria-label="Close sidebar"] svg,
-        button[aria-label="Open sidebar"] svg,
-        button[title*="sidebar"] svg,
-        button[aria-label*="sidebar"] svg{
-          color: rgba(255,255,255,0.92) !important;
-          fill: rgba(255,255,255,0.92) !important;
-        }
+    .metric {
+      background: linear-gradient(145deg, var(--surface) 0%, rgba(18, 22, 31, 0.6) 100%);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      box-shadow: var(--shadow-sm);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      position: relative;
+      overflow: hidden;
+    }
+    
+    .metric::before {
+      content: "";
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, var(--accent), transparent);
+      opacity: 0.5;
+    }
 
-        /* Force button palette to never use the default red primary color. */
-        .stButton > button[kind="primary"], .stDownloadButton > button[kind="primary"] {
-          background: linear-gradient(135deg, rgba(120,180,255,0.32), rgba(80,240,220,0.18)) !important;
-          border-color: rgba(120,180,255,0.70) !important;
-          color: var(--text) !important;
-        }
-        .stButton > button[kind="primary"]:hover, .stDownloadButton > button[kind="primary"]:hover {
-          border-color: rgba(120,180,255,0.85) !important;
-          filter: brightness(1.08) !important;
-        }
+    .metric .k {
+      color: var(--text-secondary);
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
 
-        .stButton > button[kind="secondary"], .stDownloadButton > button[kind="secondary"] {
-          background: rgba(255,255,255,0.05) !important;
-          border-color: rgba(255,255,255,0.14) !important;
-          color: var(--text) !important;
-        }
-        .stButton > button[kind="secondary"]:hover, .stDownloadButton > button[kind="secondary"]:hover {
-          border-color: rgba(120,180,255,0.55) !important;
-          filter: brightness(1.05) !important;
-        }
+    .metric .v {
+      color: var(--text-primary);
+      font-size: 28px;
+      font-weight: 700;
+      line-height: 1.2;
+      font-family: "Inter", monospace;
+    }
 
-        /* Avoid any red focus ring coming from browser/theme defaults. */
-        .stButton > button:focus, .stDownloadButton > button:focus {
-          box-shadow: 0 0 0 2px rgba(120,180,255,0.35) !important;
-        }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 4px 10px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      line-height: 1;
+    }
 
-        .stButton > button, .stDownloadButton > button {
-          width: 100%;
-          border-radius: 12px;
-          border: 1px solid rgba(255,255,255,0.14);
-          background: rgba(255,255,255,0.06);
-          color: var(--text);
-          box-shadow: 0 8px 22px rgba(0,0,0,0.25);
-          transition: transform 120ms ease, border-color 120ms ease, filter 120ms ease;
-        }
+    .pill-ok { background: rgba(16, 185, 129, 0.1); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+    .pill-info { background: rgba(59, 130, 246, 0.1); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); }
+    .pill-warn { background: rgba(245, 158, 11, 0.1); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
+    .pill-bad { background: rgba(239, 68, 68, 0.1); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+    .pill-neutral { background: rgba(255, 255, 255, 0.05); color: #94a3b8; border: 1px solid rgba(255, 255, 255, 0.2); }
 
-        .stButton > button:hover, .stDownloadButton > button:hover {
-          transform: translateY(-1px);
-          border-color: rgba(120,180,255,0.55);
-          filter: brightness(1.05);
-        }
+    section[data-testid="stSidebar"] {
+      background-color: #05070a;
+      border-right: 1px solid var(--border);
+    }
+    
+    div[data-testid="stSidebar"] label[data-baseweb="radio"] {
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      padding: 10px 14px;
+      transition: all 0.2s ease;
+    }
 
-        .stButton > button:focus, .stDownloadButton > button:focus {
-          outline: none;
-          box-shadow: 0 0 0 2px rgba(120,180,255,0.35);
-        }
+    div[data-testid="stSidebar"] label[data-baseweb="radio"]:hover {
+      background: rgba(255, 255, 255, 0.04);
+    }
 
-        div[data-baseweb="input"] input,
-        div[data-baseweb="textarea"] textarea,
-        div[data-baseweb="select"] > div {
-          background: rgba(255,255,255,0.04) !important;
-          border: 1px solid rgba(255,255,255,0.14) !important;
-          border-radius: 12px !important;
-          color: var(--text) !important;
-        }
+    div[data-testid="stSidebar"] label[data-baseweb="radio"]:has(input:checked) {
+      background: rgba(59, 130, 246, 0.1);
+      border-color: rgba(59, 130, 246, 0.4);
+      color: var(--accent-hover);
+    }
 
-        div[data-baseweb="input"] input:focus,
-        div[data-baseweb="textarea"] textarea:focus {
-          border-color: rgba(120,180,255,0.55) !important;
-          box-shadow: 0 0 0 2px rgba(120,180,255,0.25) !important;
-        }
+    .sec_h3 {
+      font-size: 24px;
+      font-weight: 800;
+      margin: 28px 0 16px 0;
+      color: var(--text-primary);
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 8px;
+    }
 
-        div[data-baseweb="input"] input,
-        div[data-baseweb="textarea"] textarea {
-          -webkit-text-fill-color: var(--text) !important;
-          caret-color: var(--text) !important;
-        }
+    .sec_h4 {
+      font-size: 16px;
+      font-weight: 600;
+      margin: 16px 0 12px 0;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
 
-        div[data-baseweb="input"] input::placeholder,
-        div[data-baseweb="textarea"] textarea::placeholder {
-          color: rgba(255,255,255,0.40) !important;
-          -webkit-text-fill-color: rgba(255,255,255,0.40) !important;
-          opacity: 1 !important;
-        }
+    .user_hud {
+      position: fixed;
+      left: 16px;
+      bottom: 16px;
+      width: 280px;
+      padding: 18px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      background: rgba(10, 14, 20, 0.95);
+      box-shadow: var(--shadow-lg);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      z-index: 100000;
+    }
 
-        input:-webkit-autofill,
-        textarea:-webkit-autofill,
-        select:-webkit-autofill {
-          -webkit-text-fill-color: var(--text) !important;
-          transition: background-color 99999s ease-in-out 0s;
-          box-shadow: 0 0 0px 1000px rgba(255,255,255,0.04) inset !important;
-          border: 1px solid rgba(255,255,255,0.14) !important;
-        }
+    .user_hud .hud_name {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.2px;
+      color: var(--text-primary);
+    }
 
-        /* Sidebar navigation as full-width product-style buttons (st.radio). */
+    .user_hud .hud_row {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      margin-top: 12px;
+    }
 
-        /* Hide the default radio dot and turn each option into a clean button. */
-        div[data-testid="stSidebar"] label[data-baseweb="radio"] > div > div:first-child {
-          display: none !important;
-        }
-        div[data-testid="stSidebar"] input[type="radio"] {
-          position: absolute !important;
-          opacity: 0 !important;
-          width: 0 !important;
-          height: 0 !important;
-        }
-        div[data-testid="stSidebar"] label[data-baseweb="radio"] svg {
-          display: none !important;
-        }
-        div[data-testid="stSidebar"] label[data-baseweb="radio"] {
-          width: 100%;
-          border: 1px solid rgba(255,255,255,0.14);
-          border-radius: 12px;
-          padding: 0.55rem 0.7rem;
-          margin: 0.35rem 0;
-          background: rgba(255,255,255,0.03);
-        }
-        div[data-testid="stSidebar"] label[data-baseweb="radio"]:hover {
-          border-color: rgba(120,180,255,0.45);
-        }
-        div[data-testid="stSidebar"] label[data-baseweb="radio"]:has(input:checked) {
-          background: rgba(120,180,255,0.12);
-          border-color: rgba(120,180,255,0.55);
-        }
-        div[data-testid="stSidebar"] label[data-baseweb="radio"] > div {
-          width: 100%;
-        }
+    .user_hud .hud_k {
+      font-size: 13px;
+      color: var(--text-secondary);
+    }
 
+    .user_hud .hud_v {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--text-primary);
+      font-family: "Inter", monospace;
+    }
 
-        /* Global progress partition map */
-        .pm_legend {
-          display: flex;
-          gap: 0.8rem;
-          flex-wrap: wrap;
-          margin: 0.25rem 0 0.6rem 0;
-        }
-        .pm_item { display: inline-flex; align-items: center; gap: 0.35rem; }
-        .pm_swatch { width: 10px; height: 10px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.18); }
-        .pm_swatch.done { background: rgba(120,180,255,0.55); }
-        .pm_swatch.running { background: rgba(120,255,180,0.45); }
-        .pm_swatch.reserved { background: rgba(255,200,120,0.45); }
-        .pm_swatch.available { background: rgba(255,255,255,0.12); }
+    .user_hud .hud_div {
+      margin-top: 14px;
+      height: 1px;
+      background: var(--border);
+    }
 
-        .pm_grid {
-          display: grid;
-          gap: 3px;
-          padding: 0.4rem 0.2rem;
-        }
-        .pm_cell {
-          width: 10px;
-          height: 10px;
-          border-radius: 3px;
-          border: 1px solid rgba(255,255,255,0.12);
-          background: rgba(255,255,255,0.10);
-        }
-        .pm_cell.done { background: rgba(120,180,255,0.60); }
-        .pm_cell.running { background: rgba(120,255,180,0.50); }
-        .pm_cell.reserved { background: rgba(255,200,120,0.50); }
-        .pm_cell.available { background: rgba(255,255,255,0.12); }
+    .help_wrap {
+      display: inline-flex;
+      position: relative;
+      align-items: center;
+      margin-left: 8px;
+      z-index: 50;
+    }
 
-        
-        /* Reserve space in sidebar for bottom HUD */
-        div[data-testid="stSidebarContent"]{
-          padding-bottom: 190px !important;
-        }
+    .help_icon {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 700;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text-secondary);
+      cursor: help;
+      transition: all 0.2s ease;
+    }
 
-/* Help tooltip icon */
-        .metric { overflow: visible; }
+    .help_wrap:hover .help_icon {
+      border-color: var(--border-active);
+      color: var(--accent-hover);
+    }
 
-        .metric .k { display: flex; align-items: center; gap: 6px; }
+    .help_tip {
+      position: absolute;
+      bottom: calc(100% + 8px);
+      left: 50%;
+      transform: translateX(-50%) translateY(4px);
+      width: max-content;
+      max-width: 320px;
+      padding: 12px 16px;
+      border-radius: 6px;
+      background: #1e293b;
+      border: 1px solid #334155;
+      box-shadow: var(--shadow-lg);
+      color: #f8fafc;
+      font-size: 13px;
+      line-height: 1.5;
+      opacity: 0;
+      pointer-events: none;
+      transition: all 0.2s ease;
+      z-index: 999999;
+    }
 
-        .help_wrap {
-          display: inline-flex;
-          position: relative;
-          align-items: center;
-          justify-content: center;
-          margin-left: 6px;
-          z-index: 20;
-        }
-        .help_icon {
-          width: 18px;
-          height: 18px;
-          border-radius: 999px;
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          font-size: 12px;
-          font-weight: 800;
-          line-height: 1;
-          border: 1px solid rgba(255,255,255,0.20);
-          background: rgba(255,255,255,0.05);
-          color: rgba(255,255,255,0.84);
-          cursor: help;
-          user-select: none;
-        }
-        .help_wrap:hover .help_icon {
-          border-color: rgba(120,180,255,0.75);
-          background: rgba(120,180,255,0.12);
-        }
-        .help_tip {
-          position: absolute;
-          left: 50%;
-          top: -10px;
-          transform: translate(-50%, -100%);
-          min-width: 220px;
-          max-width: 360px;
-          padding: 10px 12px;
-          border-radius: 12px;
-          background: rgba(20,24,35,0.92);
-          border: 1px solid rgba(255,255,255,0.14);
-          box-shadow: 0 14px 40px rgba(0,0,0,0.45);
-          color: rgba(255,255,255,0.90);
-          font-size: 12px;
-          line-height: 1.55;
-          opacity: 0;
-          pointer-events: none;
-          transition: opacity 140ms ease, transform 140ms ease;
-          z-index: 200000;
-        }
-        .help_tip:after {
-          content: "";
-          position: absolute;
-          left: 50%;
-          bottom: -8px;
-          transform: translateX(-50%);
-          border-width: 8px 8px 0 8px;
-          border-style: solid;
-          border-color: rgba(20,24,35,0.92) transparent transparent transparent;
-        }
-        .help_wrap:hover .help_tip {
-          opacity: 1;
-          pointer-events: auto;
-          transform: translate(-50%, -108%);
-        }
+    .help_wrap:hover .help_tip {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+    
+    .pm_legend {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin: 12px 0;
+    }
+    .pm_item { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-secondary); }
+    .pm_swatch { width: 12px; height: 12px; border-radius: 3px; }
+    .pm_swatch.done { background: #3b82f6; }
+    .pm_swatch.running { background: #10b981; }
+    .pm_swatch.reserved { background: #f59e0b; }
+    .pm_swatch.available { background: rgba(255,255,255,0.1); }
 
-        .help_wrap:focus-within{
-          outline: none;
-        }
-        .help_wrap:focus-within .help_icon{
-          border-color: rgba(120,180,255,0.75);
-          background: rgba(120,180,255,0.12);
-        }
-        .help_wrap:focus-within .help_tip{
-          opacity: 1;
-          pointer-events: auto;
-          transform: translate(-50%, -108%);
-        }
+    .pm_grid { display: grid; gap: 4px; padding: 12px 0; }
+    .pm_cell {
+      width: 14px; height: 14px; border-radius: 3px;
+      background: rgba(255,255,255,0.1);
+      transition: transform 0.2s ease;
+    }
+    .pm_cell:hover { transform: scale(1.3); z-index: 2; box-shadow: 0 0 8px rgba(255,255,255,0.2); }
+    .pm_cell.pm_done { background: #3b82f6; }
+    .pm_cell.pm_running { background: #10b981; }
+    .pm_cell.pm_reserved { background: #f59e0b; }
+    .pm_cell.pm_available { background: rgba(255,255,255,0.1); }
 
-        /* HUD tooltip placement: keep the bubble inside viewport near bottom-left. */
-        .user_hud .help_tip{
-          left: 0;
-          right: auto;
-          transform: translate(0, -100%);
-          min-width: 200px;
-          max-width: 300px;
-        }
-        .user_hud .help_tip:after{
-          left: 18px;
-          transform: none;
-        }
-        .user_hud .help_wrap:hover .help_tip{
-          transform: translate(0, -108%);
-        }
-        .user_hud .help_wrap:focus-within .help_tip{
-          transform: translate(0, -108%);
-        }
-
-        /* Section titles with integrated help icon */
-        .sec_h3 {
-          font-size: 28px;
-          font-weight: 900;
-          letter-spacing: 0.2px;
-          margin: 0.2rem 0 0.8rem 0;
-          display: inline-flex;
-          align-items: center;
-          gap: 8px;
-        }
-        .sec_h4 {
-          font-size: 18px;
-          font-weight: 850;
-          letter-spacing: 0.15px;
-          margin: 0.9rem 0 0.5rem 0;
-          display: inline-flex;
-          align-items: center;
-          gap: 8px;
-        }
-
-        
-        /* Panel wrapper (replaces legacy card blocks) */
-        .panel{
-          border-radius: 16px;
-          border: 1px solid rgba(255,255,255,0.12);
-          background: rgba(255,255,255,0.04);
-          padding: 14px 14px 12px 14px;
-          margin: 10px 0 12px 0;
-          box-shadow: 0 14px 44px rgba(0,0,0,0.28);
-        }
-
-/* Bottom-left user HUD */
-        .user_hud {
-          position: fixed;
-          left: 18px;
-          bottom: 18px;
-          width: 260px;
-          padding: 12px 12px 10px 12px;
-          border-radius: 16px;
-          border: 1px solid rgba(255,255,255,0.14);
-          background: rgba(255,255,255,0.06);
-          box-shadow: 0 18px 50px rgba(0,0,0,0.45);
-          backdrop-filter: blur(14px);
-          -webkit-backdrop-filter: blur(14px);
-          z-index: 100000;
-          pointer-events: auto;
-        }
-        .user_hud .hud_name {
-          font-size: 14px;
-          font-weight: 900;
-          letter-spacing: 0.2px;
-          color: rgba(255,255,255,0.92);
-        }
-        .user_hud .hud_row {
-          display: flex;
-          align-items: baseline;
-          justify-content: space-between;
-          margin-top: 8px;
-          gap: 12px;
-        }
-        .user_hud .hud_k {
-          font-size: 12px;
-          color: rgba(255,255,255,0.65);
-          display: inline-flex;
-          align-items: center;
-          gap: 6px;
-        }
-        .user_hud .hud_v {
-          font-size: 14px;
-          font-weight: 850;
-          color: rgba(255,255,255,0.92);
-        }
-        .user_hud .hud_div {
-          margin-top: 10px;
-          height: 1px;
-          background: rgba(255,255,255,0.10);
-        }
-
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 _LAST_ROLLOVER_CHECK = 0.0
@@ -3975,3 +3833,53 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+import datetime
+from datetime import timezone, timedelta
+
+def ensure_cycle_rollover() -> None:
+    conn = db._conn()
+    try:
+        cur = conn.execute("SELECT id, start_ts, end_ts FROM mining_cycles WHERE status = 'active' ORDER BY id DESC LIMIT 1")
+        active = cur.fetchone()
+        now_dt = datetime.datetime.now(timezone.utc)
+        now_str = now_dt.isoformat()
+
+        if not active:
+            end_ts = (now_dt + timedelta(days=7)).isoformat()
+            conn.execute("INSERT INTO mining_cycles (name, status, start_ts, end_ts) VALUES (?, ?, ?, ?)",
+                         ("Cycle 1", "active", now_str, end_ts))
+            conn.commit()
+        else:
+            if now_str > active["end_ts"]:
+                conn.execute("UPDATE mining_cycles SET status = 'completed' WHERE id = ?", (active["id"],))
+                new_end = (datetime.datetime.fromisoformat(now_str) + timedelta(days=7)).isoformat()
+                conn.execute("INSERT INTO mining_cycles (name, status, start_ts, end_ts) VALUES (?, ?, ?, ?)",
+                             (f"Cycle {active['id'] + 1}", "active", now_str, new_end))
+                conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+def get_active_cycle() -> dict:
+    conn = db._conn()
+    try:
+        cur = conn.execute("SELECT id, name, status, start_ts, end_ts FROM mining_cycles WHERE status = 'active' ORDER BY id DESC LIMIT 1")
+        row = cur.fetchone()
+        if row:
+            return dict(row)
+        return {}
+    except Exception:
+        return {}
+    finally:
+        conn.close()
+
+def list_factor_pools(cycle_id: int) -> list:
+    conn = db._conn()
+    try:
+        cur = conn.execute("SELECT * FROM factor_pools WHERE cycle_id = ?", (cycle_id,))
+        return [dict(row) for row in cur.fetchall()]
+    except Exception:
+        return []
+    finally:
+        conn.close()
