@@ -213,9 +213,19 @@ class JobManager:
                     conn.close()
 
                 started_any = False
+                # [專家級資源防護] 避免伺服器因過度併發 14 種組合任務而內存崩潰
+                import psutil
+                mem_free_pct = psutil.virtual_memory().available / psutil.virtual_memory().total
+                
                 with self._lock:
                     self._cleanup_finished_locked()
                     alive = sum(1 for t in self._threads.values() if t.is_alive())
+
+                    # 如果內存剩餘不足 15%，強制不啟動新任務，防止系統掛死
+                    if mem_free_pct < 0.15:
+                        if alive > 0: # 僅在還有任務跑時列印，避免洗版
+                             print(f"[RESOURCES ALERT] 內存不足 ({mem_free_pct:.1%}), 暫緩發放新任務...")
+                        alive = 999999 
 
                     while alive < max(1, limit):
                         item = self._pick_next_locked()
@@ -512,12 +522,25 @@ class JobManager:
                 _commit()
 
             best_candidate_id = None
+            # [專家修復] 除了資料庫記錄，額外備份一份到磁碟存儲空間，防止 DB 鎖定或損壞
+            disk_data = {
+                "task_info": task,
+                "timestamp": db.utc_now_iso(),
+                "best_pass_count": len(best_pass),
+                "candidates": []
+            }
+
             for sc, full_params, metrics in best_pass:
                 cid = db.insert_candidate(task_id, user_id, pool_id, full_params, metrics, float(sc))
                 if best_candidate_id is None:
                     best_candidate_id = int(cid)
+                disk_data["candidates"].append({"id": cid, "score": sc, "params": full_params, "metrics": metrics})
+
+            # 執行磁碟備份
+            db.save_candidate_to_disk(task_id, user_id, pool_id, disk_data)
 
             progress["best_candidate_id"] = int(best_candidate_id) if best_candidate_id is not None else None
+            progress["storage_status"] = "DISK_BACKUP_OK"
             progress["updated_at"] = db.utc_now_iso()
             db.update_task_progress(task_id, progress)
             db.update_task_status(task_id, "completed", finished=True)

@@ -675,9 +675,10 @@ def claim_task(
     except Exception:
             dh = {"data_hash": "", "data_hash_ts": ""}
 
-    # [專家級行情校驗護城河]
-    # 如果 Hash 為空，啟動「強同步模式」：確保 Server 行情檔案完整後再發放任務
+    # [專家級行情校驗護城河 V2]
+    # 支援 14 種組合自動發放時的行情檔案動態預熱
     if not str(dh.get("data_hash") or "").strip():
+        print(f"[API] 偵測到新 Pool ({task.get('symbol')} {task.get('timeframe_min')}m)，啟動自動化預熱流程...")
         try:
             # 1. 阻斷式同步：在發放前確保主週期與 1m 資料皆就緒
             # 這裡不使用 progress_cb 避免阻塞 API thread，但確保 timeout 邏輯正確

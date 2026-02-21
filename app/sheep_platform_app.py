@@ -3682,11 +3682,35 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
             grid_spec_json = st.text_area("單筆: grid_spec_json", value='{"fast_min":3,"fast_max":3,"slow_min":100,"slow_max":100,"rsi_thr_min":20,"rsi_thr_max":20}', height=100)
             risk_spec_json = st.text_area("單筆: risk_spec_json", value='{"tp_min":2.2,"sl_min":6.0,"max_hold_min":10,"max_hold_max":60,"max_hold_step":10}', height=100)
             
-            if st.button("確認執行新增", type="primary", use_container_width=True):
+            auto_expand_all = st.checkbox(" [超級加速] 自動套用 14 種熱門組合 (BTC/ETH × 7個週期)", value=True, help="勾選後，系統會將此策略自動複製到 BTC_USDT 與 ETH_USDT，並涵蓋 1m, 5m, 15m, 30m, 1h, 4h, 1d 所有級別。")
+            
+            if st.button("確認執行新增並派發任務", type="primary", use_container_width=True):
                 try:
                     if batch_json.strip():
                         # 批量模式 - 專家級容錯解析
                         clean_json = batch_json.strip()
+                        # ... (原有的 JSON 解析邏輯保持不變) ...
+                        pool_list = raw_data if isinstance(raw_data, list) else [raw_data]
+                        success_count = 0
+                        for p_idx, p_item in enumerate(pool_list):
+                            try:
+                                pids = db.create_factor_pool(
+                                    cycle_id=cycle_id,
+                                    name=str(p_item.get("name", f"Imported Pool {p_idx+1}")),
+                                    symbol=str(p_item.get("symbol", "BTC_USDT")),
+                                    timeframe_min=int(p_item.get("timeframe_min", 30)),
+                                    years=int(p_item.get("years", 3)),
+                                    family=str(p_item.get("family", "TEMA_RSI")),
+                                    grid_spec=p_item.get("grid_spec", {}),
+                                    risk_spec=p_item.get("risk_spec", {}),
+                                    num_partitions=int(p_item.get("num_partitions", 128)),
+                                    seed=int(p_item.get("seed", 0)),
+                                    active=bool(p_item.get("active", True)),
+                                    auto_expand=auto_expand_all # 注入自動擴展參數
+                                )
+                                success_count += len(pids)
+                            except Exception as item_e:
+                                st.error(f"第 {p_idx+1} 個物件匯入失敗：{item_e}")
                         # 自動修正常見的手寫 JSON 結尾錯誤（如最後多出的逗號或錯誤的括號）
                         if clean_json.endswith('}') and clean_json.count('[') > clean_json.count(']'):
                             clean_json += ']'

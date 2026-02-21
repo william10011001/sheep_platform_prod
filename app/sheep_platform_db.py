@@ -1071,20 +1071,51 @@ def get_global_paid_payout_sum_usdt(cycle_id: int) -> float:
     finally:
         conn.close()
 
-def create_factor_pool(cycle_id: int, name: str, symbol: str, timeframe_min: int, years: int, family: str, grid_spec: dict, risk_spec: dict, num_partitions: int, seed: int, active: bool) -> int:
+def create_factor_pool(cycle_id: int, name: str, symbol: str, timeframe_min: int, years: int, family: str, grid_spec: dict, risk_spec: dict, num_partitions: int, seed: int, active: bool, auto_expand: bool = False) -> list:
+    """專家級 Pool 建立器：支援 14 種組合自動擴展功能"""
+    ids = []
+    targets = [(symbol, timeframe_min)]
+    if auto_expand:
+        # 管理員勾選最大化範圍：自動生成 BTC/ETH 與 7 種 Timeframe
+        symbols = ["BTC_USDT", "ETH_USDT"]
+        tfs = [1, 5, 15, 30, 60, 240, 1440]
+        targets = [(s, t) for s in symbols for t in tfs]
+
     conn = _conn()
     try:
-        cur = conn.execute(
-            """
-            INSERT INTO factor_pools (cycle_id, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (cycle_id, name, symbol, timeframe_min, years, family, json.dumps(grid_spec, ensure_ascii=False), json.dumps(risk_spec, ensure_ascii=False), num_partitions, seed, 1 if active else 0, _now_iso())
-        )
+        for s, t in targets:
+            # 檢查是否已存在
+            exist = conn.execute("SELECT id FROM factor_pools WHERE cycle_id=? AND symbol=? AND timeframe_min=? AND family=?", (cycle_id, s, t, family)).fetchone()
+            if exist:
+                ids.append(exist["id"])
+                continue
+
+            expanded_name = f"{name} [{s}_{t}m]" if auto_expand else name
+            cur = conn.execute(
+                """
+                INSERT INTO factor_pools (cycle_id, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (cycle_id, expanded_name, s, t, years, family, json.dumps(grid_spec, ensure_ascii=False), json.dumps(risk_spec, ensure_ascii=False), num_partitions, seed, 1 if active else 0, _now_iso())
+            )
+            ids.append(cur.lastrowid)
         conn.commit()
-        return cur.lastrowid
+        return ids
     finally:
         conn.close()
+
+def save_candidate_to_disk(task_id: int, user_id: int, pool_id: int, data: dict):
+    """將跑過的組合數據存入檔案系統而非資料庫，提升管理效率與安全性"""
+    base_dir = os.path.join(os.getcwd(), "data", "storage", f"pool_{pool_id}", f"task_{task_id}")
+    os.makedirs(base_dir, exist_ok=True)
+    file_path = os.path.join(base_dir, f"user_{user_id}_{int(time.time()*1000)}.json")
+    try:
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return file_path
+    except Exception as e:
+        print(f"[DISK STORAGE ERROR] {e}")
+        return None
 
 def update_factor_pool(pool_id: int, name: str, symbol: str, timeframe_min: int, years: int, family: str, grid_spec: dict, risk_spec: dict, num_partitions: int, seed: int, active: bool) -> None:
     conn = _conn()
