@@ -766,6 +766,14 @@ def _json_default(o):
         return float(o)
     if isinstance(o, (np.ndarray,)):
         return o.tolist()
+    if isinstance(o, (np.bool_, bool)):
+        return bool(o)
+    try:
+        import pandas as pd
+        if isinstance(o, (pd.Timestamp, pd.Timedelta)):
+            return str(o)
+    except Exception:
+        pass
     return str(o)
 
 try:

@@ -2235,6 +2235,8 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
         except AttributeError as ae:
             st.error(f" 系統錯誤：核心函數遺失。\n\n詳細錯誤：{ae}")
             st.info(" 提示：您的 `sheep_platform_db.py` 檔案內容疑似被意外覆蓋，請復原正確的資料庫邏輯。")
+            import traceback
+            st.code(traceback.format_exc(), language="python")
             return
 
         tasks = db.list_tasks_for_user(int(user["id"]), cycle_id=int(cycle["id"]))
@@ -2329,27 +2331,27 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
 def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
     cycle = db.get_active_cycle()
     if not cycle:
-            st.error("週期未初始化。")
-            return
+        st.error("週期未初始化。")
+        return
 
-        conn = db._conn()
-        try:
-            min_tasks = int(db.get_setting(conn, "min_tasks_per_user", 2))
-            max_tasks = int(db.get_setting(conn, "max_tasks_per_user", 6))
-            max_concurrent_jobs = int(db.get_setting(conn, "max_concurrent_jobs", 2))
-            min_trades = int(db.get_setting(conn, "min_trades", 40))
-            min_total_return_pct = float(db.get_setting(conn, "min_total_return_pct", 15.0))
-            max_drawdown_pct = float(db.get_setting(conn, "max_drawdown_pct", 25.0))
-            min_sharpe = float(db.get_setting(conn, "min_sharpe", 0.6))
-            exec_mode = str(db.get_setting(conn, "execution_mode", "server") or "server").strip().lower()
-            api_url = str(db.get_setting(conn, "worker_api_url", "http://127.0.0.1:8001") or "http://127.0.0.1:8001").strip()
-        finally:
-            conn.close()
+    conn = db._conn()
+    try:
+        min_tasks = int(db.get_setting(conn, "min_tasks_per_user", 2))
+        max_tasks = int(db.get_setting(conn, "max_tasks_per_user", 6))
+        max_concurrent_jobs = int(db.get_setting(conn, "max_concurrent_jobs", 2))
+        min_trades = int(db.get_setting(conn, "min_trades", 40))
+        min_total_return_pct = float(db.get_setting(conn, "min_total_return_pct", 15.0))
+        max_drawdown_pct = float(db.get_setting(conn, "max_drawdown_pct", 25.0))
+        min_sharpe = float(db.get_setting(conn, "min_sharpe", 0.6))
+        exec_mode = str(db.get_setting(conn, "execution_mode", "server") or "server").strip().lower()
+        api_url = str(db.get_setting(conn, "worker_api_url", "http://127.0.0.1:8001") or "http://127.0.0.1:8001").strip()
+    finally:
+        conn.close()
 
-        if exec_mode not in ("server", "worker"):
-            exec_mode = "server"
+    if exec_mode not in ("server", "worker"):
+        exec_mode = "server"
 
-        st.markdown("### 任務")
+    st.markdown("### 任務")
 
     pools_meta = db.list_factor_pools(int(cycle["id"]))
     fams = sorted({str(p.get("family") or "").strip() for p in pools_meta if str(p.get("family") or "").strip()})
