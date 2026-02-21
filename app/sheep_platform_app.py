@@ -957,6 +957,133 @@ def _style() -> None:
         unsafe_allow_html=True,
     )
 
+    # ─────────────────────────────────────────────────────────────────────
+    # Sidebar Toggle Failsafe
+    # 永遠可見的側邊欄切換鈕：不依賴 Streamlit selector 固定不變，避免收起後回不來
+    # ─────────────────────────────────────────────────────────────────────
+    st.components.v1.html(
+        """
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+#sheepSidebarToggle{
+  position: fixed;
+  top: 50%;
+  left: 0;
+  transform: translateY(-50%);
+  z-index: 2147483647;
+  width: 44px;
+  height: 84px;
+  border: 1px solid rgba(255,255,255,0.18);
+  border-left: none;
+  border-radius: 0 14px 14px 0;
+  background: rgba(15, 23, 42, 0.92);
+  color: rgba(255,255,255,0.92);
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: 0.5px;
+  box-shadow: 6px 0 22px rgba(0,0,0,0.65), 0 0 18px rgba(59,130,246,0.20);
+  cursor: pointer;
+  user-select: none;
+  outline: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#sheepSidebarToggle:hover{
+  background: rgba(30, 58, 138, 0.92);
+  border-color: rgba(120,180,255,0.55);
+  width: 52px;
+}
+#sheepSidebarToggle:active{
+  transform: translateY(-50%) translateX(1px);
+}
+</style>
+</head>
+<body>
+<button id="sheepSidebarToggle" type="button" aria-label="sidebar_toggle">≡</button>
+
+<script>
+(function(){
+  function safeDoc(){
+    try { return window.parent && window.parent.document ? window.parent.document : document; }
+    catch(e){ return document; }
+  }
+  function q(sel){
+    try { return safeDoc().querySelector(sel); } catch(e){ return null; }
+  }
+  function click(el){
+    try { el.click(); return true; } catch(e){ return false; }
+  }
+
+  function findOpen(){
+    return (
+      q('button[data-testid="collapsedControl"]') ||
+      q('[data-testid="collapsedControl"] button') ||
+      q('button[data-testid="stSidebarCollapsedControl"]') ||
+      q('[data-testid="stSidebarCollapsedControl"] button') ||
+      q('button[aria-label="Open sidebar"]') ||
+      q('button[title="Open sidebar"]') ||
+      q('button[aria-label="Show sidebar"]') ||
+      q('button[title="Show sidebar"]') ||
+      q('button[aria-label="Expand sidebar"]') ||
+      q('button[title="Expand sidebar"]')
+    );
+  }
+
+  function findClose(){
+    return (
+      q('button[data-testid="stSidebarCollapseButton"]') ||
+      q('[data-testid="stSidebarCollapseButton"] button') ||
+      q('button[aria-label="Close sidebar"]') ||
+      q('button[title="Close sidebar"]') ||
+      q('button[aria-label="Hide sidebar"]') ||
+      q('button[title="Hide sidebar"]') ||
+      q('button[aria-label="Collapse sidebar"]') ||
+      q('button[title="Collapse sidebar"]')
+    );
+  }
+
+  var btn = document.getElementById("sheepSidebarToggle");
+
+  function syncLabel(){
+    var openBtn = findOpen();
+    var closeBtn = findClose();
+    if (openBtn) btn.textContent = "›";
+    else if (closeBtn) btn.textContent = "‹";
+    else btn.textContent = "≡";
+  }
+
+  btn.addEventListener("click", function(){
+    var openBtn = findOpen();
+    if (openBtn) {
+      click(openBtn);
+      setTimeout(syncLabel, 180);
+      return;
+    }
+    var closeBtn = findClose();
+    if (closeBtn) {
+      click(closeBtn);
+      setTimeout(syncLabel, 180);
+      return;
+    }
+    setTimeout(syncLabel, 180);
+  });
+
+  // 保底：Streamlit rerun / DOM 變動時，定期重抓按鈕狀態
+  syncLabel();
+  setInterval(syncLabel, 800);
+})();
+</script>
+</body>
+</html>
+""",
+        height=0,
+        scrolling=False,
+    )
+
 _LAST_ROLLOVER_CHECK = 0.0
 
 
