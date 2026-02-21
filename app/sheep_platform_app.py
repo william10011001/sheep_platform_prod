@@ -1086,7 +1086,12 @@ def _login_form() -> None:
         st.error("登入已鎖定。")
         return
 
-    if not verify_password(password, user["password_hash"]):
+    try:
+        is_valid = verify_password(password, user["password_hash"])
+    except TypeError:
+        is_valid = verify_password(password.encode("utf-8"), user["password_hash"])
+
+    if not is_valid:
         db.update_user_login_state(int(user["id"]), success=False)
         st.error("帳號或密碼錯誤。")
         return
@@ -1169,14 +1174,19 @@ def _register_form() -> None:
         return
 
     try:
-        uid = db.create_user(username=uname, password_hash=hash_password(pw), role="user", wallet_address="", wallet_chain="TRC20")
+        try:
+            pw_hashed = hash_password(pw)
+        except TypeError:
+            pw_hashed = hash_password(pw.encode("utf-8"))
+
+        uid = db.create_user(username=uname, password_hash=pw_hashed, role="user", wallet_address="", wallet_chain="TRC20")
         db.write_audit_log(uid, "register", {"username": uname})
         if tos_version.strip():
             db.write_audit_log(uid, "tos_accept", {"version": tos_version})
         else:
             db.write_audit_log(uid, "tos_accept", {})
-    except Exception:
-        st.error("建立失敗。")
+    except Exception as e:
+        st.error(f"建立失敗：{e}")
         return
 
     user = db.get_user_by_id(int(uid))

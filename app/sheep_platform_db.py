@@ -171,6 +171,18 @@ def init_db() -> None:
             );
             """
         )
+        try:
+            conn.execute("ALTER TABLE users ADD COLUMN run_enabled INTEGER NOT NULL DEFAULT 1")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE users ADD COLUMN wallet_address TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE users ADD COLUMN wallet_chain TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
         conn.commit()
     finally:
         conn.close()
@@ -213,6 +225,12 @@ def create_user(
     uname_norm = normalize_username(uname)
     if not uname_norm:
         raise ValueError("invalid username")
+        
+    if isinstance(password_hash, bytes):
+        pw_str = password_hash.decode("utf-8")
+    else:
+        pw_str = str(password_hash or "")
+        
     conn = _conn()
     try:
         cur = conn.execute(
@@ -220,7 +238,7 @@ def create_user(
             INSERT INTO users (username, username_norm, password_hash, role, disabled, run_enabled, wallet_address, wallet_chain, created_at)
             VALUES (?, ?, ?, ?, 0, 1, ?, ?, ?)
             """,
-            (uname, uname_norm, str(password_hash or ""), str(role or "user"), str(wallet_address or ""), str(wallet_chain or ""), _now_iso()),
+            (uname, uname_norm, pw_str, str(role or "user"), str(wallet_address or ""), str(wallet_chain or ""), _now_iso()),
         )
         conn.commit()
         return int(cur.lastrowid)
@@ -255,11 +273,12 @@ def is_user_locked(user_id: int) -> bool:
         return False
 
 
-def update_user_login_state(user_id: int) -> None:
+def update_user_login_state(user_id: int, success: bool = True) -> None:
     conn = _conn()
     try:
-        conn.execute("UPDATE users SET last_login_at = ? WHERE id = ?", (_now_iso(), int(user_id)))
-        conn.commit()
+        if success:
+            conn.execute("UPDATE users SET last_login_at = ? WHERE id = ?", (_now_iso(), int(user_id)))
+            conn.commit()
     finally:
         conn.close()
 
