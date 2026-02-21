@@ -3834,7 +3834,70 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 import datetime
+import sqlite3
 from datetime import timezone, timedelta
+
+
+def _db_path() -> str:
+    """
+    Resolve DB path.
+    Priority:
+      1) SHEEP_DB_PATH env
+      2) ./data/sheep.db relative to this file
+    """
+    p = str(os.environ.get("SHEEP_DB_PATH", "") or "").strip()
+    if p:
+        # allow relative path (relative to project root inside container)
+        if not os.path.isabs(p):
+            try:
+                base_dir = os.path.dirname(os.path.abspath(__file__))
+            except Exception:
+                base_dir = os.getcwd()
+            p = os.path.join(base_dir, p)
+        return p
+
+    try:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+    except Exception:
+        base_dir = os.getcwd()
+    return os.path.join(base_dir, "data", "sheep.db")
+
+
+def _conn() -> sqlite3.Connection:
+    """
+    Return a sqlite3 connection with sane defaults for web apps.
+    - WAL: better concurrency
+    - busy_timeout: reduce 'database is locked'
+    - row_factory: allow dict(row) usage
+    """
+    path = _db_path()
+    # ensure dir exists
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+    except Exception:
+        pass
+
+    conn = sqlite3.connect(path, timeout=30.0, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+
+    try:
+        conn.execute("PRAGMA foreign_keys = ON;")
+    except Exception:
+        pass
+    try:
+        conn.execute("PRAGMA journal_mode = WAL;")
+    except Exception:
+        pass
+    try:
+        conn.execute("PRAGMA synchronous = NORMAL;")
+    except Exception:
+        pass
+    try:
+        conn.execute("PRAGMA busy_timeout = 30000;")  # 30s
+    except Exception:
+        pass
+
+    return conn
 
 def ensure_cycle_rollover() -> None:
     conn = _conn()
