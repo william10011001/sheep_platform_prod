@@ -521,7 +521,22 @@ def issue_token(req: Request, body: TokenRequest):
     if not user:
         raise HTTPException(status_code=401, detail="bad_credentials")
 
-    if not db.verify_user_password(user["id"], body.password):
+    # [專家除錯] 修正遺失的方法調用，並套用強化的 Bytes/String 驗證護城河
+    from sheep_platform_security import verify_password
+    is_valid = False
+    try:
+        is_valid = verify_password(body.password, user["password_hash"])
+    except TypeError:
+        pw_bytes = body.password.encode("utf-8") if isinstance(body.password, str) else body.password
+        hash_bytes = user["password_hash"].encode("utf-8") if isinstance(user["password_hash"], str) else user["password_hash"]
+        try:
+            is_valid = verify_password(pw_bytes, hash_bytes)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    if not is_valid:
         raise HTTPException(status_code=401, detail="bad_credentials")
 
     if int(user.get("disabled") or 0) != 0:

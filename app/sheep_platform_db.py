@@ -1321,15 +1321,20 @@ def _init_once() -> None:
         if row:
             conn = db._conn()
             try:
+                # [專家除錯] 確保更新的 password_hash 轉為字串存入，避免 SQLite 存成 BLOB 造成後續驗證崩潰
+                pw_hash = hash_password(admin_password)
+                pw_hash_str = pw_hash.decode('utf-8') if isinstance(pw_hash, bytes) else str(pw_hash)
                 conn.execute(
                     "UPDATE users SET password_hash = ?, role = 'admin', disabled = 0 WHERE id = ?",
-                    (hash_password(admin_password), int(row["id"])),
+                    (pw_hash_str, int(row["id"])),
                 )
                 conn.commit()
             finally:
                 conn.close()
         else:
-            db.create_user(username=admin_username, password_hash=hash_password(admin_password), role="admin", wallet_address="", wallet_chain="TRC20")
+            pw_hash = hash_password(admin_password)
+            pw_hash_str = pw_hash.decode('utf-8') if isinstance(pw_hash, bytes) else str(pw_hash)
+            db.create_user(username=admin_username, password_hash=pw_hash_str, role="admin", wallet_address="", wallet_chain="TRC20")
 
         try:
             db.write_audit_log(None, "ensure_admin", {"username": admin_username})
@@ -1493,7 +1498,22 @@ def _login_form() -> None:
         st.error("登入已鎖定。")
         return
 
-    if not verify_password(password, user["password_hash"]):
+    # [專家除錯] 強化密碼驗證邏輯，完美處理資料庫儲存為 bytes/str 混用的潛在錯誤
+    is_valid = False
+    try:
+        is_valid = verify_password(password, user["password_hash"])
+    except TypeError:
+        # 當 bcrypt 需要 bytes 但收到字串時會觸發 TypeError，這裡強制雙向轉換保證通過
+        pw_bytes = password.encode("utf-8") if isinstance(password, str) else password
+        hash_bytes = user["password_hash"].encode("utf-8") if isinstance(user["password_hash"], str) else user["password_hash"]
+        try:
+            is_valid = verify_password(pw_bytes, hash_bytes)
+        except Exception:
+            is_valid = False
+    except Exception:
+        is_valid = False
+
+    if not is_valid:
         db.update_user_login_state(int(user["id"]), success=False)
         st.error("帳號或密碼錯誤。")
         return
@@ -4130,9 +4150,8 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-import datetime
 import sqlite3
-from datetime import timezone, timedelta
+from datetime import datetime as _safe_dt, timezone as _safe_tz, timedelta as _safe_td
 
 
 def _db_path() -> str:
@@ -4201,11 +4220,11 @@ def ensure_cycle_rollover() -> None:
     try:
         cur = conn.execute("SELECT id, start_ts, end_ts FROM mining_cycles WHERE status = 'active' ORDER BY id DESC LIMIT 1")
         active = cur.fetchone()
-        now_dt = datetime.datetime.now(timezone.utc)
+        now_dt = _safe_dt.now(_safe_tz.utc)
         now_str = now_dt.isoformat()
 
         if not active:
-            end_ts = (now_dt + timedelta(days=7)).isoformat()
+            end_ts = (now_dt + _safe_td(days=7)).isoformat()
             conn.execute("INSERT INTO mining_cycles (name, status, start_ts, end_ts) VALUES (?, ?, ?, ?)",
                             ("Cycle 1", "active", now_str, end_ts))
             conn.commit()
@@ -4213,7 +4232,7 @@ def ensure_cycle_rollover() -> None:
             if now_str > active["end_ts"]:
                 conn.execute("UPDATE mining_cycles SET status = 'completed' WHERE id = ?", (active["id"],))
                 # [專家修正] 移除多餘的 fromisoformat，直接使用現有的 now_dt 變數，避免舊版 Python 發生解析錯誤
-                new_end = (now_dt + timedelta(days=7)).isoformat()
+                new_end = (now_dt + _safe_td(days=7)).isoformat()
                 conn.execute("INSERT INTO mining_cycles (name, status, start_ts, end_ts) VALUES (?, ?, ?, ?)",
                                 (f"Cycle {active['id'] + 1}", "active", now_str, new_end))
                 conn.commit()
