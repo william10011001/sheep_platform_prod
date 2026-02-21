@@ -120,15 +120,26 @@ iframe[data-sheep-brand="1"],
 iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
   position: fixed !important;
   top: 0 !important;
-  /* 專家修復：將 Header 向右移動，留出左側 50px 給 Streamlit 側邊欄按鈕 */
-  left: 50px !important; 
-  width: 360px !important;
+  /* 教授級終極修正：將 Header 偏移 60px 避開側邊欄控制鈕區域 */
+  left: 60px !important; 
+  width: 300px !important;
   height: 84px !important;
   border: 0 !important;
-  /* 降低 z-index，確保它不會蓋過 2147483647 的側邊欄按鈕 */
-  z-index: 1000 !important;
+  /* 降低層級避免遮擋 React 交互層 */
+  z-index: 500 !important;
   background: transparent !important;
-  pointer-events: none !important; /* 讓滑鼠可以穿透空白區點擊下方元素 */
+  pointer-events: none !important;
+}}
+
+/* 強制讓 Streamlit 原始按鈕容器出現在最前方，且具備明顯背景 */
+div[data-testid="stSidebarCollapsedControl"] {{
+    left: 8px !important;
+    top: 10px !important;
+    z-index: 2147483647 !important;
+    background: #2563eb !important;
+    border-radius: 8px !important;
+    padding: 4px !important;
+    box-shadow: 0 0 15px rgba(0,0,0,0.5) !important;
 }}
 
 /* 強制將 Streamlit 的控制項推回最前線 */
