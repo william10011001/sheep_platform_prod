@@ -3335,7 +3335,26 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
         cycle_id = int(cycle["id"])
         pools = db.list_factor_pools(cycle_id=cycle_id)
         pool_map = {int(p["id"]): p for p in pools}
+        with st.expander("Pool 救援 / 匯入", expanded=(not bool(pools))):
+            try:
+                st.caption(f"目前資料庫：{db._db_path()} · active_cycle_id={int(cycle_id)}")
+            except Exception:
+                pass
 
+            if st.button("從本地掃描找回 Pool", key="pool_recover"):
+                try:
+                    rep = db.recover_factor_pools_from_local(cycle_id=int(cycle_id))
+                    if int(rep.get("imported") or 0) > 0:
+                        st.success(f"已匯入 {int(rep.get('imported') or 0)} 個 Pool（重複略過 {int(rep.get('skipped_duplicates') or 0)}）")
+                    else:
+                        st.warning("沒有找到可匯入的 Pool（或全部都已存在）。")
+                    st.json(rep)
+                    st.rerun()
+                except Exception as e:
+                    import traceback
+                    st.error(f"Pool 救援失敗：{e}")
+                    st.code(traceback.format_exc(), language="text")
+                    st.stop()
         if pools:
             rows = []
             for p in pools:
@@ -3356,113 +3375,117 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
         else:
             st.info("無 Pool。")
 
-        st.markdown("Pool 編輯")
+        st.markdown("Pool 編輯 / 複製 Pool")
+
         if not pools:
-            st.stop()
+            st.caption("目前沒有任何 Pool。你可以直接在下方「新增 Pool」建立，或使用「Pool 救援 / 匯入」找回舊資料。")
+        else:
+            pool_ids = [int(p["id"]) for p in pools]
 
-        pool_ids = [int(p["id"]) for p in pools]
+            def _fmt_pool(pid: int) -> str:
+                p = pool_map.get(int(pid)) or {}
+                return f"{int(pid)} · {p.get('name','')} · {p.get('symbol','')} · {p.get('timeframe_min','')}m · {p.get('family','')}"
 
-        def _fmt_pool(pid: int) -> str:
-            p = pool_map.get(int(pid)) or {}
-            return f"{int(pid)} · {p.get('name','')} · {p.get('symbol','')} · {p.get('timeframe_min','')}m · {p.get('family','')}"
+            sel_id = st.selectbox("Pool", options=pool_ids, format_func=_fmt_pool, key="pool_sel")
+            sel = db.get_pool(int(sel_id))
 
-        sel_id = st.selectbox("Pool", options=pool_ids, format_func=_fmt_pool, key="pool_sel")
-        sel = db.get_pool(int(sel_id))
+            if sel:
+                with st.form("pool_edit_form", clear_on_submit=False):
+                    name = st.text_input("name", value=str(sel.get("name") or ""))
+                    symbol = st.text_input("symbol", value=str(sel.get("symbol") or ""))
+                    tf_min = st.number_input("timeframe_min", min_value=1, max_value=1440, value=int(sel.get("timeframe_min") or 30), step=1)
+                    years = st.number_input("years", min_value=1, max_value=10, value=int(sel.get("years") or 3), step=1)
+                    family = st.text_input("family", value=str(sel.get("family") or ""))
+                    num_partitions = st.number_input("num_partitions", min_value=8, max_value=2048, value=int(sel.get("num_partitions") or 128), step=8)
+                    seed = st.number_input("seed", min_value=0, value=int(sel.get("seed") or 0), step=1)
 
-        if sel:
-            with st.form("pool_edit_form", clear_on_submit=False):
-                name = st.text_input("name", value=str(sel.get("name") or ""))
-                symbol = st.text_input("symbol", value=str(sel.get("symbol") or ""))
-                tf_min = st.number_input("timeframe_min", min_value=1, max_value=1440, value=int(sel.get("timeframe_min") or 30), step=1)
-                years = st.number_input("years", min_value=1, max_value=10, value=int(sel.get("years") or 3), step=1)
-                family = st.text_input("family", value=str(sel.get("family") or ""))
-                num_partitions = st.number_input("num_partitions", min_value=8, max_value=2048, value=int(sel.get("num_partitions") or 128), step=8)
-                seed = st.number_input("seed", min_value=0, value=int(sel.get("seed") or 0), step=1)
+                    grid_spec_json = st.text_area("grid_spec_json", value=json.dumps(sel.get("grid_spec") or {}, ensure_ascii=False), height=140)
+                    risk_spec_json = st.text_area("risk_spec_json", value=json.dumps(sel.get("risk_spec") or {}, ensure_ascii=False), height=140)
 
-                grid_spec_json = st.text_area("grid_spec_json", value=json.dumps(sel.get("grid_spec") or {}, ensure_ascii=False), height=140)
-                risk_spec_json = st.text_area("risk_spec_json", value=json.dumps(sel.get("risk_spec") or {}, ensure_ascii=False), height=140)
+                    active = st.checkbox("active", value=bool(int(sel.get("active") or 0) == 1))
+                    save = st.form_submit_button("保存")
 
-                active = st.checkbox("active", value=bool(int(sel.get("active") or 0) == 1))
+                if save:
+                    try:
+                        grid_spec = json.loads(grid_spec_json)
+                        risk_spec = json.loads(risk_spec_json)
+                        db.update_factor_pool(
+                            pool_id=int(sel_id),
+                            name=str(name),
+                            symbol=str(symbol),
+                            timeframe_min=int(tf_min),
+                            years=int(years),
+                            family=str(family),
+                            grid_spec=dict(grid_spec),
+                            risk_spec=dict(risk_spec),
+                            num_partitions=int(num_partitions),
+                            seed=int(seed),
+                            active=bool(active),
+                        )
+                        db.write_audit_log(int(user["id"]), "pool_update", {"pool_id": int(sel_id)})
+                        st.rerun()
+                    except Exception as e:
+                        import traceback
+                        st.error(f"保存失敗：{e}")
+                        st.code(traceback.format_exc(), language="text")
+                        st.stop()
 
-                save = st.form_submit_button("保存")
+                col_r1, col_r2 = st.columns([1, 1])
+                with col_r1:
+                    if st.button("重置任務", key="pool_reset_tasks"):
+                        try:
+                            n = db.delete_tasks_for_pool(cycle_id=cycle_id, pool_id=int(sel_id))
+                            db.write_audit_log(int(user["id"]), "pool_reset_tasks", {"pool_id": int(sel_id), "deleted": int(n)})
+                            st.rerun()
+                        except Exception as e:
+                            import traceback
+                            st.error(f"重置任務失敗：{e}")
+                            st.code(traceback.format_exc(), language="text")
+                            st.stop()
 
-            if save:
-                try:
-                    grid_spec = json.loads(grid_spec_json)
-                    risk_spec = json.loads(risk_spec_json)
-                except Exception as e:
-                    import traceback
-                    st.error(f"JSON 格式解析錯誤，請檢查您的括號或屬性是否正確。\n錯誤詳情：{e}")
-                    st.code(traceback.format_exc(), language="text")
-                    st.stop()
+            st.markdown("複製 Pool")
+            src_id = st.selectbox("來源 Pool", options=pool_ids, format_func=_fmt_pool, key="pool_clone_src")
+            src = db.get_pool(int(src_id)) if src_id else None
+            if src:
+                with st.form("pool_clone", clear_on_submit=False):
+                    name = st.text_input("new_name", value=f"{src.get('name','')} Copy")
+                    symbol = st.text_input("new_symbol", value=str(src.get("symbol") or "BTC_USDT"))
+                    tf_min = st.number_input("new_timeframe_min", min_value=1, max_value=1440, value=int(src.get("timeframe_min") or 30), step=1)
+                    years = st.number_input("new_years", min_value=1, max_value=10, value=int(src.get("years") or 3), step=1)
+                    family = st.text_input("new_family", value=str(src.get("family") or "RSI"))
+                    num_partitions = st.number_input("new_num_partitions", min_value=8, max_value=2048, value=int(src.get("num_partitions") or 128), step=8)
+                    seed = st.number_input("new_seed", min_value=0, value=int(time.time()) & 0x7FFFFFFF, step=1)
 
-                db.update_factor_pool(
-                    pool_id=int(sel_id),
-                    name=str(name),
-                    symbol=str(symbol),
-                    timeframe_min=int(tf_min),
-                    years=int(years),
-                    family=str(family),
-                    grid_spec=dict(grid_spec),
-                    risk_spec=dict(risk_spec),
-                    num_partitions=int(num_partitions),
-                    seed=int(seed),
-                    active=bool(active),
-                )
-                db.write_audit_log(int(user["id"]), "pool_update", {"pool_id": int(sel_id)})
-                st.rerun()
+                    grid_spec_json = st.text_area("new_grid_spec_json", value=json.dumps(src.get("grid_spec") or {}, ensure_ascii=False), height=120)
+                    risk_spec_json = st.text_area("new_risk_spec_json", value=json.dumps(src.get("risk_spec") or {}, ensure_ascii=False), height=120)
 
-            col_r1, col_r2 = st.columns([1, 1])
-            with col_r1:
-                if st.button("重置任務", key="pool_reset_tasks"):
-                    n = db.delete_tasks_for_pool(cycle_id=cycle_id, pool_id=int(sel_id))
-                    db.write_audit_log(int(user["id"]), "pool_reset_tasks", {"pool_id": int(sel_id), "deleted": int(n)})
-                    st.rerun()
+                    active = st.checkbox("new_active", value=True)
+                    submitted = st.form_submit_button("建立")
 
-        st.markdown("複製 Pool")
-        src_id = st.selectbox("來源 Pool", options=pool_ids, format_func=_fmt_pool, key="pool_clone_src")
-        src = db.get_pool(int(src_id)) if src_id else None
-        if src:
-            with st.form("pool_clone", clear_on_submit=False):
-                name = st.text_input("new_name", value=f"{src.get('name','')} Copy")
-                symbol = st.text_input("new_symbol", value=str(src.get("symbol") or "BTC_USDT"))
-                tf_min = st.number_input("new_timeframe_min", min_value=1, max_value=1440, value=int(src.get("timeframe_min") or 30), step=1)
-                years = st.number_input("new_years", min_value=1, max_value=10, value=int(src.get("years") or 3), step=1)
-                family = st.text_input("new_family", value=str(src.get("family") or "RSI"))
-                num_partitions = st.number_input("new_num_partitions", min_value=8, max_value=2048, value=int(src.get("num_partitions") or 128), step=8)
-                seed = st.number_input("new_seed", min_value=0, value=int(time.time()) & 0x7FFFFFFF, step=1)
-
-                grid_spec_json = st.text_area("new_grid_spec_json", value=json.dumps(src.get("grid_spec") or {}, ensure_ascii=False), height=120)
-                risk_spec_json = st.text_area("new_risk_spec_json", value=json.dumps(src.get("risk_spec") or {}, ensure_ascii=False), height=120)
-
-                active = st.checkbox("new_active", value=True)
-                submitted = st.form_submit_button("建立")
-
-            if submitted:
-                try:
-                    grid_spec = json.loads(grid_spec_json)
-                    risk_spec = json.loads(risk_spec_json)
-                except Exception as e:
-                    import traceback
-                    st.error(f"JSON 格式解析錯誤，請檢查您的括號或屬性是否正確。\n錯誤詳情：{e}")
-                    st.code(traceback.format_exc(), language="text")
-                    st.stop()
-
-                pid_new = db.create_factor_pool(
-                    cycle_id=cycle_id,
-                    name=str(name),
-                    symbol=str(symbol),
-                    timeframe_min=int(tf_min),
-                    years=int(years),
-                    family=str(family),
-                    grid_spec=dict(grid_spec),
-                    risk_spec=dict(risk_spec),
-                    num_partitions=int(num_partitions),
-                    seed=int(seed),
-                    active=bool(active),
-                )
-                db.write_audit_log(int(user["id"]), "pool_clone", {"src_pool_id": int(src_id), "pool_id": int(pid_new)})
-                st.rerun()
+                if submitted:
+                    try:
+                        grid_spec = json.loads(grid_spec_json)
+                        risk_spec = json.loads(risk_spec_json)
+                        pid_new = db.create_factor_pool(
+                            cycle_id=cycle_id,
+                            name=str(name),
+                            symbol=str(symbol),
+                            timeframe_min=int(tf_min),
+                            years=int(years),
+                            family=str(family),
+                            grid_spec=dict(grid_spec),
+                            risk_spec=dict(risk_spec),
+                            num_partitions=int(num_partitions),
+                            seed=int(seed),
+                            active=bool(active),
+                        )
+                        db.write_audit_log(int(user["id"]), "pool_clone", {"src_pool_id": int(src_id), "pool_id": int(pid_new)})
+                        st.rerun()
+                    except Exception as e:
+                        import traceback
+                        st.error(f"複製失敗：{e}")
+                        st.code(traceback.format_exc(), language="text")
+                        st.stop()
 
         st.markdown("新增 Pool")
         with st.form("pool_create", clear_on_submit=False):

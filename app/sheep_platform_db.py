@@ -4516,7 +4516,199 @@ def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, m
         print(f"[DB ERROR] assign_tasks_for_user: {e}")
     finally:
         conn.close()
+def _safe_listdir(dir_path: str) -> List[str]:
+    try:
+        return [os.path.join(dir_path, x) for x in os.listdir(dir_path)]
+    except Exception:
+        return []
 
+def _sqlite_has_table(conn: sqlite3.Connection, table: str) -> bool:
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+            (table,),
+        ).fetchone()
+        return bool(row)
+    except Exception:
+        return False
+
+def _read_factor_pools_from_sqlite(db_path: str) -> List[Dict[str, Any]]:
+    try:
+        conn = sqlite3.connect(db_path, timeout=5.0, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+    except Exception:
+        return []
+    try:
+        if not _sqlite_has_table(conn, "factor_pools"):
+            return []
+        rows = conn.execute("SELECT * FROM factor_pools").fetchall()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+def recover_factor_pools_from_local(cycle_id: int, search_roots: Optional[List[str]] = None, max_files: int = 80) -> Dict[str, Any]:
+    """
+    從本機/容器常見位置掃描舊的 sqlite db，將 factor_pools 匯入目前 cycle。
+    目的：救回「原本設定過但現在看不到」的 Pool。
+    """
+    report: Dict[str, Any] = {
+        "cycle_id": int(cycle_id),
+        "current_db_path": _db_path(),
+        "scanned_files": 0,
+        "candidates": [],
+        "imported": 0,
+        "skipped_duplicates": 0,
+        "errors": [],
+    }
+
+    cur_db = _db_path()
+    roots = search_roots[:] if search_roots else []
+    if not roots:
+        try:
+            here = os.path.dirname(os.path.abspath(__file__))
+        except Exception:
+            here = os.getcwd()
+
+        roots = [
+            os.getcwd(),
+            here,
+            os.path.join(here, "data"),
+            "/app",
+            "/app/data",
+            "/data",
+            "/mnt",
+            "/mnt/data",
+        ]
+
+    # 收集 db 檔候選
+    seen = set()
+    db_files: List[str] = []
+    for r in roots:
+        if not r or not isinstance(r, str):
+            continue
+        r = r.strip()
+        if not r:
+            continue
+
+        # 若給的是檔案就直接加入
+        if os.path.isfile(r) and r.lower().endswith(".db"):
+            if r not in seen:
+                seen.add(r)
+                db_files.append(r)
+            continue
+
+        # 若是資料夾就掃描一層
+        if os.path.isdir(r):
+            for p in _safe_listdir(r):
+                pl = str(p).lower()
+                if not pl.endswith(".db"):
+                    continue
+                name = os.path.basename(pl)
+                if ("sheep" in name) or (name in ("db.sqlite", "sqlite.db", "app.db")):
+                    if p not in seen:
+                        seen.add(p)
+                        db_files.append(p)
+
+    # 再保守一點：把 roots 底下一層所有 .db 都掃進來（上限保護）
+    if len(db_files) < 3:
+        for r in roots:
+            if os.path.isdir(r):
+                for p in _safe_listdir(r):
+                    if str(p).lower().endswith(".db") and p not in seen:
+                        seen.add(p)
+                        db_files.append(p)
+
+    # 排除目前正在用的 db
+    db_files = [p for p in db_files if os.path.abspath(p) != os.path.abspath(cur_db)]
+    db_files = db_files[: max_files]
+
+    report["scanned_files"] = len(db_files)
+
+    # 讀取目前 cycle 已有 pools，做去重 key
+    existing_keys = set()
+    try:
+        cur_conn = _conn()
+        try:
+            if _sqlite_has_table(cur_conn, "factor_pools"):
+                for r in cur_conn.execute("SELECT name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed FROM factor_pools WHERE cycle_id = ?", (int(cycle_id),)).fetchall():
+                    key = (
+                        str(r["name"] or ""),
+                        str(r["symbol"] or ""),
+                        int(r["timeframe_min"] or 0),
+                        int(r["years"] or 0),
+                        str(r["family"] or ""),
+                        str(r["grid_spec_json"] or ""),
+                        str(r["risk_spec_json"] or ""),
+                        int(r["num_partitions"] or 0),
+                        int(r["seed"] or 0),
+                    )
+                    existing_keys.add(key)
+        finally:
+            cur_conn.close()
+    except Exception as e:
+        report["errors"].append(f"讀取既有 pools 失敗: {e}")
+
+    # 掃描舊 db 並匯入
+    imported = 0
+    skipped = 0
+    for p in db_files:
+        rows = _read_factor_pools_from_sqlite(p)
+        if not rows:
+            continue
+
+        # 只挑 active=1 的優先（若沒有就全部）
+        active_rows = [r for r in rows if int(r.get("active") or 0) == 1]
+        use_rows = active_rows if active_rows else rows
+
+        report["candidates"].append({"path": p, "rows": len(rows), "use_rows": len(use_rows)})
+
+        for r in use_rows:
+            try:
+                name = str(r.get("name") or "")
+                symbol = str(r.get("symbol") or "")
+                timeframe_min = int(r.get("timeframe_min") or 0)
+                years = int(r.get("years") or 0)
+                family = str(r.get("family") or "")
+                grid_spec_json = str(r.get("grid_spec_json") or r.get("grid_spec") or "{}")
+                risk_spec_json = str(r.get("risk_spec_json") or r.get("risk_spec") or "{}")
+                num_partitions = int(r.get("num_partitions") or 0)
+                seed = int(r.get("seed") or 0)
+                active = int(r.get("active") or 0)
+
+                key = (
+                    name, symbol, timeframe_min, years, family,
+                    grid_spec_json, risk_spec_json, num_partitions, seed
+                )
+                if key in existing_keys:
+                    skipped += 1
+                    continue
+
+                conn = _conn()
+                try:
+                    conn.execute(
+                        """
+                        INSERT INTO factor_pools (cycle_id, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (int(cycle_id), name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, 1 if active else 0, _now_iso())
+                    )
+                    conn.commit()
+                finally:
+                    conn.close()
+
+                existing_keys.add(key)
+                imported += 1
+            except Exception as e:
+                report["errors"].append(f"匯入失敗 {p}: {e}")
+
+    report["imported"] = int(imported)
+    report["skipped_duplicates"] = int(skipped)
+    return report
 def list_tasks_for_user(user_id: int, cycle_id: int = 0) -> list:
     conn = _conn()
     try:
