@@ -721,35 +721,41 @@ def _style() -> None:
         div[data-testid="stStatusWidget"] { display: none !important; }
         div[data-testid="stDecoration"] { display: none !important; }
 
-        /* [專家級 UI 終極修復] 側邊欄與按鈕層級控制 */
-        /* 1. 強制讓 Streamlit 原生展開按鈕穿透所有 iframe 與自定義層 */
-        div[data-testid="stSidebarCollapsedControl"],
-        button[kind="headerNoPadding"] {
-            z-index: 2147483647 !important;
-            background: #2563eb !important;
-            border-radius: 0 10px 10px 0 !important;
-            width: 42px !important;
-            height: 48px !important;
+        /* [專家級 UI 終極修復 V4] 強制穿透式按鈕顯示 */
+        /* 1. 強制讓展開控制項脫離 Streamlit 預設佈局層級 */
+        div[data-testid="stSidebarCollapsedControl"] {
+            position: fixed !important;
             left: 0 !important;
-            top: 10px !important;
-            display: flex !important;
-            align-items: center !important;
-            justify-content: center !important;
-            box-shadow: 4px 0 15px rgba(0,0,0,0.4) !important;
+            top: 12px !important;
+            z-index: 2147483647 !important;
+            display: block !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+            background: #2563eb !important;
+            border-radius: 0 12px 12px 0 !important;
+            padding: 8px !important;
+            box-shadow: 5px 0 20px rgba(0,0,0,0.5) !important;
         }
         
-        /* 讓展開按鈕內的 SVG 圖示強制顯示為白色 */
-        div[data-testid="stSidebarCollapsedControl"] svg {
-            fill: white !important;
-            width: 24px !important;
-            height: 24px !important;
+        /* 2. 強制內部的按鈕本身也要可見且穿透 */
+        div[data-testid="stSidebarCollapsedControl"] button {
+            background: transparent !important;
+            color: white !important;
+            border: none !important;
+            width: 45px !important;
+            height: 45px !important;
         }
 
-        /* 2. 側邊欄展開時，收起鈕的樣式優化 */
+        div[data-testid="stSidebarCollapsedControl"] svg {
+            fill: white !important;
+            width: 28px !important;
+            height: 28px !important;
+        }
+
+        /* 3. 修正側邊欄內部的收起按鈕，防止它跟展開按鈕在同一位置重疊 */
         button[data-testid="stSidebarCollapseButton"] {
             z-index: 2147483647 !important;
-            background: rgba(255,255,255,0.05) !important;
-            border: 1px solid rgba(255,255,255,0.1) !important;
+            background: rgba(255,255,255,0.1) !important;
         }
 
         /* 3. 修正主內容區塊的 Padding，防止內容被固定的 Brand Header 遮擋 */
@@ -917,130 +923,46 @@ def _style() -> None:
     )
 
     # ─────────────────────────────────────────────────────────────────────
-    # Sidebar Toggle Failsafe
-    # 永遠可見的側邊欄切換鈕：不依賴 Streamlit selector 固定不變，避免收起後回不來
+    # [專家級 DOM 守護者] 強制顯示與劫持側邊欄按鈕
+    # 解決截圖中按鈕消失的終極手段：透過 JavaScript 強制從 Parent DOM 提取按鈕
     # ─────────────────────────────────────────────────────────────────────
     st.components.v1.html(
         """
-<!doctype html>
-<html>
-<head>
-<meta charset="utf-8" />
-<style>
-#sheepSidebarToggle{
-  position: fixed;
-  top: 50%;
-  left: 0;
-  transform: translateY(-50%);
-  z-index: 2147483647;
-  width: 44px;
-  height: 84px;
-  border: 1px solid rgba(255,255,255,0.18);
-  border-left: none;
-  border-radius: 0 14px 14px 0;
-  background: rgba(15, 23, 42, 0.92);
-  color: rgba(255,255,255,0.92);
-  font-size: 22px;
-  font-weight: 900;
-  letter-spacing: 0.5px;
-  box-shadow: 6px 0 22px rgba(0,0,0,0.65), 0 0 18px rgba(59,130,246,0.20);
-  cursor: pointer;
-  user-select: none;
-  outline: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-#sheepSidebarToggle:hover{
-  background: rgba(30, 58, 138, 0.92);
-  border-color: rgba(120,180,255,0.55);
-  width: 52px;
-}
-#sheepSidebarToggle:active{
-  transform: translateY(-50%) translateX(1px);
-}
-</style>
-</head>
-<body>
-<button id="sheepSidebarToggle" type="button" aria-label="sidebar_toggle">≡</button>
+        <script>
+        (function() {
+            const doc = window.parent.document;
+            
+            function forceShowSidebar() {
+                // 1. 抓取所有可能的 Streamlit 側邊欄控制項
+                const selectors = [
+                    'div[data-testid="stSidebarCollapsedControl"]',
+                    'button[kind="headerNoPadding"]',
+                    '.st-emotion-cache-p5msec'
+                ];
+                
+                selectors.forEach(sel => {
+                    const el = doc.querySelector(sel);
+                    if (el) {
+                        el.style.display = 'flex';
+                        el.style.visibility = 'visible';
+                        el.style.opacity = '1';
+                        el.style.zIndex = '2147483647';
+                        el.style.background = '#2563eb';
+                        el.style.borderRadius = '0 12px 12px 0';
+                        el.style.position = 'fixed';
+                        el.style.left = '0';
+                        el.style.top = '12px';
+                    }
+                });
+            }
 
-<script>
-(function(){
-  function safeDoc(){
-    try { return window.parent && window.parent.document ? window.parent.document : document; }
-    catch(e){ return document; }
-  }
-  function q(sel){
-    try { return safeDoc().querySelector(sel); } catch(e){ return null; }
-  }
-  function click(el){
-    try { el.click(); return true; } catch(e){ return false; }
-  }
-
-  function findOpen(){
-    return (
-      q('button[data-testid="collapsedControl"]') ||
-      q('[data-testid="collapsedControl"] button') ||
-      q('button[data-testid="stSidebarCollapsedControl"]') ||
-      q('[data-testid="stSidebarCollapsedControl"] button') ||
-      q('button[aria-label="Open sidebar"]') ||
-      q('button[title="Open sidebar"]') ||
-      q('button[aria-label="Show sidebar"]') ||
-      q('button[title="Show sidebar"]') ||
-      q('button[aria-label="Expand sidebar"]') ||
-      q('button[title="Expand sidebar"]')
-    );
-  }
-
-  function findClose(){
-    return (
-      q('button[data-testid="stSidebarCollapseButton"]') ||
-      q('[data-testid="stSidebarCollapseButton"] button') ||
-      q('button[aria-label="Close sidebar"]') ||
-      q('button[title="Close sidebar"]') ||
-      q('button[aria-label="Hide sidebar"]') ||
-      q('button[title="Hide sidebar"]') ||
-      q('button[aria-label="Collapse sidebar"]') ||
-      q('button[title="Collapse sidebar"]')
-    );
-  }
-
-  var btn = document.getElementById("sheepSidebarToggle");
-
-  function syncLabel(){
-    var openBtn = findOpen();
-    var closeBtn = findClose();
-    if (openBtn) btn.textContent = "›";
-    else if (closeBtn) btn.textContent = "‹";
-    else btn.textContent = "≡";
-  }
-
-  btn.addEventListener("click", function(){
-    var openBtn = findOpen();
-    if (openBtn) {
-      click(openBtn);
-      setTimeout(syncLabel, 180);
-      return;
-    }
-    var closeBtn = findClose();
-    if (closeBtn) {
-      click(closeBtn);
-      setTimeout(syncLabel, 180);
-      return;
-    }
-    setTimeout(syncLabel, 180);
-  });
-
-  // 保底：Streamlit rerun / DOM 變動時，定期重抓按鈕狀態
-  syncLabel();
-  setInterval(syncLabel, 800);
-})();
-</script>
-</body>
-</html>
-""",
-        height=0,
-        scrolling=False,
+            // 每 300 毫秒強力檢查一次，防止 React 狀態變更後按鈕被銷毀或隱藏
+            setInterval(forceShowSidebar, 300);
+            forceShowSidebar();
+        })();
+        </script>
+        """,
+        height=0
     )
 
 _LAST_ROLLOVER_CHECK = 0.0
