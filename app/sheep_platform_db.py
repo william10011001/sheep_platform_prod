@@ -69,7 +69,8 @@ if getattr(st.dataframe, "__name__", "") != "_dataframe_compat":
 
 import backtest_panel2 as bt
 
-import sheep_platform_db as db
+import sys as _sys
+db = _sys.modules[__name__]
 from sheep_platform_security import (
     hash_password,
     verify_password,
@@ -79,6 +80,283 @@ from sheep_platform_security import (
     normalize_username,
     get_fernet,
 )
+# ─────────────────────────────────────────────────────────────────────────────
+# DB API (sqlite) — minimal set required for Auth + Admin bootstrap
+# ─────────────────────────────────────────────────────────────────────────────
+import sqlite3
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _db_path() -> str:
+    p = str(os.environ.get("SHEEP_DB_PATH", "") or "").strip()
+    if p:
+        if not os.path.isabs(p):
+            try:
+                base_dir = os.path.dirname(os.path.abspath(__file__))
+            except Exception:
+                base_dir = os.getcwd()
+            p = os.path.join(base_dir, p)
+        return p
+    try:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+    except Exception:
+        base_dir = os.getcwd()
+    return os.path.join(base_dir, "data", "sheep.db")
+
+
+def _conn() -> sqlite3.Connection:
+    path = _db_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+    except Exception:
+        pass
+
+    conn = sqlite3.connect(path, timeout=30.0, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+
+    try:
+        conn.execute("PRAGMA foreign_keys = ON;")
+    except Exception:
+        pass
+    try:
+        conn.execute("PRAGMA journal_mode = WAL;")
+    except Exception:
+        pass
+    try:
+        conn.execute("PRAGMA synchronous = NORMAL;")
+    except Exception:
+        pass
+    try:
+        conn.execute("PRAGMA busy_timeout = 30000;")
+    except Exception:
+        pass
+
+    return conn
+
+
+def init_db() -> None:
+    conn = _conn()
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                username_norm TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'user',
+                disabled INTEGER NOT NULL DEFAULT 0,
+                run_enabled INTEGER NOT NULL DEFAULT 1,
+                wallet_address TEXT NOT NULL DEFAULT '',
+                wallet_chain TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                last_login_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS audit_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                action TEXT NOT NULL,
+                payload_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL
+            );
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_user_by_username(username: str) -> Optional[sqlite3.Row]:
+    uname_norm = normalize_username(str(username or ""))
+    if not uname_norm:
+        return None
+    conn = _conn()
+    try:
+        return conn.execute(
+            "SELECT * FROM users WHERE username_norm = ? LIMIT 1",
+            (uname_norm,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+
+def get_user_by_id(user_id: int) -> Optional[sqlite3.Row]:
+    try:
+        uid = int(user_id)
+    except Exception:
+        return None
+    conn = _conn()
+    try:
+        return conn.execute("SELECT * FROM users WHERE id = ? LIMIT 1", (uid,)).fetchone()
+    finally:
+        conn.close()
+
+
+def create_user(
+    username: str,
+    password_hash: str,
+    role: str = "user",
+    wallet_address: str = "",
+    wallet_chain: str = "",
+) -> int:
+    uname = str(username or "").strip()
+    uname_norm = normalize_username(uname)
+    if not uname_norm:
+        raise ValueError("invalid username")
+    conn = _conn()
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO users (username, username_norm, password_hash, role, disabled, run_enabled, wallet_address, wallet_chain, created_at)
+            VALUES (?, ?, ?, ?, 0, 1, ?, ?, ?)
+            """,
+            (uname, uname_norm, str(password_hash or ""), str(role or "user"), str(wallet_address or ""), str(wallet_chain or ""), _now_iso()),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+    finally:
+        conn.close()
+
+
+def list_users(limit: int = 500) -> List[sqlite3.Row]:
+    conn = _conn()
+    try:
+        return conn.execute("SELECT * FROM users ORDER BY id DESC LIMIT ?", (int(limit),)).fetchall()
+    finally:
+        conn.close()
+
+
+def set_user_disabled(user_id: int, disabled: bool) -> None:
+    conn = _conn()
+    try:
+        conn.execute("UPDATE users SET disabled = ? WHERE id = ?", (1 if disabled else 0, int(user_id)))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def is_user_locked(user_id: int) -> bool:
+    row = get_user_by_id(user_id)
+    if not row:
+        return True
+    try:
+        return int(row["disabled"] or 0) == 1
+    except Exception:
+        return False
+
+
+def update_user_login_state(user_id: int) -> None:
+    conn = _conn()
+    try:
+        conn.execute("UPDATE users SET last_login_at = ? WHERE id = ?", (_now_iso(), int(user_id)))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_user_run_enabled(user_id: int) -> bool:
+    row = get_user_by_id(user_id)
+    if not row:
+        return False
+    try:
+        return int(row["run_enabled"] or 0) == 1
+    except Exception:
+        return False
+
+
+def set_user_run_enabled(user_id: int, enabled: bool) -> None:
+    conn = _conn()
+    try:
+        conn.execute("UPDATE users SET run_enabled = ? WHERE id = ?", (1 if enabled else 0, int(user_id)))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_wallet_info(user_id: int) -> Dict[str, str]:
+    row = get_user_by_id(user_id)
+    if not row:
+        return {"wallet_address": "", "wallet_chain": ""}
+    return {
+        "wallet_address": str(row["wallet_address"] or ""),
+        "wallet_chain": str(row["wallet_chain"] or ""),
+    }
+
+
+def get_wallet_address(user_id: int) -> str:
+    return get_wallet_info(user_id).get("wallet_address", "")
+
+
+def set_wallet_address(user_id: int, wallet_address: str, wallet_chain: str = "") -> None:
+    conn = _conn()
+    try:
+        conn.execute(
+            "UPDATE users SET wallet_address = ?, wallet_chain = ? WHERE id = ?",
+            (str(wallet_address or ""), str(wallet_chain or ""), int(user_id)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_setting(key: str, default: Any = None) -> Any:
+    k = str(key or "").strip()
+    if not k:
+        return default
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT value FROM settings WHERE key = ? LIMIT 1", (k,)).fetchone()
+        if not row:
+            return default
+        try:
+            return json.loads(row["value"])
+        except Exception:
+            return row["value"]
+    finally:
+        conn.close()
+
+
+def set_setting(key: str, value: Any) -> None:
+    k = str(key or "").strip()
+    if not k:
+        return
+    v_json = json.dumps(value, ensure_ascii=False)
+    conn = _conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
+            """,
+            (k, v_json, _now_iso()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def write_audit_log(user_id: Optional[int], action: str, payload: Any) -> None:
+    conn = _conn()
+    try:
+        payload_json = json.dumps(payload or {}, ensure_ascii=False)
+        conn.execute(
+            "INSERT INTO audit_logs (user_id, action, payload_json, created_at) VALUES (?, ?, ?, ?)",
+            (int(user_id) if user_id is not None else None, str(action or ""), payload_json, _now_iso()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 from sheep_platform_jobs import JOB_MANAGER, JobManager
 from sheep_platform_audit import audit_candidate
 
