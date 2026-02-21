@@ -750,6 +750,7 @@ def _style() -> None:
         header[data-testid="stHeader"] { background: rgba(0,0,0,0); }
         footer { visibility: hidden; }
         #MainMenu { visibility: hidden; }
+
         /* Hide Streamlit chrome (toolbar, status widget) for production look. */
         div[data-testid="stToolbar"] { display: none !important; }
         div[data-testid="stStatusWidget"] { display: none !important; }
@@ -780,6 +781,7 @@ def _style() -> None:
         .stButton > button:focus, .stDownloadButton > button:focus {
           box-shadow: 0 0 0 2px rgba(120,180,255,0.35) !important;
         }
+
         .stButton > button, .stDownloadButton > button {
           width: 100%;
           border-radius: 12px;
@@ -903,6 +905,142 @@ def _style() -> None:
         .pm_cell.running { background: rgba(120,255,180,0.50); }
         .pm_cell.reserved { background: rgba(255,200,120,0.50); }
         .pm_cell.available { background: rgba(255,255,255,0.12); }
+
+        /* Help tooltip icon */
+        .metric { overflow: visible; }
+
+        .metric .k { display: flex; align-items: center; gap: 6px; }
+
+        .help_wrap {
+          display: inline-flex;
+          position: relative;
+          align-items: center;
+          justify-content: center;
+          margin-left: 6px;
+          z-index: 20;
+        }
+        .help_icon {
+          width: 18px;
+          height: 18px;
+          border-radius: 999px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 12px;
+          font-weight: 800;
+          line-height: 1;
+          border: 1px solid rgba(255,255,255,0.20);
+          background: rgba(255,255,255,0.05);
+          color: rgba(255,255,255,0.84);
+          cursor: help;
+          user-select: none;
+        }
+        .help_wrap:hover .help_icon {
+          border-color: rgba(120,180,255,0.75);
+          background: rgba(120,180,255,0.12);
+        }
+        .help_tip {
+          position: absolute;
+          left: 50%;
+          top: -10px;
+          transform: translate(-50%, -100%);
+          min-width: 220px;
+          max-width: 360px;
+          padding: 10px 12px;
+          border-radius: 12px;
+          background: rgba(20,24,35,0.92);
+          border: 1px solid rgba(255,255,255,0.14);
+          box-shadow: 0 14px 40px rgba(0,0,0,0.45);
+          color: rgba(255,255,255,0.90);
+          font-size: 12px;
+          line-height: 1.55;
+          opacity: 0;
+          pointer-events: none;
+          transition: opacity 140ms ease, transform 140ms ease;
+          z-index: 9999;
+        }
+        .help_tip:after {
+          content: "";
+          position: absolute;
+          left: 50%;
+          bottom: -8px;
+          transform: translateX(-50%);
+          border-width: 8px 8px 0 8px;
+          border-style: solid;
+          border-color: rgba(20,24,35,0.92) transparent transparent transparent;
+        }
+        .help_wrap:hover .help_tip {
+          opacity: 1;
+          pointer-events: auto;
+          transform: translate(-50%, -108%);
+        }
+
+        /* Section titles with integrated help icon */
+        .sec_h3 {
+          font-size: 28px;
+          font-weight: 900;
+          letter-spacing: 0.2px;
+          margin: 0.2rem 0 0.8rem 0;
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+        }
+        .sec_h4 {
+          font-size: 18px;
+          font-weight: 850;
+          letter-spacing: 0.15px;
+          margin: 0.9rem 0 0.5rem 0;
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        /* Bottom-left user HUD */
+        .user_hud {
+          position: fixed;
+          left: 18px;
+          bottom: 18px;
+          width: 260px;
+          padding: 12px 12px 10px 12px;
+          border-radius: 16px;
+          border: 1px solid rgba(255,255,255,0.14);
+          background: rgba(255,255,255,0.06);
+          box-shadow: 0 18px 50px rgba(0,0,0,0.45);
+          backdrop-filter: blur(14px);
+          -webkit-backdrop-filter: blur(14px);
+          z-index: 9999;
+        }
+        .user_hud .hud_name {
+          font-size: 14px;
+          font-weight: 900;
+          letter-spacing: 0.2px;
+          color: rgba(255,255,255,0.92);
+        }
+        .user_hud .hud_row {
+          display: flex;
+          align-items: baseline;
+          justify-content: space-between;
+          margin-top: 8px;
+          gap: 12px;
+        }
+        .user_hud .hud_k {
+          font-size: 12px;
+          color: rgba(255,255,255,0.65);
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+        }
+        .user_hud .hud_v {
+          font-size: 14px;
+          font-weight: 850;
+          color: rgba(255,255,255,0.92);
+        }
+        .user_hud .hud_div {
+          margin-top: 10px;
+          height: 1px;
+          background: rgba(255,255,255,0.10);
+        }
+
         </style>
         """,
         unsafe_allow_html=True,
@@ -1730,9 +1868,29 @@ def _page_auth() -> None:
     elif dlg_name == "tos":
         _render_tos_dialog()
 
-def _render_kpi(title: str, value: Any, sub: str = "") -> str:
+def _help_icon_html(text: str) -> str:
+    t = str(text or "").strip()
+    if not t:
+        return ""
+    tip = html.escape(t, quote=True).replace("\n", "<br>")
+    return (
+        '<span class="help_wrap">'
+        '<span class="help_icon" aria-hidden="true">?</span>'
+        f'<span class="help_tip">{tip}</span>'
+        "</span>"
+    )
+
+
+def _section_title_html(title: str, help_text: str = "", level: int = 3) -> str:
+    cls = "sec_h3" if int(level) == 3 else "sec_h4"
+    return f'<div class="{cls}">{html.escape(str(title))}{_help_icon_html(help_text)}</div>'
+
+
+def _render_kpi(title: str, value: Any, sub: str = "", help_text: str = "") -> str:
     v = value if value is not None else "-"
-    return f'<div class="metric"><div class="k">{title}</div><div class="v">{v}</div><div class="small-muted">{sub}</div></div>'
+    k = f"{html.escape(str(title))}{_help_icon_html(help_text)}"
+    sub_html = html.escape(str(sub)) if sub else ""
+    return f'<div class="metric"><div class="k">{k}</div><div class="v">{v}</div><div class="small-muted">{sub_html}</div></div>'
 
 
 @st.cache_data(ttl=10)
@@ -1834,18 +1992,18 @@ def _render_global_progress(cycle_id: int) -> None:
     except Exception:
         paid_sum = 0.0
 
-    st.markdown("#### 全域挖掘進度")
+    st.markdown(_section_title_html("全域挖掘進度", "統計全部用戶已跑組合數、任務完成數與全域進度。下方圖表顯示各策略池分割狀態。", level=4), unsafe_allow_html=True)
     st.progress(min(1.0, max(0.0, float(ratio))))
 
     kcols = st.columns(4)
     with kcols[0]:
-        st.markdown(_render_kpi("全球已跑組合數", f"{int(total_done):,}", f"預估總量 {int(total_est):,}"), unsafe_allow_html=True)
+        st.markdown(_render_kpi("全球已跑組合數", f"{int(total_done):,}", f"預估總量 {int(total_est):,}", help_text="累計所有用戶已測試的參數組合數。預估總量來自策略池的工作量估計。"), unsafe_allow_html=True)
     with kcols[1]:
-        st.markdown(_render_kpi("全球任務完成總數", f"{int(total_completed):,}", f"執行中 {int(total_running):,}"), unsafe_allow_html=True)
+        st.markdown(_render_kpi("全球任務完成總數", f"{int(total_completed):,}", f"執行中 {int(total_running):,}", help_text="完成代表分割任務已跑完並上傳結果。執行中表示目前有工作端或伺服器正在運算。"), unsafe_allow_html=True)
     with kcols[2]:
-        st.markdown(_render_kpi("全球挖礦進度", f"{ratio*100:.1f}%", f"策略範圍 {sel_family}"), unsafe_allow_html=True)
+        st.markdown(_render_kpi("全球挖礦進度", f"{ratio*100:.1f}%", f"策略範圍 {sel_family}", help_text="已跑組合數 / 預估總量。可用上方選單切換策略範圍。"), unsafe_allow_html=True)
     with kcols[3]:
-        st.markdown(_render_kpi("全用戶已實現分潤", f"{paid_sum:,.6f}", "USDT"), unsafe_allow_html=True)
+        st.markdown(_render_kpi("全用戶已實現分潤", f"{paid_sum:,.6f}", "USDT", help_text="本週期已完成發放並標記為已支付的分潤總額。"), unsafe_allow_html=True)
 
     recs: List[Dict[str, Any]] = []
     pool_rows: List[Dict[str, Any]] = []
@@ -1893,10 +2051,10 @@ def _render_global_progress(cycle_id: int) -> None:
         st.plotly_chart(fig, use_container_width=True)
 
     if pool_rows:
-        st.markdown("#### 策略池概覽")
+        st.markdown(_section_title_html("策略池概覽", "列出每個策略池的目標、週期、策略族與進度。進度是該池已跑組合數占預估總量的比例。", level=4), unsafe_allow_html=True)
         st.dataframe(pd.DataFrame(pool_rows), use_container_width=True, hide_index=True)
 
-    st.markdown("#### 分割分佈")
+    st.markdown(_section_title_html("分割分佈", "每個策略池會被切成多個分割。方格顯示各分割目前狀態：待挖掘、已預訂、執行中、已完成。", level=4), unsafe_allow_html=True)
     for p in pools:
         pool_name = str(p.get("pool_name") or "") or f"Pool {p.get('pool_id')}"
         meta = f"{p.get('symbol')} · {p.get('timeframe_min')}m · {p.get('family')}"
@@ -1991,7 +2149,7 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
     cycle = db.get_active_cycle()
     pools = db.list_factor_pools(cycle_id=int(cycle["id"])) if cycle else []
 
-    st.markdown("### 控制台")
+    st.markdown(_section_title_html("控制台", "查看你的任務、策略與結算概況。此頁也提供全域挖礦進度與策略池狀態。", level=3), unsafe_allow_html=True)
 
     # Ensure tasks quota
     conn = db._conn()
@@ -2018,7 +2176,7 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
     st.markdown(_render_kpi("結算", len(unpaid), "未發放"), unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown("### 任務摘要")
+    st.markdown(_section_title_html("任務摘要", "列出目前分配給你的任務狀態、階段、進度與最佳分數。達標表示候選已符合門檻。", level=3), unsafe_allow_html=True)
     if not tasks:
         st.info("無任務。")
         return
@@ -2043,8 +2201,8 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
         updated_at = str(prog.get("updated_at") or "")
 
         status_raw = str(t.get("status") or "")
-        status_cn = _TASK_STATUS_LABEL.get(status_raw, status_raw)
-        phase_cn = _PHASE_LABEL.get(phase, phase)
+        status_cn = _label_task_status(status_raw)
+        phase_cn = _label_phase(phase)
 
         rows.append(
             {
@@ -2079,7 +2237,7 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
 
     st.dataframe(df, use_container_width=True, hide_index=True)
 
-    st.markdown("### 全域進度")
+    st.markdown(_section_title_html("全域進度", "顯示全站所有用戶的整體挖礦進度與分潤統計。可依策略篩選觀察。", level=3), unsafe_allow_html=True)
     _render_global_progress(int(cycle.get("id") or 0))
 
 
@@ -3526,6 +3684,63 @@ def _run_weekly_check(week_start_ts: str, week_end_ts: str) -> None:
                 db.create_payout(strategy_id=int(s["id"]), user_id=int(s["user_id"]), week_start_ts=week_start_ts, amount_usdt=float(amount))
 
 
+
+def _render_user_hud(user: Dict[str, Any]) -> None:
+    """Fixed bottom-left user panel."""
+    try:
+        cycle = db.get_active_cycle()
+    except Exception:
+        cycle = None
+
+    cycle_id = int(cycle.get("id") or 0) if cycle else 0
+
+    combos_done_sum = 0
+    try:
+        if cycle_id > 0:
+            tasks = db.list_tasks_for_user(int(user["id"]), cycle_id=cycle_id)
+        else:
+            tasks = db.list_tasks_for_user(int(user["id"]))
+        for t in tasks or []:
+            try:
+                prog = json.loads(t.get("progress_json") or "{}")
+            except Exception:
+                prog = {}
+            combos_done_sum += int(prog.get("combos_done") or 0)
+    except Exception:
+        combos_done_sum = 0
+
+    points_sum = 0.0
+    try:
+        payouts = db.list_payouts(user_id=int(user["id"]), limit=500)
+        for p in payouts or []:
+            if str(p.get("status") or "") == "void":
+                continue
+            points_sum += float(p.get("amount_usdt") or 0.0)
+    except Exception:
+        points_sum = 0.0
+
+    points_help = (
+        "積分的規則：每跑過一個達標組合，且因子池系統在一週實盤結算後的 USDT 利潤，其中一半會換算成你的積分。積分可兌換等值 USDT，兌換與發放以結算規則為準。"
+    )
+
+    hud_html = (
+        '<div class="user_hud">'
+        f'<div class="hud_name">{html.escape(str(user.get("username") or ""))}</div>'
+        '<div class="hud_div"></div>'
+        '<div class="hud_row">'
+        '<div class="hud_k">已跑組合</div>'
+        f'<div class="hud_v">{int(combos_done_sum):,}</div>'
+        "</div>"
+        '<div class="hud_row">'
+        f'<div class="hud_k">積分{_help_icon_html(points_help)}</div>'
+        f'<div class="hud_v">{float(points_sum):,.6f}</div>'
+        "</div>"
+        "</div>"
+    )
+    st.markdown(hud_html, unsafe_allow_html=True)
+
+
+
 def main() -> None:
     st.set_page_config(page_title=APP_TITLE, layout="wide", initial_sidebar_state="expanded")
     _style()
@@ -3586,6 +3801,8 @@ def main() -> None:
             st.rerun()
 
     page = str(st.session_state.get("nav_page") or pages[0])
+
+    _render_user_hud(user)
 
     if page == "新手教學":
         _page_tutorial(user)
