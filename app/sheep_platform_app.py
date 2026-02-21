@@ -133,18 +133,32 @@ iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
   pointer-events: none !important;
 }}
 
-/* [專家級精簡修復] 移除衝突的背景，讓側邊欄控制鈕回歸原生但強制置頂顯示 */
+/* [專家級終極修復] 強制側邊欄控制鈕永久顯示，提供高對比度底色，並阻絕任何 Hover 隱藏機制 */
 div[data-testid="stSidebarCollapsedControl"] {{
     position: fixed !important;
     left: 0px !important;
     top: 0px !important;
     z-index: 9999999 !important;
-    padding: 10px !important;
-    background: rgba(10, 14, 20, 0.8) !important;
-    border-bottom-right-radius: 12px !important;
+    padding: 12px 14px !important;
+    background: linear-gradient(135deg, rgba(37, 99, 235, 0.9) 0%, rgba(15, 23, 42, 0.9) 100%) !important;
+    border-bottom-right-radius: 14px !important;
+    border-right: 1px solid rgba(255,255,255,0.2) !important;
+    border-bottom: 1px solid rgba(255,255,255,0.2) !important;
+    box-shadow: 2px 2px 12px rgba(0,0,0,0.8) !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+    display: flex !important;
+    transition: transform 0.2s ease, filter 0.2s ease !important;
+    cursor: pointer !important;
+}}
+div[data-testid="stSidebarCollapsedControl"]:hover {{
+    transform: scale(1.05) !important;
+    filter: brightness(1.2) !important;
 }}
 div[data-testid="stSidebarCollapsedControl"] svg {{
     fill: #ffffff !important;
+    width: 24px !important;
+    height: 24px !important;
 }}
 
 @media (max-width: 720px) {{
@@ -2585,9 +2599,16 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                         to_queue.append(tid)
                     
                     if to_queue:
-                        # 將任務狀態變更為 queued 以便在 UI 立即顯示進度
+                        # [專家級 UX 修復] 將任務狀態變更為 queued 的同時，立即注入詳細的排隊進度 JSON，打破點擊後毫無反應的死寂
                         for qid in to_queue:
                             db.update_task_status(qid, "queued")
+                            db.update_task_progress(qid, {
+                                "phase": "queued",
+                                "phase_msg": " 任務已進入排程列隊，正在等待伺服器分配運算資源...",
+                                "combos_done": 0,
+                                "combos_total": 0,
+                                "updated_at": _iso(_utc_now())
+                            })
                         
                         result = job_mgr.enqueue_many(int(user["id"]), to_queue, bt)
                         db.write_audit_log(
@@ -2844,18 +2865,47 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
             unsafe_allow_html=True,
         )
         
-        # 動態進度訊息區塊
-        if str(phase) == "sync_data":
-            st.info(f" **資料同步中**：正在拉取交易所 K 線資料... \n\n{phase_msg}")
+        # [專家級 UI] 動態工作流與精準進度回饋
+        # 定義不同階段的視覺效果與動畫
+        phase_color = "#94a3b8"
+        is_animating = False
+        
+        if str(phase) == "queued":
+            phase_color = "#f59e0b"
+            is_animating = True
+        elif str(phase) == "sync_data":
+            phase_color = "#0ea5e9"
+            is_animating = True
         elif str(phase) == "build_grid":
-            st.warning(f"**指標運算中**：正在進行向量化指標計算與快取建立... \n\n{phase_msg}")
+            phase_color = "#8b5cf6"
+            is_animating = True
         elif str(phase) == "grid_search":
-            st.success(f"⚡ **格點搜尋中**：正在高速回測參數組合...")
+            phase_color = "#10b981"
+            phase_icon = "⚡"
+            is_animating = True
+        elif str(phase) == "error":
+            phase_color = "#ef4444"
+        
+        anim_css = "animation: pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;" if is_animating else ""
+        
+        st.markdown(
+            f"""
+            <div style="background: rgba(0,0,0,0.2); border: 1px solid {phase_color}40; border-left: 4px solid {phase_color}; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <span style="font-size: 20px; {anim_css}"></span>
+                        <span style="color: {phase_color}; font-weight: 700; font-size: 16px;">目前作業：{phase_label}</span>
+                    </div>
+                </div>
+                <div style="margin-top: 8px; font-size: 14px; color: #cbd5e1;">
+                    {phase_msg if phase_msg else '準備就緒'}
+                </div>
+            </div>
+            """, unsafe_allow_html=True
+        )
         
         top_b, top_c, top_d = st.columns([1.5, 1.5, 1.5])
         with top_b:
-            st.markdown(f'<div class="small-muted">目前階段</div><div class="kpi" style="font-size:20px; font-weight:bold;">{phase_label}</div>', unsafe_allow_html=True)
-        with top_c:
             prog_text = "-"
             sync = prog.get("sync")
             if int(combos_total) > 0:
@@ -2868,22 +2918,23 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                     total_i = int(items[cur].get("total", 0))
                     if total_i > 0:
                         prog_text = f"{cur} {done_i}/{total_i}"
-            st.markdown(f'<div class="small-muted">計算進度</div><div class="kpi" style="font-size:20px; font-weight:bold; color:#3b82f6;">{prog_text}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="small-muted">運算進度</div><div class="kpi" style="font-size:22px; font-weight:800; color:#f8fafc;">{prog_text}</div>', unsafe_allow_html=True)
+        with top_c:
+            elapsed_s = prog.get("elapsed_s")
+            es = "-" if elapsed_s is None else f"{float(elapsed_s):.1f} s"
+            st.markdown(f'<div class="small-muted">已耗時</div><div class="kpi" style="font-size:22px; font-weight:800; color:#f8fafc;">{es}</div>', unsafe_allow_html=True)
         with top_d:
             sc_txt = "-" if best_any_score is None else str(round(float(best_any_score), 6))
-            st.markdown(f'<div class="small-muted">當前最佳分數</div><div class="kpi" style="font-size:20px; font-weight:bold; color:#10b981;">{sc_txt}</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="small-muted">當前最高分</div><div class="kpi" style="font-size:22px; font-weight:800; color:#10b981;">{sc_txt}</div>', unsafe_allow_html=True)
 
         if str(phase) == "grid_search":
-            elapsed_s = prog.get("elapsed_s")
             speed_cps = prog.get("speed_cps")
             eta_s = prog.get("eta_s")
-            es = "-" if elapsed_s is None else f"{float(elapsed_s):.1f} 秒"
-            sp = "-" if speed_cps is None else f"{float(speed_cps):.0f} 組合/秒"
-            et = "-" if eta_s is None else f"{float(eta_s):.1f} 秒"
-            st.markdown(f'<div style="background:rgba(255,255,255,0.05); padding:8px; border-radius:8px; margin-top:10px; font-size:13px; color:#94a3b8; display:flex; justify-content:space-around;">'
-                        f'<span> 耗時: <b>{es}</b></span>'
-                        f'<span> 速度: <b>{sp}</b></span>'
-                        f'<span>預估剩餘: <b>{et}</b></span>'
+            sp = "-" if speed_cps is None else f"{float(speed_cps):.0f} / s"
+            et = "-" if eta_s is None else f"{float(eta_s):.1f} s"
+            st.markdown(f'<div style="background:rgba(255,255,255,0.03); padding:8px 16px; border-radius:6px; margin-top:12px; font-size:13px; color:#94a3b8; display:flex; justify-content:space-between; border: 1px solid rgba(255,255,255,0.05);">'
+                        f'<span>算力速度: <span style="color:#60a5fa; font-weight:bold;">{sp}</span></span>'
+                        f'<span>預估剩餘: <span style="color:#fbbf24; font-weight:bold;">{et}</span></span>'
                         f'</div>', unsafe_allow_html=True)
 
         # [最大化錯誤顯示]

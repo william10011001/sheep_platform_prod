@@ -347,6 +347,11 @@ class JobManager:
                 progress["updated_at"] = db.utc_now_iso()
                 db.update_task_progress(task_id, progress)
 
+            # [專家級修正] 強制寫入狀態，確保 K 線下載期間前端不會停留在 "queued" 假死
+            progress["phase"] = "sync_data"
+            progress["phase_msg"] = f"準備向交易所拉取 {pool['symbol']} ({pool['timeframe_min']}m) 歷史 K 線資料..."
+            db.update_task_progress(task_id, progress)
+
             csv_main, _ = bt_module.ensure_bitmart_data(
                 symbol=str(pool["symbol"]),
                 main_step_min=int(pool["timeframe_min"]),
@@ -355,13 +360,24 @@ class JobManager:
                 force_full=False,
                 progress_cb=_progress_cb,
             )
+            
+            progress["phase_msg"] = "K 線資料拉取完成，正在驗證與載入記憶體..."
+            db.update_task_progress(task_id, progress)
             df = bt_module.load_and_validate_csv(csv_main)
 
             if stop_flag.is_set():
                 db.update_task_status(task_id, "assigned")
                 return
 
+            progress["phase"] = "build_grid"
+            progress["phase_msg"] = "正在展開格點參數組合..."
+            db.update_task_progress(task_id, progress)
+
             combos = bt_module.grid_combinations_from_ui(family, grid_spec)
+            
+            # [防護機制] 檢查展開後的組合是否為空，避免除以零或無盡迴圈
+            if not combos:
+                raise ValueError(f"格點參數展開失敗或為空，請檢查策略池 ({pool['name']}) 的參數設定範圍。")
             
             # [深度防御] 確保所有參與種子計算的數值皆非 None 且型別正確
             safe_cycle_id = int(task.get("cycle_id") if task.get("cycle_id") is not None else 0)
