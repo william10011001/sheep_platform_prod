@@ -120,12 +120,22 @@ iframe[data-sheep-brand="1"],
 iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
   position: fixed !important;
   top: 0 !important;
-  left: 0 !important;
+  /* 專家修復：將 Header 向右移動，留出左側 50px 給 Streamlit 側邊欄按鈕 */
+  left: 50px !important; 
   width: 360px !important;
   height: 84px !important;
   border: 0 !important;
-  z-index: 2147483000 !important;
+  /* 降低 z-index，確保它不會蓋過 2147483647 的側邊欄按鈕 */
+  z-index: 1000 !important;
   background: transparent !important;
+  pointer-events: none !important; /* 讓滑鼠可以穿透空白區點擊下方元素 */
+}}
+
+/* 強制將 Streamlit 的控制項推回最前線 */
+div[data-testid="stSidebarCollapsedControl"] {{
+    left: 10px !important;
+    top: 15px !important;
+    z-index: 2147483647 !important;
 }}
 
 @media (max-width: 720px) {{
