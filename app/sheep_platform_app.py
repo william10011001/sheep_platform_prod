@@ -6,7 +6,6 @@ import time
 import math
 import html
 import base64
-import base64
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -33,7 +32,6 @@ def _get_orig_dataframe():
 
     return cur
 
-
 def _dataframe_compat(data=None, **kwargs):
     if "use_container_width" in kwargs:
         u = kwargs.pop("use_container_width")
@@ -55,7 +53,6 @@ def _dataframe_compat(data=None, **kwargs):
             kwargs.pop("hide_index", None)
             return orig(data, **kwargs)
 
-
 if getattr(st.dataframe, "__name__", "") != "_dataframe_compat":
     try:
         st._sheep_orig_dataframe = _get_orig_dataframe()
@@ -68,7 +65,6 @@ if getattr(st.dataframe, "__name__", "") != "_dataframe_compat":
     st.dataframe = _dataframe_compat
 
 import backtest_panel2 as bt
-
 import sheep_platform_db as db
 from sheep_platform_security import (
     hash_password,
@@ -81,7 +77,6 @@ from sheep_platform_security import (
 )
 from sheep_platform_jobs import JOB_MANAGER, JobManager
 from sheep_platform_audit import audit_candidate
-
 
 APP_TITLE = "羊肉爐挖礦分潤任務平台"
 
@@ -2073,20 +2068,40 @@ def _page_tutorial(user: Optional[Dict[str, Any]] = None) -> None:
         )
 
 def _page_dashboard(user: Dict[str, Any]) -> None:
-    cycle = db.get_active_cycle()
-    pools = db.list_factor_pools(cycle_id=int(cycle["id"])) if cycle else []
-
-    st.markdown(_section_title_html("控制台", "查看你的任務、策略與結算概況。此頁也提供全域挖礦進度與策略池狀態。", level=3), unsafe_allow_html=True)
-
-    # Ensure tasks quota
-    conn = db._conn()
     try:
-        min_tasks = int(db.get_setting(conn, "min_tasks_per_user", 2))
-    finally:
-        conn.close()
-    db.assign_tasks_for_user(int(user["id"]), min_tasks)
+        cycle = db.get_active_cycle()
+        if not cycle or "id" not in cycle:
+            st.warning("⚠️ 週期尚未初始化，系統正在嘗試建立新週期...")
+            db.ensure_cycle_rollover()
+            cycle = db.get_active_cycle()
+            if not cycle:
+                st.error(" 週期建立失敗，請通知系統管理員檢查資料庫權限。")
+                return
 
-    tasks = db.list_tasks_for_user(int(user["id"]), cycle_id=int(cycle["id"]))
+        pools = db.list_factor_pools(cycle_id=int(cycle["id"])) if cycle else []
+
+        st.markdown(_section_title_html("控制台", "查看你的任務、策略與結算概況。此頁也提供全域挖礦進度與策略池狀態。", level=3), unsafe_allow_html=True)
+
+        # Ensure tasks quota
+        conn = db._conn()
+        try:
+            min_tasks = int(db.get_setting(conn, "min_tasks_per_user", 2))
+        finally:
+            conn.close()
+            
+        try:
+            db.assign_tasks_for_user(int(user["id"]), min_tasks)
+        except AttributeError as ae:
+            st.error(f" 系統錯誤：核心函數遺失。\n\n詳細錯誤：{ae}")
+            st.info(" 提示：您的 `sheep_platform_db.py` 檔案內容疑似被意外覆蓋，請復原正確的資料庫邏輯。")
+            return
+
+        tasks = db.list_tasks_for_user(int(user["id"]), cycle_id=int(cycle["id"]))
+    except Exception as dashboard_e:
+        st.error(f" 控制台載入發生嚴重錯誤：{str(dashboard_e)}")
+        import traceback
+        st.code(traceback.format_exc(), language="text")
+        return
     strategies = db.list_strategies(user_id=int(user["id"]), limit=200)
     payouts = db.list_payouts(user_id=int(user["id"]), limit=200)
 
@@ -2169,9 +2184,19 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
 
 
 def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
-    cycle = db.get_active_cycle()
-    if not cycle:
-        st.error("週期未初始化。")
+    try:
+        cycle = db.get_active_cycle()
+        if not cycle or "id" not in cycle:
+            st.warning(" 週期尚未初始化，系統正在嘗試建立新週期...")
+            db.ensure_cycle_rollover()
+            cycle = db.get_active_cycle()
+            if not cycle:
+                st.error(" 週期建立失敗，請確認資料庫是否已正確初始化。")
+                return
+    except Exception as e:
+        st.error(f" 讀取任務週期時發生錯誤：{str(e)}")
+        import traceback
+        st.code(traceback.format_exc(), language="text")
         return
 
     conn = db._conn()
@@ -2835,7 +2860,16 @@ def _render_audit(audit: Dict[str, Any]) -> None:
 
 def _page_submissions(user: Dict[str, Any]) -> None:
     st.markdown("### 提交紀錄")
-    subs = db.list_submissions(user_id=int(user["id"]), limit=300)
+    try:
+        subs = db.list_submissions(user_id=int(user["id"]), limit=300)
+    except AttributeError as ae:
+        st.error(f" 系統錯誤：`list_submissions` 函數遺失。\n\n詳細錯誤：{ae}")
+        return
+    except Exception as e:
+        st.error(f" 載入提交紀錄時發生錯誤：{str(e)}")
+        import traceback
+        st.code(traceback.format_exc(), language="text")
+        return
     if not subs:
         st.info("無提交紀錄。")
         return
@@ -2920,9 +2954,23 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
     tabs = st.tabs(["總覽", "用戶", "提交審核", "策略", "結算", "設定", "Pool"])
 
     with tabs[0]:
-        cycle = db.get_active_cycle()
-        st.write("週期", cycle.get("name"), cycle.get("start_ts"), cycle.get("end_ts"))
-        ov = db.list_task_overview(limit=500)
+        try:
+            cycle = db.get_active_cycle()
+            if not cycle:
+                st.warning("⚠️ 週期尚未初始化")
+                st.write("週期", "None", "None", "None")
+            else:
+                st.write("週期", cycle.get("name"), cycle.get("start_ts"), cycle.get("end_ts"))
+                
+            ov = db.list_task_overview(limit=500)
+        except AttributeError as ae:
+            st.error(f" 系統錯誤：管理核心函數遺失。\n\n詳細錯誤：{ae}")
+            ov = None
+        except Exception as e:
+            st.error(f" 載入管理總覽時發生錯誤：{str(e)}")
+            import traceback
+            st.code(traceback.format_exc(), language="text")
+            ov = None
         if ov:
             rows = []
             for t in ov:

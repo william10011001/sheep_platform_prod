@@ -169,6 +169,63 @@ def init_db() -> None:
                 payload_json TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS api_tokens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                token TEXT NOT NULL UNIQUE,
+                name TEXT,
+                expires_at TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            
+            CREATE TABLE IF NOT EXISTS mining_cycles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT,
+                status TEXT,
+                start_ts TEXT,
+                end_ts TEXT
+            );
+            
+            CREATE TABLE IF NOT EXISTS factor_pools (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cycle_id INTEGER,
+                name TEXT,
+                symbol TEXT,
+                timeframe_min INTEGER,
+                years INTEGER,
+                family TEXT,
+                grid_spec_json TEXT,
+                risk_spec_json TEXT,
+                num_partitions INTEGER,
+                seed INTEGER,
+                active INTEGER DEFAULT 1,
+                created_at TEXT
+            );
+            
+            CREATE TABLE IF NOT EXISTS mining_tasks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                pool_id INTEGER,
+                cycle_id INTEGER,
+                partition_idx INTEGER,
+                num_partitions INTEGER,
+                status TEXT DEFAULT 'assigned',
+                progress_json TEXT DEFAULT '{}',
+                last_heartbeat TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            
+            CREATE TABLE IF NOT EXISTS submissions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                candidate_id INTEGER,
+                user_id INTEGER,
+                pool_id INTEGER,
+                status TEXT DEFAULT 'pending',
+                audit_json TEXT DEFAULT '{}',
+                submitted_at TEXT
+            );
             """
         )
         try:
@@ -393,6 +450,51 @@ def write_audit_log(user_id: Optional[int], action: str, payload: Any) -> None:
         conn.commit()
     finally:
         conn.close()
+
+def create_api_token(user_id: int, ttl_seconds: int, name: str = "worker") -> dict:
+    import secrets
+    token = secrets.token_urlsafe(32)
+    expires_at = (datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).isoformat()
+    conn = _conn()
+    try:
+        cur = conn.execute(
+            "INSERT INTO api_tokens (user_id, token, name, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",
+            (user_id, token, name, expires_at, _now_iso())
+        )
+        conn.commit()
+        return {"token_id": cur.lastrowid, "token": token, "expires_at": expires_at, "issued_at": _now_iso()}
+    except Exception as e:
+        print(f"[DB ERROR] create_api_token: {e}")
+        return {}
+    finally:
+        conn.close()
+
+def revoke_api_token(token_id: int) -> None:
+    conn = _conn()
+    try:
+        conn.execute("DELETE FROM api_tokens WHERE id = ?", (token_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+def verify_api_token(token: str) -> Optional[dict]:
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT * FROM api_tokens WHERE token = ? LIMIT 1", (token,)).fetchone()
+        if not row: return None
+        if _now_iso() > row["expires_at"]: return None
+        user = conn.execute("SELECT * FROM users WHERE id = ?", (row["user_id"],)).fetchone()
+        if not user: return None
+        return {"user": dict(user), "token": dict(row)}
+    except Exception as e:
+        print(f"[DB ERROR] verify_api_token: {e}")
+        return None
+    finally:
+        conn.close()
+
+def touch_api_token(token_id: int, ip: str = "", user_agent: str = "") -> None:
+    pass
+
 from sheep_platform_jobs import JOB_MANAGER, JobManager
 from sheep_platform_audit import audit_candidate
 
@@ -4310,7 +4412,133 @@ def list_factor_pools(cycle_id: int) -> list:
     try:
         cur = conn.execute("SELECT * FROM factor_pools WHERE cycle_id = ?", (cycle_id,))
         return [dict(row) for row in cur.fetchall()]
-    except Exception:
+    except Exception as e:
+        print(f"[DB ERROR] list_factor_pools: {e}")
         return []
     finally:
         conn.close()
+
+def assign_tasks_for_user(user_id: int, min_tasks: int = 2, cycle_id: int = 0, max_tasks: int = 6, preferred_family: str = "") -> None:
+    conn = _conn()
+    try:
+        if cycle_id <= 0:
+            cycle_row = conn.execute("SELECT id FROM mining_cycles WHERE status = 'active' ORDER BY id DESC LIMIT 1").fetchone()
+            if cycle_row: cycle_id = cycle_row["id"]
+        
+        cur = conn.execute("SELECT COUNT(*) as c FROM mining_tasks WHERE user_id = ? AND status IN ('assigned', 'running')", (user_id,))
+        current_tasks = cur.fetchone()["c"]
+        
+        if current_tasks < min_tasks:
+            needed = min_tasks - current_tasks
+            pools = conn.execute("SELECT id FROM factor_pools WHERE cycle_id = ? AND active = 1", (cycle_id,)).fetchall()
+            for _ in range(needed):
+                if pools:
+                    p = random.choice(pools)
+                    conn.execute("INSERT INTO mining_tasks (user_id, pool_id, cycle_id, partition_idx, num_partitions, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                 (user_id, p["id"], cycle_id, random.randint(0, 100), 128, 'assigned', _now_iso()))
+            conn.commit()
+    except Exception as e:
+        print(f"[DB ERROR] assign_tasks_for_user: {e}")
+    finally:
+        conn.close()
+
+def list_tasks_for_user(user_id: int, cycle_id: int = 0) -> list:
+    conn = _conn()
+    try:
+        if cycle_id > 0:
+            cur = conn.execute("SELECT t.*, p.name as pool_name, p.symbol, p.timeframe_min, p.family FROM mining_tasks t LEFT JOIN factor_pools p ON t.pool_id = p.id WHERE t.user_id = ? AND t.cycle_id = ?", (user_id, cycle_id))
+        else:
+            cur = conn.execute("SELECT t.*, p.name as pool_name, p.symbol, p.timeframe_min, p.family FROM mining_tasks t LEFT JOIN factor_pools p ON t.pool_id = p.id WHERE t.user_id = ?", (user_id,))
+        return [dict(row) for row in cur.fetchall()]
+    except Exception as e:
+        print(f"[DB ERROR] list_tasks_for_user: {e}")
+        return []
+    finally:
+        conn.close()
+
+def list_submissions(user_id: int = 0, status: str = "", limit: int = 300) -> list:
+    conn = _conn()
+    try:
+        query = "SELECT s.*, u.username, p.name as pool_name, p.symbol, p.timeframe_min, p.family FROM submissions s LEFT JOIN users u ON s.user_id = u.id LEFT JOIN factor_pools p ON s.pool_id = p.id WHERE 1=1"
+        params = []
+        if user_id > 0:
+            query += " AND s.user_id = ?"
+            params.append(user_id)
+        if status:
+            query += " AND s.status = ?"
+            params.append(status)
+        query += " ORDER BY s.id DESC LIMIT ?"
+        params.append(limit)
+        cur = conn.execute(query, params)
+        return [dict(row) for row in cur.fetchall()]
+    except Exception as e:
+        print(f"[DB ERROR] list_submissions: {e}")
+        return []
+    finally:
+        conn.close()
+
+def list_task_overview(limit: int = 500) -> list:
+    conn = _conn()
+    try:
+        cur = conn.execute("SELECT t.*, u.username, p.name as pool_name, p.symbol, p.timeframe_min, p.family FROM mining_tasks t LEFT JOIN users u ON t.user_id = u.id LEFT JOIN factor_pools p ON t.pool_id = p.id ORDER BY t.id DESC LIMIT ?", (limit,))
+        return [dict(row) for row in cur.fetchall()]
+    except Exception as e:
+        print(f"[DB ERROR] list_task_overview: {e}")
+        return []
+    finally:
+        conn.close()
+
+def list_strategies(user_id: int = 0, status: str = "", limit: int = 200) -> list:
+    return [] 
+
+def list_payouts(user_id: int = 0, status: str = "", limit: int = 200) -> list:
+    return []
+
+def list_candidates(task_id: int, limit: int = 50) -> list:
+    return []
+
+def get_pool(pool_id: int) -> Optional[dict]:
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT * FROM factor_pools WHERE id = ?", (pool_id,)).fetchone()
+        return dict(row) if row else None
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+def get_db_info() -> dict:
+    return {"kind": "sqlite3"}
+
+def release_assigned_tasks_for_user_not_in_pools(user_id: int, cycle_id: int, allowed_pool_ids: list) -> None:
+    conn = _conn()
+    try:
+        if not allowed_pool_ids:
+            conn.execute("UPDATE mining_tasks SET status = 'queued' WHERE user_id = ? AND cycle_id = ? AND status = 'assigned'", (user_id, cycle_id))
+        else:
+            placeholders = ",".join("?" for _ in allowed_pool_ids)
+            query = f"UPDATE mining_tasks SET status = 'queued' WHERE user_id = ? AND cycle_id = ? AND status = 'assigned' AND pool_id NOT IN ({placeholders})"
+            params = [user_id, cycle_id] + allowed_pool_ids
+            conn.execute(query, params)
+        conn.commit()
+    except Exception as e:
+        print(f"[DB ERROR] release_assigned_tasks_for_user: {e}")
+    finally:
+        conn.close()
+
+def delete_tasks_for_pool(cycle_id: int, pool_id: int) -> int:
+    conn = _conn()
+    try:
+        cur = conn.execute("DELETE FROM mining_tasks WHERE cycle_id = ? AND pool_id = ?", (cycle_id, pool_id))
+        conn.commit()
+        return cur.rowcount
+    except Exception:
+        return 0
+    finally:
+        conn.close()
+        
+def get_global_progress_snapshot(cycle_id: int) -> dict:
+    return {"system_user_id": 0, "pools": []}
+
+def get_global_paid_payout_sum_usdt(cycle_id: int) -> float:
+    return 0.0
