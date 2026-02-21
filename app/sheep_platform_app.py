@@ -1665,7 +1665,7 @@ def _render_auth_onboarding_dialog() -> None:
             st.markdown("#### 你會拿到什麼")
             st.write("不是保底收入。你貢獻的策略被採用、且結算週期有可分配金額，才會有發放。")
             st.markdown("#### 結算方式")
-            st.write("以 USDT 計算，明細會在結算頁看到。")
+            st.write("以積分計算空投獎勵，明細會在結算頁看到。")
 
         if has_video:
             with tabs[-1]:
@@ -3660,7 +3660,7 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
                         st.code(traceback.format_exc(), language="text")
                         st.stop()
 
-        st.markdown("🚀 新增 Pool (單筆或批量 JSON)")
+        st.markdown(" 新增 Pool (單筆或批量 JSON)")
         with st.expander("展開批量匯入或手動建立", expanded=False):
             batch_json = st.text_area("貼上 Pool JSON 陣列 (選填)", value="", height=200, help='格式需為 [{"name": "...", "symbol": "...", ...}, ...]')
             
@@ -3926,7 +3926,7 @@ def _render_user_hud(user: Dict[str, Any]) -> None:
         points_sum = 0.0
 
     points_help = (
-        "積分的規則：每跑過一個達標組合，且因子池系統在一週實盤結算後的 USDT 利潤，其中一半會換算成你的積分。積分可兌換等值 USDT，兌換與發放以結算規則為準。"
+        "積分的規則：每跑過一個達標組合，且因子池系統在一週實盤結算後的 利潤，其中一半會換算成你的積分。積分可根據排名等等兌換空投獎勵，兌換與發放以結算規則為準。"
     )
 
     hud_html = (
