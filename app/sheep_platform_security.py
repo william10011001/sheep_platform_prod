@@ -81,15 +81,30 @@ def hash_password(password) -> str:
 
 
 def verify_password(password, pw_hash) -> bool:
+    """專家級強健密碼校驗：自動清理資料庫汙染字串並處理多種編碼格式"""
     try:
-        if isinstance(password, str):
-            password = password.encode("utf-8")
+        if not password or not pw_hash:
+            return False
+            
+        # 轉為 bytes
+        p_bytes = password.encode("utf-8") if isinstance(password, str) else password
+        
+        # 清理 pw_hash 可能出現的 "b'...' " 殘留引號
         if isinstance(pw_hash, str):
-            pw_hash = pw_hash.encode("utf-8")
-        return bcrypt.checkpw(password, pw_hash)
+            cleaned_hash = pw_hash.strip()
+            if (cleaned_hash.startswith("b'") or cleaned_hash.startswith('b"')) and len(cleaned_hash) > 3:
+                cleaned_hash = cleaned_hash[2:-1]
+            h_bytes = cleaned_hash.encode("utf-8")
+        else:
+            h_bytes = pw_hash
+
+        # 執行校驗
+        return bcrypt.checkpw(p_bytes, h_bytes)
     except Exception as e:
         import traceback
-        print(f"[Security Error] verify_password failed: {e}\n{traceback.format_exc()}")
+        # 最大化錯誤顯示：在 API 端點紀錄詳細原因
+        print(f"[SECURITY CRITICAL] 密碼校驗邏輯崩潰 (pw_hash type: {type(pw_hash)}): {str(e)}")
+        print(traceback.format_exc())
         return False
 
 

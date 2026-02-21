@@ -721,89 +721,41 @@ def _style() -> None:
         div[data-testid="stStatusWidget"] { display: none !important; }
         div[data-testid="stDecoration"] { display: none !important; }
 
-        /* [頂級專家防擋修復] 側邊欄收起/展開按鈕 UI/UX 徹底重構 */
-        
-        /* [極端專家修復] 移除 pointer-events: none 造成的按鈕點擊封殺，讓 Streamlit 原生事件能正常穿透 */
-        header[data-testid="stHeader"] {
-            z-index: 999990 !important;
-            background: transparent !important;
-            pointer-events: auto !important;
-        }
-
-        section[data-testid="stSidebar"] {
-            overflow: visible !important;
-        }
-        section[data-testid="stSidebar"] > div:first-child {
-            overflow: visible !important;
-        }
-        
-        /* 1. 展開按鈕 (側邊欄收起時)：固定在畫面最左側中央 */
-        [data-testid="collapsedControl"], [data-testid="stSidebarCollapsedControl"] {
+        /* [專家級強制可見修復] 側邊欄控制鈕 UI 重構 */
+        /* 確保原生按鈕在任何層級下都擁有最高 z-index 且絕對不會被遮擋 */
+        [data-testid="collapsedControl"], 
+        [data-testid="stSidebarCollapsedControl"],
+        button[aria-label="Open sidebar"],
+        button[title="Open sidebar"] {
             display: flex !important;
-            opacity: 1 !important;
             visibility: visible !important;
+            opacity: 1 !important;
             position: fixed !important;
-            top: 50% !important;
-            left: 0 !important;
-            transform: translateY(-50%) !important;
-            z-index: 2147483647 !important;
-            background: rgba(37, 99, 235, 0.95) !important;
-            border: 2px solid rgba(96, 165, 250, 0.8) !important;
-            border-left: none !important;
-            border-radius: 0 12px 12px 0 !important;
-            width: 40px !important;
-            height: 70px !important;
-            align-items: center !important;
-            justify-content: center !important;
-            box-shadow: 4px 0 20px rgba(0,0,0,0.8), 0 0 15px rgba(59,130,246,0.6) !important;
-            transition: all 0.2s ease !important;
-            pointer-events: auto !important;
-            cursor: pointer !important;
-        }
-        [data-testid="collapsedControl"]:hover, [data-testid="stSidebarCollapsedControl"]:hover {
-            background: rgba(29, 78, 216, 1) !important;
-            width: 48px !important;
-            border-color: #ffffff !important;
-            box-shadow: 4px 0 25px rgba(0,0,0,0.9), 0 0 20px rgba(96,165,250,0.8) !important;
-        }
-        [data-testid="collapsedControl"] svg, [data-testid="stSidebarCollapsedControl"] svg {
-            fill: #ffffff !important;
-            width: 24px !important;
-            height: 24px !important;
-            pointer-events: none !important;
+            top: 15px !important;
+            left: 15px !important;
+            z-index: 999999999 !important;
+            background-color: #2563eb !important;
+            border-radius: 8px !important;
+            width: 45px !important;
+            height: 45px !important;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5) !important;
+            border: 1px solid rgba(255,255,255,0.2) !important;
         }
 
-        /* 2. 收起按鈕 (側邊欄打開時)：釘在側邊欄的最右側邊緣中間 */
-        [data-testid="stSidebarCollapseButton"] {
-            display: flex !important;
-            opacity: 1 !important;
-            visibility: visible !important;
-            position: absolute !important;
-            top: 50% !important;
-            right: -20px !important; 
-            transform: translateY(-50%) !important;
-            z-index: 2147483647 !important;
-            background: rgba(15, 23, 42, 1) !important;
-            border: 2px solid rgba(120, 180, 255, 0.8) !important;
+        /* 當側邊欄展開時，收起按鈕應清晰出現在側邊欄頂部 */
+        [data-testid="stSidebarCollapseButton"],
+        button[aria-label="Close sidebar"] {
+            z-index: 999999999 !important;
+            background-color: rgba(255,255,255,0.1) !important;
             border-radius: 50% !important;
-            width: 40px !important;
-            height: 40px !important;
-            align-items: center !important;
-            justify-content: center !important;
-            box-shadow: 0 0 16px rgba(0,0,0,0.8), 0 0 12px rgba(120,180,255,0.4) !important;
-            transition: all 0.2s ease !important;
         }
-        [data-testid="stSidebarCollapseButton"]:hover {
-            background: rgba(30, 58, 138, 1) !important;
-            border-color: #ffffff !important;
-            transform: translateY(-50%) scale(1.15) !important;
-            box-shadow: 0 0 20px rgba(59,130,246,0.8) !important;
-            cursor: pointer !important;
+
+        header[data-testid="stHeader"] {
+            background: transparent !important;
+            pointer-events: none !important; /* 讓 header 不擋住下方的點擊，但內部按鈕需設為 auto */
         }
-        [data-testid="stSidebarCollapseButton"] svg {
-            fill: #ffffff !important;
-            width: 20px !important;
-            height: 20px !important;
+        header[data-testid="stHeader"] button {
+            pointer-events: auto !important;
         }
 
         .stButton > button[kind="primary"], .stDownloadButton > button[kind="primary"] {

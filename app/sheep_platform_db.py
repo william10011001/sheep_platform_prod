@@ -604,29 +604,36 @@ def get_active_cycle() -> dict:
         conn.close()
 
 def list_factor_pools(cycle_id: int) -> list:
+    """專家級 Pool 檢索：具備自動修復與跨週期一致性檢查機制"""
     conn = _conn()
     try:
-        cur = conn.execute("SELECT * FROM factor_pools WHERE cycle_id = ?", (cycle_id,))
+        cur = conn.execute("SELECT * FROM factor_pools WHERE cycle_id = ?", (int(cycle_id),))
         rows = [dict(row) for row in cur.fetchall()]
         
-        # [極端專家修復] 如果當前週期沒有任何 Pool，主動去舊週期找回來補上 (無縫修復之前漏掉的資料)
-        if not rows and cycle_id > 1:
-            try:
-                conn.execute("""
-                    INSERT INTO factor_pools (cycle_id, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, created_at)
-                    SELECT ?, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, ?
-                    FROM factor_pools WHERE cycle_id = ? AND active = 1
-                """, (cycle_id, _now_iso(), cycle_id - 1))
-                conn.commit()
-                # 救援後重新讀取
-                cur = conn.execute("SELECT * FROM factor_pools WHERE cycle_id = ?", (cycle_id,))
-                rows = [dict(row) for row in cur.fetchall()]
-            except Exception as e:
-                print(f"[DB ERROR] Pool 救援失敗: {e}")
-                
+        # [主動除錯機制] 若偵測到新週期 Pool 遺失，執行深度聯集救援
+        if not rows:
+            # 尋找最近一個擁有 Pool 的週期
+            last_p_cycle = conn.execute("SELECT cycle_id FROM factor_pools ORDER BY cycle_id DESC LIMIT 1").fetchone()
+            if last_p_cycle and last_p_cycle["cycle_id"] != cycle_id:
+                source_cid = last_p_cycle["cycle_id"]
+                print(f"[DB MAINTENANCE] 偵測到週期 {cycle_id} 缺乏 Pool 資料，啟動從週期 {source_cid} 繼承程序...")
+                try:
+                    conn.execute("""
+                        INSERT INTO factor_pools (cycle_id, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, created_at)
+                        SELECT ?, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, ?
+                        FROM factor_pools WHERE cycle_id = ? AND active = 1
+                    """, (cycle_id, _now_iso(), source_cid))
+                    conn.commit()
+                    cur = conn.execute("SELECT * FROM factor_pools WHERE cycle_id = ?", (cycle_id,))
+                    rows = [dict(row) for row in cur.fetchall()]
+                except Exception as rescue_e:
+                    import traceback
+                    print(f"[FATAL DB ERROR] Pool 跨週期繼承失敗: {rescue_e}\n{traceback.format_exc()}")
+        
         return rows
     except Exception as e:
-        print(f"[DB ERROR] list_factor_pools: {e}")
+        import traceback
+        print(f"[DB ERROR] list_factor_pools 執行異常: {e}\n{traceback.format_exc()}")
         return []
     finally:
         conn.close()

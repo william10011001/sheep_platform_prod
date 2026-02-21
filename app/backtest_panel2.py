@@ -1235,34 +1235,30 @@ def ROC(close: np.ndarray, period: int) -> np.ndarray:
     return out
 
 def RSI(close: np.ndarray, period: int) -> np.ndarray:
-    """優先走 Numba 超速路徑；不可用時退回舊實作。
-
-    重要：格點掃描會高頻呼叫 RSI。這裡做「零拷貝 + 快取」：
-    - 避免每次都 .astype(float64) 造成 O(N) 複製
-    - 同一個 close buffer、同一個 period 只計算一次
+    """[效能優化] 具備結構指紋識別的超高速 RSI。
+    
+    使用數據內容指紋而非記憶體位址，解決 Streamlit 頁面重載後的快取失效問題。
     """
-    close = np.asarray(close)
+    close = np.asarray(close, dtype=np.float64)
     p = int(period)
 
     if NUMBA_OK:
         try:
-            # Key: (data_ptr, length, period) — 同一次執行中 close buffer 不變就能命中
-            ptr = int(close.__array_interface__["data"][0])
-            key = (ptr, int(close.size), p)
-            cached = _RSI_CACHE.get(key, None)
+            # 使用長度與數據前後特徵作為快速指紋 (快於完全雜湊)
+            # 避免因 Streamlit 重新分配 Array 導致 ptr 變動而快取失效
+            fingerprint = (len(close), float(close[0]), float(close[-1]), p)
+            cached = _RSI_CACHE.get(fingerprint, None)
             if cached is not None:
                 return cached
 
             out = _rsi_wilder_nb(close, p)
 
-            # 控制快取上限，避免 Streamlit 長時間跑把 RAM 撐爆
-            if len(_RSI_CACHE) > 256:
+            if len(_RSI_CACHE) > 500:
                 _RSI_CACHE.clear()
-            _RSI_CACHE[key] = out
+            _RSI_CACHE[fingerprint] = out
             return out
-        except Exception:
-            # 任何狀況都退回安全版
-            pass
+        except Exception as rsi_e:
+            print(f"[CALC ERROR] RSI Numba 快取機制失效: {rsi_e}")
 
     # ----- fallback: 原生 Wilder（慢，但正確） -----
     close = close.astype(np.float64, copy=False)

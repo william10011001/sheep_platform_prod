@@ -675,9 +675,10 @@ def claim_task(
     except Exception:
             dh = {"data_hash": "", "data_hash_ts": ""}
 
-    # If the server hasn't recorded a hash yet, compute it once on-demand.
+    # [專家除錯] 強化 Data Hash 產生邏輯，確保 Worker 絕不會因為 Server 故障而被 Ban
     if not str(dh.get("data_hash") or "").strip():
         try:
+            # 強制檢查數據目錄與同步狀態
             csv_main, _ = bt.ensure_bitmart_data(
                 symbol=str(task.get("symbol") or ""),
                 main_step_min=int(task.get("timeframe_min") or 0),
@@ -685,15 +686,20 @@ def claim_task(
                 auto_sync=True,
                 force_full=False,
             )
+            if not os.path.exists(csv_main):
+                raise FileNotFoundError(f"行情檔案生成失敗: {csv_main}")
+                
             local_hash = _sha256_file(csv_main)
             if local_hash:
                 db.set_data_hash(str(task.get("symbol") or ""), int(task.get("timeframe_min") or 0), int(years), local_hash, ts=_utc_iso())
                 dh = db.get_data_hash(str(task.get("symbol") or ""), int(task.get("timeframe_min") or 0), int(years))
-        except Exception as e:
+        except Exception as hash_fatal:
             import traceback
-            # 遵循最大化顯示錯誤指示，將 API 端的致命隱藏錯誤印出
-            print(f"[API ERROR] 請求任務時產生 Data Hash 發生嚴重錯誤 (Task ID: {task.get('id')}):\n{traceback.format_exc()}")
-            pass
+            # 最大化錯誤顯示：API 端需印出致命追蹤
+            err_msg = f"[CRITICAL API ERROR] Data Hash 產生失敗，這將導致 Worker 被誤判為作弊! (Task: {task.get('id')})\n"
+            print(err_msg + traceback.format_exc())
+            # 透過 progress 傳遞錯誤訊息給 Worker，防止 Worker 提交錯誤結果
+            db.update_task_progress(int(task["id"]), {"phase": "error", "last_error": f"Server Hash Calculation Failed: {str(hash_fatal)}"})
 
     return TaskOut(
         task_id=int(task["id"]),
