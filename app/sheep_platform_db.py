@@ -6,68 +6,8 @@ import time
 import math
 import html
 import base64
-import base64
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
-
-import pandas as pd
-import plotly.express as px
-import streamlit as st
-
-def _get_orig_dataframe():
-    orig = getattr(st, "_sheep_orig_dataframe", None)
-    if orig is not None and getattr(orig, "__name__", "") != "_dataframe_compat":
-        return orig
-
-    cur = getattr(st, "dataframe", None)
-    if cur is None:
-        return None
-
-    inner = getattr(cur, "_sheep_orig", None)
-    if inner is not None and getattr(inner, "__name__", "") != "_dataframe_compat":
-        try:
-            st._sheep_orig_dataframe = inner
-        except Exception:
-            pass
-        return inner
-
-    return cur
-
-
-def _dataframe_compat(data=None, **kwargs):
-    if "use_container_width" in kwargs:
-        u = kwargs.pop("use_container_width")
-        kwargs.setdefault("width", "stretch" if bool(u) else "content")
-
-    orig = _get_orig_dataframe()
-    if orig is None:
-        orig = st.dataframe
-
-    try:
-        return orig(data, **kwargs)
-    except TypeError:
-        if "width" in kwargs:
-            w = kwargs.pop("width")
-            kwargs["use_container_width"] = (str(w) == "stretch")
-        try:
-            return orig(data, **kwargs)
-        except TypeError:
-            kwargs.pop("hide_index", None)
-            return orig(data, **kwargs)
-
-
-if getattr(st.dataframe, "__name__", "") != "_dataframe_compat":
-    try:
-        st._sheep_orig_dataframe = _get_orig_dataframe()
-    except Exception:
-        pass
-    try:
-        _dataframe_compat._sheep_orig = _get_orig_dataframe()
-    except Exception:
-        pass
-    st.dataframe = _dataframe_compat
-
-import backtest_panel2 as bt
 
 import sys as _sys
 db = _sys.modules[__name__]

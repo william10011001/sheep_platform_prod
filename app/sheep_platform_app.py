@@ -13,55 +13,53 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+# --- 專家級版本相容修復：解決 dataframe_selector 遺失問題 ---
 def _get_orig_dataframe():
-    orig = getattr(st, "_sheep_orig_dataframe", None)
-    if orig is not None and getattr(orig, "__name__", "") != "_dataframe_compat":
-        return orig
-
-    cur = getattr(st, "dataframe", None)
-    if cur is None:
-        return None
-
-    inner = getattr(cur, "_sheep_orig", None)
-    if inner is not None and getattr(inner, "__name__", "") != "_dataframe_compat":
+    # 嘗試取得 Streamlit 原始的 dataframe 渲染方法，避開遞迴
+    if hasattr(st, "_sheep_orig_dataframe"):
+        return st._sheep_orig_dataframe
+    
+    # 這裡直接從 st 取得原始方法，但要確保我們沒有取得已經被覆蓋過的自己
+    orig = getattr(st, "dataframe")
+    if getattr(orig, "__name__", "") == "_dataframe_compat":
+        # 如果已經被覆蓋，嘗試從類別定義中找回原始方法
         try:
-            st._sheep_orig_dataframe = inner
+            from streamlit.delta_generator import DeltaGenerator
+            return DeltaGenerator.dataframe
         except Exception:
-            pass
-        return inner
-
-    return cur
+            return orig
+    return orig
 
 def _dataframe_compat(data=None, **kwargs):
-    orig = getattr(st, "_sheep_orig_dataframe", None)
-    if orig is None or getattr(orig, "__name__", "") == "_dataframe_compat":
-        # 如果無法取得原方法，強制退回 Streamlit 原始方法
-        import streamlit.elements.dataframe_selector as ds
-        orig = ds.DataFrameMixin.dataframe if hasattr(ds, "DataFrameMixin") else getattr(st, "dataframe")
-        
+    # 取得原始 dataframe 方法
+    orig = _get_orig_dataframe()
+    
+    # 處理舊版參數與新版 UI 寬度適配
     if "width" in kwargs and str(kwargs["width"]) == "stretch":
         kwargs.pop("width")
         kwargs["use_container_width"] = True
         
+    # 移除新舊版本衝突的參數
+    pop_args = ["hide_index"] # 如果版本太舊不支援此參數，先移除
+    
     try:
+        # 第一次嘗試執行
         return orig(data, **kwargs)
-    except TypeError as e:
-        if "hide_index" in kwargs:
-            kwargs.pop("hide_index")
+    except (TypeError, Exception):
+        # 如果報錯（通常是參數不支持），移除爭議參數後再試一次
+        for arg in pop_args:
+            kwargs.pop(arg, None)
         try:
             return orig(data, **kwargs)
-        except Exception as e2:
-            import streamlit as _internal_st
-            # 如果 dataframe 完全渲染失敗，退回最原始的靜態 table 保證資料可見
-            return _internal_st.table(data)
+        except Exception:
+            # 最後防線：退回靜態表格顯示，確保資料不丟失
+            return st.table(data)
 
+# 執行覆蓋，僅在尚未覆蓋時進行
 if getattr(st.dataframe, "__name__", "") != "_dataframe_compat":
-    try:
-        st._sheep_orig_dataframe = st.dataframe
-    except Exception:
-        pass
+    st._sheep_orig_dataframe = st.dataframe
     st.dataframe = _dataframe_compat
-
+# --------------------------------------------------------
 import backtest_panel2 as bt
 import sheep_platform_db as db
 from sheep_platform_security import (
@@ -724,7 +722,14 @@ def _style() -> None:
         div[data-testid="stDecoration"] { display: none !important; }
 
         /* [頂級專家防擋修復] 側邊欄收起/展開按鈕 UI/UX 徹底重構 */
-        /* 解除側邊欄的溢出隱藏限制，讓按鈕可以凸出去而不被切斷 */
+        
+        /* [極端專家修復] 移除 pointer-events: none 造成的按鈕點擊封殺，讓 Streamlit 原生事件能正常穿透 */
+        header[data-testid="stHeader"] {
+            z-index: 999990 !important;
+            background: transparent !important;
+            pointer-events: auto !important;
+        }
+
         section[data-testid="stSidebar"] {
             overflow: visible !important;
         }
@@ -732,7 +737,7 @@ def _style() -> None:
             overflow: visible !important;
         }
         
-        /* 1. 展開按鈕 (側邊欄收起時)：固定在畫面最左側中央，明顯的藍色懸浮拉環。升級支援新版 Streamlit 選擇器 */
+        /* 1. 展開按鈕 (側邊欄收起時)：固定在畫面最左側中央 */
         [data-testid="collapsedControl"], [data-testid="stSidebarCollapsedControl"] {
             display: flex !important;
             opacity: 1 !important;
@@ -752,32 +757,23 @@ def _style() -> None:
             justify-content: center !important;
             box-shadow: 4px 0 20px rgba(0,0,0,0.8), 0 0 15px rgba(59,130,246,0.6) !important;
             transition: all 0.2s ease !important;
+            pointer-events: auto !important;
+            cursor: pointer !important;
         }
         [data-testid="collapsedControl"]:hover, [data-testid="stSidebarCollapsedControl"]:hover {
             background: rgba(29, 78, 216, 1) !important;
             width: 48px !important;
             border-color: #ffffff !important;
             box-shadow: 4px 0 25px rgba(0,0,0,0.9), 0 0 20px rgba(96,165,250,0.8) !important;
-            cursor: pointer !important;
         }
         [data-testid="collapsedControl"] svg, [data-testid="stSidebarCollapsedControl"] svg {
             fill: #ffffff !important;
             width: 24px !important;
             height: 24px !important;
-        }
-        /* [極端專家修復] 確保側邊欄按鈕不會被頂部導航組件遮擋，且強制恢復其互動能力(解決收起後無法展開的BUG) */
-        [data-testid="stHeader"] {
-            z-index: 100 !important;
             pointer-events: none !important;
         }
-        [data-testid="stHeader"] * {
-            pointer-events: auto !important;
-        }
-        [data-testid="collapsedControl"], [data-testid="stSidebarCollapsedControl"] {
-            pointer-events: auto !important;
-        }
 
-        /* 2. 收起按鈕 (側邊欄打開時)：釘在側邊欄的最右側邊緣中間（一半在內一半在外） */
+        /* 2. 收起按鈕 (側邊欄打開時)：釘在側邊欄的最右側邊緣中間 */
         [data-testid="stSidebarCollapseButton"] {
             display: flex !important;
             opacity: 1 !important;

@@ -673,7 +673,7 @@ def claim_task(
     try:
         dh = db.get_data_hash(str(task.get("symbol") or ""), int(task.get("timeframe_min") or 0), int(years))
     except Exception:
-        dh = {"data_hash": "", "data_hash_ts": ""}
+            dh = {"data_hash": "", "data_hash_ts": ""}
 
     # If the server hasn't recorded a hash yet, compute it once on-demand.
     if not str(dh.get("data_hash") or "").strip():
@@ -689,7 +689,10 @@ def claim_task(
             if local_hash:
                 db.set_data_hash(str(task.get("symbol") or ""), int(task.get("timeframe_min") or 0), int(years), local_hash, ts=_utc_iso())
                 dh = db.get_data_hash(str(task.get("symbol") or ""), int(task.get("timeframe_min") or 0), int(years))
-        except Exception:
+        except Exception as e:
+            import traceback
+            # 遵循最大化顯示錯誤指示，將 API 端的致命隱藏錯誤印出
+            print(f"[API ERROR] 請求任務時產生 Data Hash 發生嚴重錯誤 (Task ID: {task.get('id')}):\n{traceback.format_exc()}")
             pass
 
     return TaskOut(

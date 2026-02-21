@@ -515,15 +515,19 @@ class JobManager:
             db.update_task_status(task_id, "completed", finished=True)
 
         except Exception as e:
+            import traceback
+            err_trace = traceback.format_exc()
+            print(f"[JOB ERROR] Task {task_id} 發生嚴重錯誤:\n{err_trace}")
             try:
                 prog = _json_load((db.get_task(task_id) or {}).get("progress_json") or "{}")
-                prog["last_error"] = str(e)
+                # 遵循最大化顯示錯誤指示，將完整的 traceback 寫入資料庫
+                prog["last_error"] = f"{str(e)}\n\n詳細追蹤:\n{err_trace}"
                 prog["updated_at"] = db.utc_now_iso()
                 db.update_task_progress(task_id, prog)
-            except Exception:
-                pass
-            db.update_task_status(task_id, "assigned")
-            db.write_audit_log(None, "task_error", {"task_id": int(task_id), "error": str(e)})
+            except Exception as inner_e:
+                print(f"[JOB ERROR] 無法更新任務進度: {inner_e}")
+            db.update_task_status(task_id, "error", finished=True)
+            db.write_audit_log(None, "task_error", {"task_id": int(task_id), "error": str(e), "trace": err_trace})
 
 
 JOB_MANAGER = JobManager()
