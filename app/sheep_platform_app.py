@@ -134,7 +134,9 @@ iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
 }}
 
 /* [專家級終極修復] 強制側邊欄控制鈕永久顯示，提供高對比度底色，並阻絕任何 Hover 隱藏機制 */
-div[data-testid="stSidebarCollapsedControl"] {{
+/* [專家級終極修復] 兼容新舊版 Streamlit，強制側邊欄控制鈕永久顯示 */
+div[data-testid="stSidebarCollapsedControl"],
+div[data-testid="collapsedControl"] {{
     position: fixed !important;
     left: 0px !important;
     top: 0px !important;
@@ -150,12 +152,15 @@ div[data-testid="stSidebarCollapsedControl"] {{
     display: flex !important;
     transition: transform 0.2s ease, filter 0.2s ease !important;
     cursor: pointer !important;
+    pointer-events: auto !important;
 }}
-div[data-testid="stSidebarCollapsedControl"]:hover {{
+div[data-testid="stSidebarCollapsedControl"]:hover,
+div[data-testid="collapsedControl"]:hover {{
     transform: scale(1.05) !important;
     filter: brightness(1.2) !important;
 }}
-div[data-testid="stSidebarCollapsedControl"] svg {{
+div[data-testid="stSidebarCollapsedControl"] svg,
+div[data-testid="collapsedControl"] svg {{
     fill: #ffffff !important;
     width: 24px !important;
     height: 24px !important;
@@ -749,21 +754,9 @@ def _style() -> None:
         footer { visibility: hidden; }
         #MainMenu { visibility: hidden; }
 
+        /* [專家級修復] 徹底隱藏 Toolbar 避免任何層級遮擋側邊欄按鈕 */
         div[data-testid="stToolbar"] {
-          opacity: 0.1;
-          transition: opacity 0.3s ease;
-          /* 避免透明工具列覆蓋左上角，導致側邊欄收起/展開按鈕點不到 */
-          pointer-events: none !important;
-          left: auto !important;
-          right: 12px !important;
-          width: fit-content !important;
-        }
-        div[data-testid="stToolbar"]:hover { opacity: 1; }
-        div[data-testid="stToolbar"] button,
-        div[data-testid="stToolbar"] a,
-        div[data-testid="stToolbar"] input,
-        div[data-testid="stToolbar"] [role="button"] {
-          pointer-events: auto !important;
+          display: none !important;
         }
         div[data-testid="stStatusWidget"] { display: none !important; }
         div[data-testid="stDecoration"] { display: none !important; }

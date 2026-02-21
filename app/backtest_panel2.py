@@ -417,11 +417,13 @@ def _full_sync_bitmart_csv(symbol: str,
     guard = 0
 
     fetch_lock_path = Path(str(csv_path) + ".net.lock")
-    fetch_timeout = 60.0 if not csv_path.exists() else 2.0
+    # [專家級修復] 延長全量同步的鎖定等待時間，避免並發任務互相踩踏導致 Timeout 崩潰
+    fetch_timeout = 600.0 if not csv_path.exists() else 10.0
 
     try:
         with FileLock(str(fetch_lock_path), timeout=float(fetch_timeout)):
             client = BitMartRestClient()
+            sync_start_time = time.time()  # 加入絕對超時防護
 
             tmp_csv = csv_path.with_suffix(csv_path.suffix + ".tmp")
             with tmp_csv.open("w", encoding="utf-8", newline="") as f:
@@ -429,8 +431,13 @@ def _full_sync_bitmart_csv(symbol: str,
 
             while True:
                 guard += 1
-                if guard > 1000000:
-                    raise RuntimeError("同步迴圈超過限制次數")
+                if guard > 100000:
+                    raise RuntimeError("同步迴圈異常：超過安全限制次數")
+                
+                # 絕對超時防護：若單一 K 線檔同步超過 15 分鐘，強制中止並保留已下載部分，避免永久卡死
+                if time.time() - sync_start_time > 900:
+                    print(f"[WARN] {symbol} {step_min}m 同步耗時過長，強制中斷保存。")
+                    break
 
                 rows, _hdr = client.get_klines(symbol=symbol, step_min=step_min, limit=200, after=after)
                 df = _bitmart_rows_to_df(rows)
@@ -439,10 +446,17 @@ def _full_sync_bitmart_csv(symbol: str,
 
                 df = df[df["_ts_sec"] > after]
                 df = df[(df["_ts_sec"] >= start_ts) & (df["_ts_sec"] <= end_ts)]
+                
                 if df.empty:
                     if after >= end_ts:
                         break
-                    after = int(after + 200 * step_sec)
+                    # [專家級修復] 智慧斷層跳躍：若過濾後為空，直接將 after 推進到 API 回傳的最大時間
+                    # 避免在歷史無資料的空窗期中以 200 根的龜速推進，引發海量請求與 Rate Limit 卡死
+                    api_max_ts = int(max([float(r[0]) // 1000 if float(r[0]) > 1000000000000 else float(r[0]) for r in rows]))
+                    if api_max_ts > after:
+                        after = api_max_ts
+                    else:
+                        after = int(after + 200 * step_sec)
                     continue
 
                 with tmp_csv.open("a", encoding="utf-8", newline="") as f:
@@ -696,33 +710,38 @@ def ensure_bitmart_data(symbol: str,
                         years: int = 3,
                         auto_sync: bool = True,
                         force_full: bool = False,
-                        progress_cb: Optional[callable] = None) -> Tuple[str, str]:
+                        progress_cb: Optional[callable] = None,
+                        skip_1m: bool = False) -> Tuple[str, str]:
     symbol = str(symbol).strip()
     main_step_min = int(main_step_min)
 
     csv_1m, _, _ = _bitmart_csv_paths(symbol, 1)
     csv_main, _, _ = _bitmart_csv_paths(symbol, main_step_min)
 
-    need_1m = bool(force_full) or (not csv_1m.exists())
     need_main = bool(force_full) or (not csv_main.exists())
-
-    if need_1m:
-        _full_sync_bitmart_csv(symbol=symbol, step_min=1, years=years, progress_cb=progress_cb)
-    else:
-        if not bool(auto_sync):
-            _append_update_bitmart_csv(symbol=symbol, step_min=1, years=years)
-
+    
+    # 優先同步主週期，避免被 1m 的龐大資料阻塞
     if need_main:
         _full_sync_bitmart_csv(symbol=symbol, step_min=main_step_min, years=years, progress_cb=progress_cb)
     else:
         if not bool(auto_sync):
             _append_update_bitmart_csv(symbol=symbol, step_min=main_step_min, years=years)
 
-    if auto_sync:
-        BITMART_UPDATE_SERVICE.ensure_worker(symbol, 1, years=years)
-        BITMART_UPDATE_SERVICE.ensure_worker(symbol, main_step_min, years=years)
+    # 根據參數決定是否同步 1m 資料 (API Server 驗證時可跳過)
+    if not skip_1m:
+        need_1m = bool(force_full) or (not csv_1m.exists())
+        if need_1m:
+            _full_sync_bitmart_csv(symbol=symbol, step_min=1, years=years, progress_cb=progress_cb)
+        else:
+            if not bool(auto_sync):
+                _append_update_bitmart_csv(symbol=symbol, step_min=1, years=years)
 
-    return str(csv_main), str(csv_1m)
+    if auto_sync:
+        BITMART_UPDATE_SERVICE.ensure_worker(symbol, main_step_min, years=years)
+        if not skip_1m:
+            BITMART_UPDATE_SERVICE.ensure_worker(symbol, 1, years=years)
+
+    return str(csv_main), str(csv_1m) if not skip_1m else ""
 
 # GPU (Torch) 選配
 try:

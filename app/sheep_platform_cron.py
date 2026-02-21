@@ -58,12 +58,14 @@ def run_weekly_check(week_start_ts: str, week_end_ts: str) -> None:
         sl = float(params.get("sl"))
         mh = int(params.get("max_hold"))
 
+        # [專家級修復] 週結算不需同步 1m 資料，避免 CronJob 逾時
         csv_main, _ = bt.ensure_bitmart_data(
             symbol=str(pool["symbol"]),
             main_step_min=int(pool["timeframe_min"]),
             years=int(pool.get("years") or 3),
             auto_sync=True,
             force_full=False,
+            skip_1m=True
         )
         df = bt.load_and_validate_csv(csv_main)
         dff = df[(df["ts"] >= week_start) & (df["ts"] < week_end)].copy()
@@ -154,6 +156,7 @@ def main() -> None:
                         years=int(p.get("years") or 3),
                         auto_sync=True,
                         force_full=False,
+                        skip_1m=True
                     )
                     h = _sha256_file(str(csv_main))
                     key = db.data_hash_setting_key(str(p["symbol"]), int(p["timeframe_min"]), int(p.get("years") or 3))

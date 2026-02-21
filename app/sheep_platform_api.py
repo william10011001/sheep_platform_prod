@@ -687,13 +687,14 @@ def claim_task(
     if not str(dh.get("data_hash") or "").strip():
         print(f"[API] 偵測到新 Pool ({task.get('symbol')} {task.get('timeframe_min')}m)，啟動自動化預熱流程...")
         try:
-            # 1. 阻斷式同步：在發放前確保主週期與 1m 資料皆就緒
-            # 這裡不使用 progress_cb 避免阻塞 API thread，但確保 timeout 邏輯正確
+            # 1. 阻斷式同步：在發放前確保主週期就緒
+            # [專家級修復] 加上 skip_1m=True，嚴禁 API 伺服器去同步 1m 資料引發 504 Timeout 卡死
             csv_main, _ = bt.ensure_bitmart_data(
                 symbol=str(task.get("symbol") or ""),
                 main_step_min=int(task.get("timeframe_min") or 0),
                 years=int(years),
-                auto_sync=True
+                auto_sync=True,
+                skip_1m=True
             )
             
             # 2. 檔案存取安全檢查 (FileLock 會在 bt 模組內處理)
@@ -886,12 +887,14 @@ def finish_task(
         worst_case = bool(risk_spec.get("worst_case", True))
         reverse_mode = bool(risk_spec.get("reverse_mode", False))
 
+        # [專家級修復] 伺服器端複驗時嚴禁同步 1m 資料，避免佔用資源
         csv_main, _ = bt.ensure_bitmart_data(
             symbol=symbol,
             main_step_min=int(tf_min),
             years=int(years),
             auto_sync=True,
             force_full=False,
+            skip_1m=True
         )
         df = bt.load_and_validate_csv(csv_main)
 
