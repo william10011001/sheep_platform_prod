@@ -1054,49 +1054,60 @@ def delete_tasks_for_pool(cycle_id: int, pool_id: int) -> int:
         
 def get_global_progress_snapshot(cycle_id: int) -> dict:
     conn = _conn()
+    t0 = time.time()
     try:
         pools = list_factor_pools(int(cycle_id))
-
-        def _status_rank(s: str) -> int:
-            if s == "completed":
-                return 3
-            if s == "running":
-                return 2
-            if s == "assigned":
-                return 1
-            return 0
-
-        def _pick_better(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
-            sa = str(a.get("status") or "")
-            sb = str(b.get("status") or "")
-            ra = _status_rank(sa)
-            rb = _status_rank(sb)
-            if rb != ra:
-                return b if rb > ra else a
-            ta = str(a.get("updated_at") or a.get("created_at") or "")
-            tb = str(b.get("updated_at") or b.get("created_at") or "")
-            if tb != ta:
-                return b if tb > ta else a
-            ia = int(a.get("id") or 0)
-            ib = int(b.get("id") or 0)
-            return b if ib > ia else a
-
+        pools_by_id: Dict[int, Dict[str, Any]] = {}
         for p in pools:
-            pool_id = int(p.get("id") or 0)
+            try:
+                pid = int(p.get("id") or 0)
+            except Exception:
+                pid = 0
+            p["tasks"] = []
+            pools_by_id[pid] = p
 
-            # 注意：mining_tasks 可能會有同一 partition_idx 多筆紀錄（斷線接手/重派）。
-            # 這裡直接在 DB 層去重，避免前端統計被放大，且讓分割分佈顯示更貼近真實狀態。
+        # 快路徑：用 window function 在 DB 端直接「每個 (pool_id, partition_idx) 只取最佳那筆」
+        # 這會把原本 Python 逐筆掃描 + 去重，變成 DB 一次做完，效能差距是量級級別
+        try:
             cur = conn.execute(
                 """
-                SELECT t.*, u.username AS username
-                FROM mining_tasks t
-                LEFT JOIN users u ON u.id = t.user_id
-                WHERE t.pool_id = ? AND t.cycle_id = ?
+                WITH ranked AS (
+                    SELECT
+                        t.id,
+                        t.user_id,
+                        t.pool_id,
+                        t.cycle_id,
+                        t.partition_idx,
+                        t.num_partitions,
+                        t.status,
+                        t.progress_json,
+                        t.last_heartbeat,
+                        t.created_at,
+                        t.updated_at,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY t.pool_id, t.partition_idx
+                            ORDER BY
+                                CASE t.status
+                                    WHEN 'completed' THEN 3
+                                    WHEN 'running' THEN 2
+                                    WHEN 'assigned' THEN 1
+                                    ELSE 0
+                                END DESC,
+                                COALESCE(t.updated_at, t.created_at) DESC,
+                                t.id DESC
+                        ) AS rn
+                    FROM mining_tasks t
+                    WHERE t.cycle_id = ?
+                )
+                SELECT r.*, u.username AS username
+                FROM ranked r
+                LEFT JOIN users u ON u.id = r.user_id
+                WHERE r.rn = 1
+                ORDER BY r.pool_id ASC, r.partition_idx ASC
                 """,
-                (pool_id, int(cycle_id)),
+                (int(cycle_id),),
             )
 
-            best: Dict[int, Dict[str, Any]] = {}
             for row in cur.fetchall():
                 t = dict(row)
                 try:
@@ -1105,27 +1116,92 @@ def get_global_progress_snapshot(cycle_id: int) -> dict:
                     t["progress"] = {}
 
                 try:
-                    idx = int(t.get("partition_idx") or 0)
+                    pid = int(t.get("pool_id") or 0)
                 except Exception:
-                    idx = 0
+                    pid = 0
 
-                if idx not in best:
-                    best[idx] = t
-                else:
-                    best[idx] = _pick_better(best[idx], t)
+                p = pools_by_id.get(pid)
+                if p is not None:
+                    p["tasks"].append(t)
 
-            # 依 partition_idx 排序，讓前端顯示穩定
-            tasks_list = [best[k] for k in sorted(best.keys())]
-            p["tasks"] = tasks_list
+        except Exception as fast_e:
+            # 安全 fallback：如果 SQLite 版本/環境不支援 window function，就退回舊邏輯
+            # 但仍然縮小欄位，避免 SELECT t.* 造成不必要的資料搬運
+            def _status_rank(s: str) -> int:
+                if s == "completed":
+                    return 3
+                if s == "running":
+                    return 2
+                if s == "assigned":
+                    return 1
+                return 0
+
+            def _pick_better(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
+                sa = str(a.get("status") or "")
+                sb = str(b.get("status") or "")
+                ra = _status_rank(sa)
+                rb = _status_rank(sb)
+                if rb != ra:
+                    return b if rb > ra else a
+                ta = str(a.get("updated_at") or a.get("created_at") or "")
+                tb = str(b.get("updated_at") or b.get("created_at") or "")
+                if tb != ta:
+                    return b if tb > ta else a
+                ia = int(a.get("id") or 0)
+                ib = int(b.get("id") or 0)
+                return b if ib > ia else a
+
+            for p in pools:
+                pool_id = int(p.get("id") or 0)
+                cur2 = conn.execute(
+                    """
+                    SELECT
+                        t.id, t.user_id, t.pool_id, t.cycle_id,
+                        t.partition_idx, t.num_partitions,
+                        t.status, t.progress_json,
+                        t.last_heartbeat, t.created_at, t.updated_at,
+                        u.username AS username
+                    FROM mining_tasks t
+                    LEFT JOIN users u ON u.id = t.user_id
+                    WHERE t.pool_id = ? AND t.cycle_id = ?
+                    """,
+                    (pool_id, int(cycle_id)),
+                )
+
+                best: Dict[int, Dict[str, Any]] = {}
+                for row in cur2.fetchall():
+                    t = dict(row)
+                    try:
+                        t["progress"] = json.loads(t.get("progress_json") or "{}")
+                    except Exception:
+                        t["progress"] = {}
+
+                    try:
+                        idx = int(t.get("partition_idx") or 0)
+                    except Exception:
+                        idx = 0
+
+                    if idx not in best:
+                        best[idx] = t
+                    else:
+                        best[idx] = _pick_better(best[idx], t)
+
+                p["tasks"] = [best[k] for k in sorted(best.keys())]
+
+            print(f"[DB WARN] get_global_progress_snapshot fallback used: {fast_e}")
+
+        dt = time.time() - t0
+        if dt > 0.8:
+            print(f"[DB SLOW] get_global_progress_snapshot cycle_id={cycle_id} took {dt:.3f}s pools={len(pools)}")
 
         return {"system_user_id": 0, "pools": pools}
+
     except Exception as e:
         import traceback
         print(f"[DB ERROR] get_global_progress_snapshot: {e}\n{traceback.format_exc()}")
         return {"system_user_id": 0, "pools": []}
     finally:
         conn.close()
-
 def get_global_paid_payout_sum_usdt(cycle_id: int) -> float:
     conn = _conn()
     try:

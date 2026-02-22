@@ -172,8 +172,9 @@ iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
         }}
         /* 確保 Streamlit 頂部導覽列不遮擋此按鈕 */
         header[data-testid="stHeader"] {{
-            pointer-events: none !important;
-            z-index: 2147483640 !important; 
+            background: transparent !important;
+            z-index: 2147483640 !important;
+            pointer-events: auto !important;
         }}
 
 @media (max-width: 720px) {{
@@ -760,7 +761,25 @@ def _style() -> None:
           color: #ffffff;
         }
 
-        header[data-testid="stHeader"] { background: transparent !important; pointer-events: none !important; z-index: 2147483640 !important; }
+        header[data-testid="stHeader"] {
+          background: transparent !important;
+          z-index: 2147483640 !important;
+          pointer-events: auto !important;
+        }
+
+        /* 原生側邊欄控制鈕：固定左上角，避免被任何層蓋住或被 overflow 裁切 */
+        div[data-testid="stSidebarCollapsedControl"],
+        div[data-testid="collapsedControl"],
+        button[aria-label="Open sidebar"],
+        button[kind="headerNoPadding"] {
+          position: fixed !important;
+          left: 8px !important;
+          top: 8px !important;
+          z-index: 2147483647 !important;
+          opacity: 1 !important;
+          visibility: visible !important;
+          pointer-events: auto !important;
+        }
         footer { visibility: hidden !important; }
         #MainMenu { visibility: hidden !important; }
 
@@ -957,58 +976,108 @@ def _style() -> None:
         </style>
         
         <script>
-        // [專家級防護] 動態注入備用側邊欄展開按鈕，徹底解決原生按鈕被隱藏或框架更新導致失效的問題
-        (function() {
-            const parentDoc = window.parent.document;
-            if (parentDoc.getElementById('custom-sidebar-trigger')) return;
-            const btn = parentDoc.createElement('div');
-            btn.id = 'custom-sidebar-trigger';
-            btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"></path></svg>';
-            btn.title = "展開側邊欄 (系統備護按鈕)";
-            
-            btn.addEventListener('click', function(e) {
-                e.preventDefault();
-                e.stopPropagation();
-                
-                // 優先嘗試點擊 Streamlit 原生按鈕 (涵蓋新舊版本 selector)
-                let nativeBtn = parentDoc.querySelector('button[aria-label="Open sidebar"]') || 
-                                parentDoc.querySelector('div[data-testid="stSidebarCollapsedControl"] button') || 
-                                parentDoc.querySelector('div[data-testid="collapsedControl"] button') ||
-                                parentDoc.querySelector('button[kind="headerNoPadding"]');
-                                
-                if (nativeBtn) {
-                    // React 需要原生 MouseEvent 才能觸發 state 更新
-                    nativeBtn.dispatchEvent(new MouseEvent('click', {view: window.parent, bubbles: true, cancelable: true}));
-                } else {
-                    // 若原生按鈕完全消失，直接暴力控制側邊欄 DOM
-                    const sidebar = parentDoc.querySelector('section[data-testid="stSidebar"]');
-                    if(sidebar) {
-                        sidebar.style.setProperty('display', 'block', 'important');
-                        sidebar.style.setProperty('visibility', 'visible', 'important');
-                        sidebar.style.setProperty('min-width', '16rem', 'important');
-                        sidebar.style.setProperty('transform', 'translateX(0px)', 'important');
-                    } else {
-                        alert("嚴重異常：找不到側邊欄組件，請重新整理頁面！");
-                    }
-                }
-            });
-            parentDoc.body.appendChild(btn);
-            
-            // 定期監聽側邊欄狀態，若「已經展開」，則自動隱藏此備用按鈕
-            setInterval(() => {
-                const sidebar = parentDoc.querySelector('section[data-testid="stSidebar"]');
-                const trigger = parentDoc.getElementById('custom-sidebar-trigger');
-                if (sidebar && trigger) {
-                    const rect = sidebar.getBoundingClientRect();
-                    // 若側邊欄寬度正常且在畫面內，代表已展開，隱藏 Trigger
-                    if (rect.width > 50 && rect.left >= 0) {
-                        trigger.style.display = 'none';
-                    } else {
-                        trigger.style.display = 'flex';
-                    }
-                }
-            }, 500);
-        })();
+(function() {
+  const parentDoc = window.parent && window.parent.document ? window.parent.document : document;
+
+  function qsAny(selectors) {
+    for (const sel of selectors) {
+      const el = parentDoc.querySelector(sel);
+      if (el) return el;
+    }
+    return null;
+  }
+
+  function isSidebarExpanded() {
+    const sidebar = parentDoc.querySelector('section[data-testid="stSidebar"]');
+    if (!sidebar) return false;
+    const rect = sidebar.getBoundingClientRect();
+    return rect.width > 50 && rect.left >= 0;
+  }
+
+  function ensureTrigger() {
+    // 1) 若已展開，不需要 trigger
+    if (isSidebarExpanded()) {
+      const old = parentDoc.getElementById('custom-sidebar-trigger');
+      if (old) old.style.display = 'none';
+      return;
+    }
+
+    // 2) 若 trigger 不存在就建立
+    let btn = parentDoc.getElementById('custom-sidebar-trigger');
+    if (!btn) {
+      btn = parentDoc.createElement('div');
+      btn.id = 'custom-sidebar-trigger';
+      btn.setAttribute('role', 'button');
+      btn.setAttribute('aria-label', 'Open sidebar (failsafe)');
+      btn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"></path></svg>';
+
+      // 內聯樣式是最後保險：就算 CSS 被覆蓋也能顯示
+      btn.style.position = 'fixed';
+      btn.style.top = '10px';
+      btn.style.left = '10px';
+      btn.style.width = '48px';
+      btn.style.height = '48px';
+      btn.style.display = 'flex';
+      btn.style.alignItems = 'center';
+      btn.style.justifyContent = 'center';
+      btn.style.background = 'rgba(30, 41, 59, 0.98)';
+      btn.style.border = '1px solid rgba(255,255,255,0.25)';
+      btn.style.borderRadius = '8px';
+      btn.style.boxShadow = '0px 4px 16px rgba(0,0,0,0.8)';
+      btn.style.zIndex = '2147483647';
+      btn.style.cursor = 'pointer';
+      btn.style.pointerEvents = 'auto';
+
+      btn.addEventListener('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        // 優先點原生控制鈕（涵蓋新舊 selector）
+        const nativeBtn = qsAny([
+          'button[aria-label="Open sidebar"]',
+          'div[data-testid="stSidebarCollapsedControl"] button',
+          'div[data-testid="collapsedControl"] button',
+          'button[kind="headerNoPadding"]'
+        ]);
+
+        if (nativeBtn) {
+          nativeBtn.dispatchEvent(new MouseEvent('click', { view: window.parent, bubbles: true, cancelable: true }));
+          return;
+        }
+
+        // 原生按鈕不存在：直接暴力展開 sidebar
+        const sidebar = parentDoc.querySelector('section[data-testid="stSidebar"]');
+        if (sidebar) {
+          sidebar.style.setProperty('display', 'block', 'important');
+          sidebar.style.setProperty('visibility', 'visible', 'important');
+          sidebar.style.setProperty('min-width', '16rem', 'important');
+          sidebar.style.setProperty('transform', 'translateX(0px)', 'important');
+          return;
+        }
+
+        // 連 sidebar 都找不到：代表 React 還沒渲染或 DOM 結構變了
+        console.warn('[sidebar_failsafe] sidebar element not found');
+      }, { capture: true });
+
+      parentDoc.body.appendChild(btn);
+    }
+
+    // 3) 若沒展開就顯示
+    btn.style.display = 'flex';
+  }
+
+  // 首次與重試（React 常延遲渲染）
+  let tries = 0;
+  const timer = setInterval(() => {
+    tries += 1;
+    ensureTrigger();
+    if (tries >= 60) clearInterval(timer); // 30 秒後停止暴力嘗試，避免無限跑
+  }, 500);
+
+  // 視窗改變時也重算一次
+  parentDoc.defaultView && parentDoc.defaultView.addEventListener('resize', ensureTrigger);
+
+})();
         </script>
         """,
         unsafe_allow_html=True,
@@ -1892,7 +1961,7 @@ def _render_kpi(title: str, value: Any, sub: str = "", help_text: str = "") -> s
     return f'<div class="metric"><div class="k">{k}</div><div class="v">{v}</div><div class="small-muted">{sub_html}</div></div>'
 
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=20, show_spinner=False)
 def _cached_global_progress_snapshot(cycle_id: int) -> Dict[str, Any]:
     return db.get_global_progress_snapshot(int(cycle_id))
 
@@ -3120,11 +3189,57 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
     # - keep_polling=True：使用者點過「開始全部任務」(server) 或 run_enabled=True(worker)
     #   即使暫時沒任務，也會持續刷新，才能無縫接新任務。
     if auto_refresh and (any_active or keep_polling):
+        # 重要：不要在 Streamlit 腳本內 time.sleep()，多人同時進站會把執行緒睡死 -> 網站像「進不去」
+        # 改成前端計時器觸發 reload（非阻塞），伺服器不會被睡眠霸佔
         try:
-            time.sleep(float(refresh_s))
+            base_s = float(refresh_s)
         except Exception:
-            time.sleep(1.0)
-        st.rerun()
+            base_s = 1.0
+
+        # 沒有任務但仍 keep_polling 時，至少 3 秒一次，避免空轉把 DB 打爆
+        if not any_active:
+            base_s = max(base_s, 3.0)
+
+        # 夾住範圍，避免有人把 refresh 設成 0.1 秒直接 DDOS 自己
+        base_s = float(min(30.0, max(0.8, base_s)))
+        interval_ms = int(base_s * 1000)
+
+        # 加一點 jitter，避免所有人同一刻打到 cache / DB（stampede）
+        try:
+            interval_ms = int(interval_ms + random.randint(0, 250))
+        except Exception:
+            pass
+
+        st.components.v1.html(
+            f"""
+<script>
+(function() {{
+  try {{
+    const w = window.parent || window;
+    const ms = Math.max(300, Math.min(60000, {interval_ms}));
+
+    // 每次 rerun 都先清掉舊 timer，避免累積多個 timer 造成瘋狂重整
+    if (w.__sheep_autorefresh_timer) {{
+      clearTimeout(w.__sheep_autorefresh_timer);
+    }}
+
+    w.__sheep_autorefresh_timer = setTimeout(function() {{
+      try {{
+        // 分頁不在前景就不要刷，避免背景分頁一直打爆伺服器
+        if (document.hidden) return;
+        w.location.reload();
+      }} catch (e) {{
+        console.warn('[autorefresh] reload failed', e);
+      }}
+    }}, ms);
+  }} catch (e) {{
+    console.warn('[autorefresh] init failed', e);
+  }}
+}})();
+</script>
+            """,
+            height=0,
+        )
 
 
 def _render_candidates_and_submit(user: Dict[str, Any], task_row: Dict[str, Any]) -> None:
