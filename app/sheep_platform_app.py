@@ -988,6 +988,7 @@ def _style() -> None:
         .pill-neutral { background: rgba(255, 255, 255, 0.1); color: #94a3b8; border: 1px solid rgba(255, 255, 255, 0.2); }
 
         /* [專家級防護] 自訂側邊欄呼叫按鈕樣式 (當原生按鈕死掉時的無敵防線) */
+        # [專家級防護] 自訂側邊欄呼叫按鈕樣式 (當原生按鈕死掉時的無敵防線)
         #custom-sidebar-trigger {
             position: fixed !important;
             top: 10px !important;
@@ -1014,6 +1015,148 @@ def _style() -> None:
             fill: #fff !important;
             width: 28px !important;
             height: 28px !important;
+        }
+
+        /* --- [排行榜美化系統] --- */
+        /* 1. 隱藏 Streamlit 原生 Radio 的醜陋圓點 */
+        .lb-period-selector div[role="radiogroup"] > label > div:first-child {
+            display: none !important;
+        }
+        .lb-period-selector div[role="radiogroup"] {
+            display: flex;
+            gap: 8px;
+            background: rgba(255, 255, 255, 0.03);
+            padding: 4px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .lb-period-selector label {
+            flex: 1;
+            text-align: center;
+            padding: 8px 16px !important;
+            border-radius: 8px !important;
+            border: 1px solid transparent !important;
+            transition: all 0.2s ease !important;
+            margin: 0 !important;
+            background: transparent;
+            color: #94a3b8 !important;
+            font-weight: 600 !important;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        /* 選中狀態模擬 */
+        .lb-period-selector label[data-baseweb="radio"]:has(input:checked) {
+            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%) !important;
+            color: #ffffff !important;
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.4);
+            border: 1px solid rgba(255, 255, 255, 0.1) !important;
+        }
+        .lb-period-selector label:hover {
+            background: rgba(255, 255, 255, 0.05);
+            color: #e2e8f0 !important;
+        }
+
+        /* 2. 排行榜表格樣式 (取代 DataFrame) */
+        .lb-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0 8px;
+            margin-top: 10px;
+        }
+        .lb-row {
+            background: rgba(30, 41, 59, 0.4);
+            border-radius: 12px;
+            transition: transform 0.2s ease, background 0.2s ease;
+        }
+        .lb-row:hover {
+            transform: scale(1.01);
+            background: rgba(30, 41, 59, 0.7);
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        }
+        .lb-cell {
+            padding: 16px;
+            color: #e2e8f0;
+            vertical-align: middle;
+            border-top: 1px solid rgba(255,255,255,0.05);
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+        }
+        .lb-row td:first-child {
+            border-left: 1px solid rgba(255,255,255,0.05);
+            border-top-left-radius: 12px;
+            border-bottom-left-radius: 12px;
+            width: 60px;
+            text-align: center;
+        }
+        .lb-row td:last-child {
+            border-right: 1px solid rgba(255,255,255,0.05);
+            border-top-right-radius: 12px;
+            border-bottom-right-radius: 12px;
+            text-align: right;
+            font-family: monospace;
+            font-size: 1.1em;
+            font-weight: 700;
+            color: #60a5fa;
+        }
+        
+        /* CSS 獎牌渲染 */
+        .rank-badge {
+            width: 32px;
+            height: 32px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            font-weight: 800;
+            font-size: 14px;
+            color: #fff;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+        }
+        .rank-1 {
+            background: linear-gradient(135deg, #FFD700 0%, #FDB931 100%);
+            border: 2px solid #FFF8D6;
+            box-shadow: 0 0 15px rgba(255, 215, 0, 0.4);
+        }
+        .rank-2 {
+            background: linear-gradient(135deg, #E0E0E0 0%, #BDBDBD 100%);
+            border: 2px solid #FFFFFF;
+        }
+        .rank-3 {
+            background: linear-gradient(135deg, #CD7F32 0%, #A0522D 100%);
+            border: 2px solid #FFDAB9;
+        }
+        .rank-other {
+            background: rgba(255,255,255,0.1);
+            color: #94a3b8;
+            border: 1px solid rgba(255,255,255,0.1);
+            width: 28px; height: 28px; font-size: 12px;
+        }
+
+        /* 3. 暱稱設定卡片美化 */
+        .nick-card {
+            background: linear-gradient(135deg, rgba(255,215,0,0.05) 0%, rgba(0,0,0,0) 100%);
+            border: 1px solid rgba(255,215,0,0.3);
+            border-radius: 12px;
+            padding: 20px;
+            position: relative;
+            overflow: hidden;
+            margin-bottom: 24px;
+        }
+        .nick-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; width: 4px; height: 100%;
+            background: #FFD700;
+            box-shadow: 0 0 10px #FFD700;
+        }
+        .crown-icon {
+            display: inline-block;
+            width: 24px; height: 24px;
+            background: #FFD700;
+            clip-path: polygon(5% 100%, 100% 100%, 95% 0%, 75% 65%, 50% 10%, 25% 65%, 5% 0%);
+            margin-right: 8px;
+            vertical-align: bottom;
         }
         </style>
         """,
@@ -3443,15 +3586,19 @@ def _render_audit(audit: Dict[str, Any]) -> None:
 def _page_leaderboard(user: Dict[str, Any]) -> None:
     st.markdown(_section_title_html("英雄榜", "展示頂尖貢獻者與幸運兒。數據每分鐘更新一次。", level=3), unsafe_allow_html=True)
 
-    # 週期選擇
+    # 1. 美化後的週期選單 (Segmented Control)
+    # 使用 CSS class 'lb-period-selector' 來觸發我們注入的樣式
+    st.markdown('<div class="lb-period-selector">', unsafe_allow_html=True)
     period_map = {"1 小時": 1, "24 小時": 24, "30 天 (月賽)": 720}
-    period_label = st.radio("統計週期", list(period_map.keys()), index=1, horizontal=True, key="lb_period")
+    period_label = st.radio("統計週期", list(period_map.keys()), index=1, horizontal=True, key="lb_period", label_visibility="collapsed")
+    st.markdown('</div>', unsafe_allow_html=True)
+    
     period_hours = period_map[period_label]
 
     try:
         data = db.get_leaderboard_stats(period_hours=period_hours)
-    except AttributeError:
-        st.error("系統更新中：資料庫核心尚未同步 get_leaderboard_stats 方法。")
+    except Exception as e:
+        st.error(f"排行榜資料讀取錯誤：{e}")
         return
 
     # 檢查當前用戶是否在 "30天 - 組合數" 前 5 名 (具備暱稱修改權限)
@@ -3461,7 +3608,6 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
     if period_hours == 720:
         combos_list = data.get("combos", [])
         for idx, row in enumerate(combos_list):
-            # 比對用戶名 (DB回傳的是原始username)
             if row.get("username") == user["username"]:
                 rank = idx + 1
                 my_rank_info = f"目前排名：第 {rank} 名"
@@ -3469,90 +3615,102 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
                     can_set_nickname = True
                 break
     
-    # 暱稱設定區塊
+    # 2. 尊榮暱稱設定區塊 (美化版)
     if can_set_nickname:
         st.markdown(
             """
-            <div style="background:linear-gradient(90deg, rgba(255,215,0,0.1), rgba(0,0,0,0)); border-left:4px solid #FFD700; padding:12px; border-radius:4px; margin-bottom:20px;">
-                <div style="font-weight:bold; color:#FFD700; margin-bottom:4px;"> 尊榮權限解鎖</div>
-                <div style="font-size:14px; color:#e2e8f0;">恭喜！您是本月算力貢獻前 5 名的頂尖強者。您現在可以設定專屬暱稱，讓全平台看見您的稱號。</div>
+            <div class="nick-card">
+                <div style="font-size:18px; font-weight:800; color:#FFD700; margin-bottom:8px;">
+                    <div class="crown-icon"></div>尊榮權限已解鎖
+                </div>
+                <div style="font-size:14px; color:#cbd5e1; margin-bottom:16px;">
+                    恭喜！您是本月算力貢獻前 5 名的頂尖強者。您現在可以設定專屬暱稱，讓全平台看見您的稱號。
+                </div>
             </div>
             """, unsafe_allow_html=True
         )
-        with st.expander("設定我的排行榜暱稱", expanded=True):
-            current_nick = user.get("nickname", "")
-            new_nick = st.text_input("輸入新暱稱 (限10字)", value=current_nick, max_chars=10)
-            if st.button("更新暱稱"):
+        col_n1, col_n2 = st.columns([3, 1])
+        with col_n1:
+            new_nick = st.text_input("輸入新暱稱 (限10字)", value=user.get("nickname", ""), max_chars=10, label_visibility="collapsed", placeholder="請輸入您的尊榮稱號...")
+        with col_n2:
+            if st.button("更新稱號", type="primary", use_container_width=True):
                 if new_nick.strip():
                     db.update_user_nickname(int(user["id"]), new_nick.strip())
-                    # 更新 session 緩存
-                    user["nickname"] = new_nick.strip()
+                    user["nickname"] = new_nick.strip() # Update session cache
                     db.write_audit_log(int(user["id"]), "update_nickname", {"nickname": new_nick})
-                    st.success("暱稱已更新！將顯示於排行榜。")
+                    st.success("稱號已閃亮更新！")
                     time.sleep(1)
                     st.rerun()
                 else:
-                    st.warning("暱稱不可為空")
+                    st.warning("稱號不可為空")
     elif period_hours == 720:
-        st.caption(f"提示：月度算力榜前 5 名即可解鎖自訂暱稱功能。{my_rank_info}")
+        st.info(f"月度算力榜前 5 名即可解鎖自訂暱稱功能。{my_rank_info}")
 
-    # 排行榜顯示
-    t1, t2, t3, t4 = st.tabs([" 算力貢獻榜", " 積分收益榜", " 最高分策略", " 肝帝時長榜"])
-
-    def _render_lb_table(rows: list, val_col: str, val_fmt: str, icon: str):
+    # 3. 排行榜 HTML 渲染器 (取代 st.dataframe)
+    def _render_html_table(rows: list, val_col: str, val_fmt: str, unit: str):
         if not rows:
-            st.info("此區間尚無數據。")
+            st.markdown('<div class="panel" style="text-align:center; color:#64748b; padding:40px;">此區間尚無數據，快來搶頭香！</div>', unsafe_allow_html=True)
             return
-        
-        display_data = []
+
+        html_rows = []
         for i, r in enumerate(rows):
-            rank_display = str(i + 1)
-            if i == 0: rank_display = "🥇"
-            elif i == 1: rank_display = "🥈"
-            elif i == 2: rank_display = "🥉"
+            rank = i + 1
+            rank_class = f"rank-{rank}" if rank <= 3 else "rank-other"
             
+            # 數值格式化
             val = r.get(val_col, 0)
             if val_fmt == "int":
                 val_str = f"{int(val):,}"
             elif val_fmt == "float":
-                val_str = f"{float(val):.4f}"
+                val_str = f"{float(val):.2f}" # 改為 2 位小數讓畫面更乾淨
             elif val_fmt == "time":
-                val_str = f"{float(val)/3600:.1f} 小時"
+                val_str = f"{float(val)/3600:.1f}h"
             else:
                 val_str = str(val)
+            
+            username_display = _mask_username(r.get("username"), r.get("nickname"))
+            
+            # 使用者高亮
+            is_me = (r.get("username") == user["username"])
+            bg_style = "background: rgba(59, 130, 246, 0.2); border: 1px solid rgba(59, 130, 246, 0.4);" if is_me else ""
+            
+            row_html = f"""
+            <tr class="lb-row" style="{bg_style}">
+                <td><div class="rank-badge {rank_class}">{rank}</div></td>
+                <td class="lb-cell">
+                    <div style="font-weight:600; font-size:15px; color:#f8fafc;">{html.escape(username_display)}</div>
+                </td>
+                <td class="lb-cell">
+                    {val_str} <span style="font-size:12px; color:#64748b; font-weight:400;">{unit}</span>
+                </td>
+            </tr>
+            """
+            html_rows.append(row_html)
 
-            display_data.append({
-                "排名": rank_display,
-                "用戶": _mask_username(r.get("username"), r.get("nickname")),
-                "數據": val_str
-            })
-        
-        st.dataframe(
-            pd.DataFrame(display_data),
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "排名": st.column_config.TextColumn("排名", width="small"),
-                "用戶": st.column_config.TextColumn(f"用戶 (顯示前50名)", width="medium"),
-                "數據": st.column_config.TextColumn(f"{icon} 數值", width="medium"),
-            }
-        )
+        full_table = f"""
+        <table class="lb-table">
+            { "".join(html_rows) }
+        </table>
+        """
+        st.markdown(full_table, unsafe_allow_html=True)
+
+    t1, t2, t3, t4 = st.tabs(["算力貢獻", "積分收益", "最高分", "肝帝時長"])
 
     with t1:
-        st.caption("依據「已運算並回報的策略組合總數」排名。代表對算力的直接貢獻。")
-        _render_lb_table(data["combos"], "total_done", "int", " 組合數")
+        st.caption("依據「已運算並回報的策略組合總數」排名。")
+        _render_html_table(data["combos"], "total_done", "int", "組")
     
     with t2:
-        st.caption("依據「獲得的 USDT 積分獎勵」排名。代表策略的實際獲利能力。")
-        _render_lb_table(data["points"], "total_usdt", "float", " USDT")
+        st.caption("依據「獲得的 USDT 積分獎勵」排名。")
+        _render_html_table(data["points"], "total_usdt", "float", "USDT")
 
     with t3:
-        st.caption("依據「單一策略回測分數」排名。代表運氣與搜尋到策略的能力。")
-        _render_lb_table(data["score"], "max_score", "float", " 分數")
+        st.caption("依據「單一策略回測分數」排名。")
+        _render_html_table(data["score"], "max_score", "float", "分")
 
     with t4:
-        st.caption("依據「累積運算時間」排名。代表設備的穩定投入時長。")
-        _render_lb_table(data["time"], "total_seconds", "time", " 時長")
+        st.caption("依據「累積運算時間」排名。")
+        _render_html_table(data["time"], "total_seconds", "time", "")
 def _page_submissions(user: Dict[str, Any]) -> None:
     st.markdown("### 提交紀錄")
     try:
@@ -4620,4 +4778,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as fatal_e:
+        st.error("系統發生未預期的致命錯誤，請截圖回報開發者：")
+        st.code(traceback.format_exc(), language="python")

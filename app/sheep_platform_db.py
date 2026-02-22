@@ -1682,9 +1682,10 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
         
         try:
             rows = conn.execute(sql_combos, (cutoff_iso, _now_iso())).fetchall()
-            results["combos"] = [dict(r) for r in rows if r["total_done"] and r["total_done"] > 0]
-        except Exception:
-            # Fallback for old sqlite without json_extract
+            # [專家修復] 強制轉型，避免 None 導致比較錯誤
+            results["combos"] = [dict(r) for r in rows if r["total_done"] is not None and int(r["total_done"]) > 0]
+        except Exception as e:
+            print(f"[DB WARN] Leaderboard combos query failed: {e}")
             results["combos"] = []
 
         # 2. 最高分 (Highest Score) - 從 candidates 表
@@ -1697,8 +1698,11 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
             ORDER BY max_score DESC
             LIMIT 50
         """
-        rows = conn.execute(sql_score, (cutoff_iso,)).fetchall()
-        results["score"] = [dict(r) for r in rows]
+        try:
+            rows = conn.execute(sql_score, (cutoff_iso,)).fetchall()
+            results["score"] = [dict(r) for r in rows if r["max_score"] is not None]
+        except Exception:
+            results["score"] = []
 
         # 3. 總挖礦時長 (Mining Time) - 近似值：SUM(elapsed_s)
         sql_time = """
@@ -1713,7 +1717,8 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
         """
         try:
             rows = conn.execute(sql_time, (cutoff_iso,)).fetchall()
-            results["time"] = [dict(r) for r in rows if r["total_seconds"] and r["total_seconds"] > 0]
+            # [專家修復] 強制轉型 check
+            results["time"] = [dict(r) for r in rows if r["total_seconds"] is not None and float(r["total_seconds"]) > 0]
         except Exception:
             results["time"] = []
 

@@ -282,7 +282,8 @@ class JobManager:
                 # [專家級最大化顯示] 捕捉排程器內部的致命錯誤並強制輸出至 sys.stderr，保障排程器永不掛死
                 import traceback
                 import sys
-                print(f"\n[SCHEDULER CRITICAL ERROR] 排程器迴圈發生異常: {e}\n{traceback.format_exc()}\n", file=sys.stderr)
+                timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+                print(f"\n[{timestamp}] [SCHEDULER CRITICAL ERROR] 排程器迴圈發生異常: {e}\n{traceback.format_exc()}\n", file=sys.stderr)
                 time.sleep(1.0)
 
     def _run_task(self, task_id: int, bt_module, stop_flag: threading.Event) -> None:
