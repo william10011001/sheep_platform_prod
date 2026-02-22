@@ -514,14 +514,21 @@ def verify_api_token(token: str) -> Optional[dict]:
 def touch_api_token(token_id: int, ip: str = "", user_agent: str = "") -> None:
     conn = _conn()
     try:
-        # [專家級修復] 更新最近活動時間，避免使用者活躍期間 Token 無預警過期
-        conn.execute(
-            "UPDATE api_tokens SET expires_at = ? WHERE id = ?",
-            ((datetime.now(timezone.utc) + timedelta(days=7)).isoformat(), token_id)
-        )
-        conn.commit()
+        row = conn.execute("SELECT created_at, expires_at FROM api_tokens WHERE id = ?", (token_id,)).fetchone()
+        if row:
+            created_dt = datetime.fromisoformat(row["created_at"].replace("Z", "+00:00"))
+            expires_dt = datetime.fromisoformat(row["expires_at"].replace("Z", "+00:00"))
+            original_ttl = (expires_dt - created_dt).total_seconds()
+            
+            new_expires = (datetime.now(timezone.utc) + timedelta(seconds=original_ttl)).isoformat()
+            conn.execute(
+                "UPDATE api_tokens SET expires_at = ? WHERE id = ?",
+                (new_expires, token_id)
+            )
+            conn.commit()
     except Exception as e:
-        print(f"[DB ERROR] touch_api_token 發生異常: {e}")
+        import traceback
+        print(f"[DB ERROR] touch_api_token 執行失敗: {e}\n{traceback.format_exc()}")
     finally:
         conn.close()
 

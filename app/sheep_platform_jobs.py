@@ -279,9 +279,17 @@ class JobManager:
             except Exception as e:
                 import traceback
                 import sys
-                timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
-                print(f"\n[{timestamp}] [SCHEDULER ERROR] 迴圈異常: {e}\n{traceback.format_exc()}\n", file=sys.stderr)
-                time.sleep(1.0)
+                from datetime import datetime, timezone
+                ts_utc = datetime.now(timezone.utc).isoformat()
+                err_msg = f"\n[{ts_utc}] [CRITICAL SCHEDULER ERROR] 排程器主迴圈發生例外狀況:\n{str(e)}\n{traceback.format_exc()}\n"
+                print(err_msg, file=sys.stderr, flush=True)
+                try:
+                    conn = db._conn()
+                    db.write_audit_log(None, "scheduler_crash", {"error": str(e), "trace": traceback.format_exc()[:2000]})
+                    conn.close()
+                except Exception:
+                    pass
+                time.sleep(5.0)
 
     def _run_task(self, task_id: int, bt_module, stop_flag: threading.Event) -> None:
         task_id = int(task_id)

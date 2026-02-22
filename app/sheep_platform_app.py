@@ -15,63 +15,32 @@ import streamlit as st
 import traceback
 import sys
 
-# 系統版本相容性處理：解決 dataframe_selector 遺失問題
-def _get_orig_dataframe():
-    # 嘗試取得 Streamlit 原始的 dataframe 渲染方法，避開遞迴
-    if hasattr(st, "_sheep_orig_dataframe"):
-        return st._sheep_orig_dataframe
-    
-    # 這裡直接從 st 取得原始方法，但要確保我們沒有取得已經被覆蓋過的自己
-    orig = getattr(st, "dataframe")
-    if getattr(orig, "__name__", "") == "_dataframe_compat":
-        # 如果已經被覆蓋，嘗試從類別定義中找回原始方法
-        try:
-            from streamlit.delta_generator import DeltaGenerator
-            return DeltaGenerator.dataframe
-        except Exception:
-            return orig
-    return orig
+# 系統版本相容性處理：建立穩健的 DataFrame 渲染包裝器
+if not hasattr(st, "_original_dataframe_renderer"):
+    st._original_dataframe_renderer = st.dataframe
 
-def _dataframe_compat(data=None, **kwargs):
-    orig = _get_orig_dataframe()
-    
-    # 參數標準化：將舊版 width="stretch" 轉換為 use_container_width
-    if "width" in kwargs:
-        if str(kwargs["width"]) == "stretch":
-            kwargs.pop("width", None)
-            kwargs["use_container_width"] = True
-        else:
-            try:
-                kwargs["width"] = int(kwargs["width"])
-            except:
-                kwargs.pop("width", None)
+def _safe_dataframe(data=None, **kwargs):
+    target_kwargs = kwargs.copy()
+    if "width" in target_kwargs:
+        if str(target_kwargs["width"]).lower() == "stretch":
+            target_kwargs["use_container_width"] = True
+        target_kwargs.pop("width", None)
 
-    # 針對 Streamlit 不同版本的參數相容性處理
-    # 優先嘗試帶有所有參數的呼叫
     try:
-        return orig(data, **kwargs)
+        return st._original_dataframe_renderer(data, **target_kwargs)
     except TypeError:
-        # 若失敗，通常是因為不支援 hide_index 或 use_container_width
-        # 逐步降級嘗試
-        retry_kwargs = kwargs.copy()
-        retry_kwargs.pop("hide_index", None)
+        target_kwargs.pop("hide_index", None)
         try:
-            return orig(data, **retry_kwargs)
+            return st._original_dataframe_renderer(data, **target_kwargs)
         except TypeError:
-            retry_kwargs.pop("use_container_width", None)
+            target_kwargs.pop("use_container_width", None)
             try:
-                return orig(data, **retry_kwargs)
-            except Exception:
-                # 若仍失敗，退回 st.table (最保險的呈現方式)
-                try:
-                    return st.table(data)
-                except:
-                    st.error("數據表格顯示異常")
+                return st._original_dataframe_renderer(data, **target_kwargs)
+            except Exception as e:
+                st.error(f"表格渲染發生例外狀況: {str(e)}")
+                return st.table(data)
 
-# 執行覆蓋，僅在尚未覆蓋時進行
-if getattr(st.dataframe, "__name__", "") != "_dataframe_compat":
-    st._sheep_orig_dataframe = st.dataframe
-    st.dataframe = _dataframe_compat
+st.dataframe = _safe_dataframe
 
 # --------------------------------------------------------
 import backtest_panel2 as bt
@@ -172,23 +141,8 @@ header[data-testid="stHeader"] {{
 
 div[data-testid="collapsedControl"],
 div[data-testid="stSidebarCollapsedControl"] {{
-    display: flex !important;
-    visibility: visible !important;
-    opacity: 1 !important;
     z-index: 999999 !important;
-    background-color: rgba(15, 23, 42, 0.7) !important;
-    border-radius: 8px !important;
-    margin: 8px !important;
-    padding: 4px !important;
-    border: 1px solid rgba(255, 255, 255, 0.1) !important;
-    backdrop-filter: blur(8px) !important;
     pointer-events: auto !important;
-}}
-
-div[data-testid="collapsedControl"]:hover,
-div[data-testid="stSidebarCollapsedControl"]:hover {{
-    background-color: rgba(30, 41, 59, 0.9) !important;
-    border-color: rgba(59, 130, 246, 0.5) !important;
 }}
 
 @media (max-width: 720px) {{
@@ -687,31 +641,13 @@ def _style() -> None:
             box-shadow: none !important;
             border-bottom: none !important;
             z-index: 999990 !important;
+            pointer-events: none !important;
         }
 
         div[data-testid="collapsedControl"],
         div[data-testid="stSidebarCollapsedControl"] {
             z-index: 999999 !important;
-            display: flex !important;
-            visibility: visible !important;
-            opacity: 1 !important;
             pointer-events: auto !important;
-            color: #e2e8f0 !important;
-            background: rgba(15, 23, 42, 0.7) !important;
-            border-radius: 8px !important;
-            margin-top: 8px !important;
-            margin-left: 8px !important;
-            border: 1px solid rgba(255, 255, 255, 0.1) !important;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.4) !important;
-            backdrop-filter: blur(8px) !important;
-            transition: all 0.2s ease !important;
-        }
-        
-        div[data-testid="collapsedControl"]:hover,
-        div[data-testid="stSidebarCollapsedControl"]:hover {
-            background: rgba(30, 41, 59, 0.9) !important;
-            border-color: rgba(59, 130, 246, 0.5) !important;
-            color: #ffffff !important;
         }
 
         html, body, [class*="css"]  {
@@ -3293,48 +3229,60 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
             f"""
 <script>
 (function() {{
-  try {{
-    const w = window.parent || window;
-    const ms = Math.max(1000, Math.min(60000, {interval_ms}));
+  function initAutoRefresh() {{
+    try {{
+      const w = window.parent || window;
+      const ms = Math.max(1000, Math.min(60000, {interval_ms}));
 
-    const ps = w.document.querySelectorAll('button p, button div');
-    let targetBtn = null;
-    ps.forEach(p => {{
-        if (p.textContent && p.textContent.trim() === 'AutoRefreshHiddenBtn') {{
-            targetBtn = p.closest('button');
-            if (targetBtn) {{
-                targetBtn.style.opacity = '0';
-                targetBtn.style.position = 'absolute';
-                targetBtn.style.width = '1px';
-                targetBtn.style.height = '1px';
-                targetBtn.style.pointerEvents = 'none';
-                targetBtn.style.overflow = 'hidden';
-            }}
-        }}
-    }});
-
-    if (w.__sheep_autorefresh_timer) {{
-      clearTimeout(w.__sheep_autorefresh_timer);
-    }}
-
-    w.__sheep_autorefresh_timer = setTimeout(function() {{
-      try {{
-        if (document.hidden) return;
-        
-        const activeEl = w.document.activeElement;
-        if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT')) {{
-            return;
-        }}
-        
-        if (targetBtn && typeof targetBtn.click === 'function') {{
-            targetBtn.click();
-        }}
-      }} catch (e) {{
-        console.warn('AutoRefresh error', e);
+      const ps = w.document.querySelectorAll('button p, button div, button span');
+      let targetBtn = null;
+      for (let i = 0; i < ps.length; i++) {{
+          if (ps[i].textContent && ps[i].textContent.trim() === 'AutoRefreshHiddenBtn') {{
+              targetBtn = ps[i].closest('button');
+              break;
+          }}
       }}
-    }}, ms);
-  }} catch (e) {{
-    console.warn('AutoRefresh init error', e);
+
+      if (targetBtn) {{
+          targetBtn.style.opacity = '0';
+          targetBtn.style.position = 'absolute';
+          targetBtn.style.width = '1px';
+          targetBtn.style.height = '1px';
+          targetBtn.style.pointerEvents = 'none';
+          targetBtn.style.overflow = 'hidden';
+          targetBtn.style.zIndex = '-1';
+      }} else {{
+          setTimeout(initAutoRefresh, 500);
+          return;
+      }}
+
+      if (w.__sheep_autorefresh_timer) {{
+        clearTimeout(w.__sheep_autorefresh_timer);
+      }}
+
+      w.__sheep_autorefresh_timer = setTimeout(function() {{
+        try {{
+          if (document.hidden) return;
+          const activeEl = w.document.activeElement;
+          if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT')) {{
+              return;
+          }}
+          if (targetBtn && typeof targetBtn.click === 'function') {{
+              targetBtn.click();
+          }}
+        }} catch (e) {{
+          console.error('自動刷新執行發生錯誤:', e);
+        }}
+      }}, ms);
+    }} catch (e) {{
+      console.error('自動刷新初始化失敗:', e);
+    }}
+  }}
+  
+  if (document.readyState === 'complete') {{
+      initAutoRefresh();
+  }} else {{
+      window.addEventListener('load', initAutoRefresh);
   }}
 }})();
 </script>
