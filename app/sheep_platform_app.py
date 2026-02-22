@@ -157,11 +157,14 @@ iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
   pointer-events: none !important;
 }}
 
-/* 隱藏原生側邊欄控制鈕，改由自訂模組接管 */
-        div[data-testid="stSidebarCollapsedControl"],
+div[data-testid="stSidebarCollapsedControl"],
         div[data-testid="collapsedControl"],
         button[kind="headerNoPadding"] {{
-            display: none !important;
+            opacity: 0 !important;
+            position: absolute !important;
+            width: 1px !important;
+            height: 1px !important;
+            pointer-events: none !important;
         }}
         
         header[data-testid="stHeader"] {{
@@ -1170,13 +1173,13 @@ def _style() -> None:
         (function() {
             const doc = window.parent && window.parent.document ? window.parent.document : document;
             
-            function checkSidebarState() {
+            function isSidebarOpen() {
                 try {
                     const sidebar = doc.querySelector('section[data-testid="stSidebar"]');
                     if (!sidebar) return false;
                     const transform = window.getComputedStyle(sidebar).getPropertyValue('transform');
                     const left = sidebar.getBoundingClientRect().left;
-                    return (transform !== 'matrix(1, 0, 0, 1, 0, 0)' && left < 0) === false;
+                    return (transform === 'matrix(1, 0, 0, 1, 0, 0)' || left >= 0);
                 } catch (e) {
                     return false;
                 }
@@ -1184,12 +1187,6 @@ def _style() -> None:
 
             function injectMenuButton() {
                 try {
-                    if (checkSidebarState()) {
-                        const existing = doc.getElementById('custom-sys-menu-btn');
-                        if (existing) existing.style.display = 'none';
-                        return;
-                    }
-
                     let btn = doc.getElementById('custom-sys-menu-btn');
                     if (!btn) {
                         btn = doc.createElement('div');
@@ -1201,7 +1198,24 @@ def _style() -> None:
                             e.stopPropagation();
                             
                             const stSidebar = doc.querySelector('section[data-testid="stSidebar"]');
-                            if (stSidebar) {
+                            if (!stSidebar) return;
+                            
+                            const isOpen = isSidebarOpen();
+                            
+                            if (isOpen) {
+                                const closeBtn = doc.querySelector('section[data-testid="stSidebar"] button[kind="headerNoPadding"]');
+                                if (closeBtn) {
+                                    closeBtn.click();
+                                    return;
+                                }
+                                stSidebar.style.setProperty('transform', 'translateX(-100%)', 'important');
+                                stSidebar.style.setProperty('min-width', '0', 'important');
+                            } else {
+                                const openBtn = doc.querySelector('div[data-testid="collapsedControl"] button') || doc.querySelector('div[data-testid="stSidebarCollapsedControl"] button') || doc.querySelector('button[aria-label="Open sidebar"]');
+                                if (openBtn) {
+                                    openBtn.click();
+                                    return;
+                                }
                                 stSidebar.style.setProperty('transform', 'translateX(0)', 'important');
                                 stSidebar.style.setProperty('min-width', '16rem', 'important');
                             }

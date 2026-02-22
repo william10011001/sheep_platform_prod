@@ -787,7 +787,6 @@ GENERIC_SIG_CACHE: Dict[str, List[np.ndarray]] = {}
 
 # --- Ultra-fast JSON dumps (prefer orjson if available) ---
 def _json_default(o):
-    # 讓參數 dict 裡就算混到 numpy 型別也不會炸
     if isinstance(o, (np.integer,)):
         return int(o)
     if isinstance(o, (np.floating,)):
@@ -800,9 +799,14 @@ def _json_default(o):
         import pandas as pd
         if isinstance(o, (pd.Timestamp, pd.Timedelta)):
             return str(o)
+        if isinstance(o, (pd.DataFrame, pd.Series)):
+            return "Pandas_Object_Skipped"
     except Exception:
         pass
-    return str(o)
+    try:
+        return str(o)
+    except Exception:
+        return "Unserializable_Object"
 
 try:
     import orjson as _orjson

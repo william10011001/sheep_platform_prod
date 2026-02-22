@@ -620,15 +620,12 @@ class JobManager:
             import traceback, sys
             err_trace = traceback.format_exc()
             
-            # [專家級最大化顯示] 同時輸出到終端、審計日誌與任務進度 JSON
-            print(f"\n{'!'*60}\n[FATAL TASK ERROR] Task ID: {task_id}\n{err_trace}\n{'!'*60}", file=sys.stderr)
+            print(f"\n{'='*60}\n[TASK ERROR] Task ID: {task_id}\n{err_trace}\n{'='*60}", file=sys.stderr)
             
             try:
-                # 嘗試從 DB 抓取最新任務狀態
                 current_t = db.get_task(task_id)
                 prog = _json_load(current_t.get("progress_json") or "{}") if current_t else {}
                 
-                # 記錄極致詳細的錯誤現場
                 prog["phase"] = "error"
                 prog["last_error"] = f"RuntimeError: {str(e)}"
                 prog["debug_traceback"] = err_trace
@@ -637,14 +634,12 @@ class JobManager:
                 db.update_task_progress(task_id, prog)
                 db.update_task_status(task_id, "error")
                 
-                # 寫入系統審計表，便於 Admin 搜尋
                 db.write_audit_log(
                     user_id=int(current_t["user_id"]) if current_t else None,
                     action="task_execution_failed",
                     payload={"task_id": task_id, "exception": str(e), "trace": err_trace[:2000]}
                 )
                 
-                # [專家級最大化顯示] 解除記憶體鎖定，防止出錯任務永久佔用執行緒配額
                 with self._lock:
                     if task_id in self._threads:
                         self._threads.pop(task_id, None)
