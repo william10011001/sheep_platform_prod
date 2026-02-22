@@ -3444,16 +3444,21 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
     const w = window.parent || window;
     const ms = Math.max(300, Math.min(60000, {interval_ms}));
 
-    // 尋找並隱藏觸發按鈕
+    // [專家級修復] 尋找並隱藏觸發按鈕，絕不能使用 display: none，否則 JS .click() 會被瀏覽器擋下
     const ps = w.document.querySelectorAll('button p');
     let targetBtn = null;
     ps.forEach(p => {{
         if (p.innerText === 'AutoRefreshHiddenBtn') {{
             targetBtn = p.closest('button');
-            if (targetBtn) targetBtn.style.display = 'none';
+            if (targetBtn) {{
+                targetBtn.style.opacity = '0';
+                targetBtn.style.position = 'absolute';
+                targetBtn.style.width = '1px';
+                targetBtn.style.height = '1px';
+                targetBtn.style.pointerEvents = 'none';
+            }}
         }}
     }});
-
     if (w.__sheep_autorefresh_timer) {{
       clearTimeout(w.__sheep_autorefresh_timer);
     }}
@@ -3738,29 +3743,27 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
             is_me = (r.get("username") == user["username"])
             bg_style = 'style="background: rgba(59, 130, 246, 0.15); border: 1px solid rgba(59, 130, 246, 0.4); box-shadow: 0 4px 12px rgba(0,0,0,0.2);"' if is_me else ""
             
-            row_html = f"""
-            <tr class="lb-row" {bg_style}>
-                <td><div class="rank-badge {rank_class}">{rank}</div></td>
-                <td class="lb-cell">
-                    <div style="font-weight:600; font-size:15px; color:#f8fafc; display:flex; align-items:center;">
-                        {name_html}
-                    </div>
-                </td>
-                <td class="lb-cell">
-                    {val_str} <span style="font-size:12px; color:#64748b; font-weight:400; margin-left:4px;">{unit}</span>
-                </td>
-            </tr>
-            """
+            # [專家級修復] 同樣去除行內 HTML 縮排，確保 Markdown 不會介入干擾
+            row_html = (
+                f'<tr class="lb-row" {bg_style}>\n'
+                f'<td><div class="rank-badge {rank_class}">{rank}</div></td>\n'
+                f'<td class="lb-cell"><div style="font-weight:600; font-size:15px; color:#f8fafc; display:flex; align-items:center;">{name_html}</div></td>\n'
+                f'<td class="lb-cell" style="text-align:right;">{val_str} <span style="font-size:12px; color:#64748b; font-weight:400; margin-left:4px;">{unit}</span></td>\n'
+                f'</tr>'
+            )
             html_rows.append(row_html)
 
         # 組合 Table，注意：必須使用 unsafe_allow_html=True
-        full_table = f"""
-        <table class="lb-table" style="width:100%; border-spacing:0 8px; border-collapse:separate;">
-            <tbody>
-            { "".join(html_rows) }
-            </tbody>
-        </table>
-        """
+        # [專家級修復] 徹底移除縮排，避免 Streamlit Markdown 引擎將其誤判為程式碼區塊 (Code Block)
+        full_table = (
+            '<div class="leaderboard-wrapper">\n'
+            '<table class="lb-table" style="width:100%; border-spacing:0 8px; border-collapse:separate;">\n'
+            '<tbody>\n'
+            f'{ "".join(html_rows) }\n'
+            '</tbody>\n'
+            '</table>\n'
+            '</div>'
+        )
         st.markdown(full_table, unsafe_allow_html=True)
 
     t1, t2, t3, t4 = st.tabs(["算力貢獻", "積分收益", "最高分", "肝帝時長"])

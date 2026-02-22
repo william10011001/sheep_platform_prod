@@ -6221,6 +6221,10 @@ def build_cache_for_family(df: pd.DataFrame,
                 else:
                     res = signal_from_family(fam, o_np, h_np, l_np, c_np, v_np, prm)
                     sig = res[0] if isinstance(res, tuple) else res
+                
+                # [專家防護] 限制 OB_FVG 指紋快取數量，避免無限膨脹
+                if len(OB_FVG_cache) > 200:
+                    OB_FVG_cache.clear()
                 OB_FVG_cache[key] = sig
                 
             out.append(sig.astype(np.bool_, copy=False))
@@ -6255,6 +6259,10 @@ def build_cache_for_family(df: pd.DataFrame,
     _log(f"   {fam} 訊號快取完成，寫入全域快取...")
     # 寫入快取
     try:
+        # [專家防護] 限制快取容量，防止多參數掃描導致伺服器 OOM (Out Of Memory) 崩潰
+        if len(GENERIC_SIG_CACHE) > 80:
+            _log("全域訊號快取已滿，進行清理釋放記憶體...")
+            GENERIC_SIG_CACHE.clear()
         GENERIC_SIG_CACHE[cache_key] = out
     except Exception:
         pass # Ignore cache write errors

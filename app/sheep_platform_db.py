@@ -517,72 +517,8 @@ def touch_api_token(token_id: int, ip: str = "", user_agent: str = "") -> None:
 
 
 
-# [專家修復] 移除誤貼的 Streamlit 執行區塊，防止 DB 模組被當作主程式遞迴執行而引發崩潰
-import sqlite3
+# [專家修復] 已移除重複宣告的 _db_path 與 _conn 函式，防止模組載入時發生路徑解析覆蓋衝突。
 from datetime import datetime as _safe_dt, timezone as _safe_tz, timedelta as _safe_td
-
-
-def _db_path() -> str:
-    """
-    Resolve DB path.
-    Priority:
-      1) SHEEP_DB_PATH env
-      2) ./data/sheep.db relative to this file
-    """
-    p = str(os.environ.get("SHEEP_DB_PATH", "") or "").strip()
-    if p:
-        # allow relative path (relative to project root inside container)
-        if not os.path.isabs(p):
-            try:
-                base_dir = os.path.dirname(os.path.abspath(__file__))
-            except Exception:
-                base_dir = os.getcwd()
-            p = os.path.join(base_dir, p)
-        return p
-
-    try:
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-    except Exception:
-        base_dir = os.getcwd()
-    return os.path.join(base_dir, "data", "sheep.db")
-
-
-def _conn() -> sqlite3.Connection:
-    """
-    Return a sqlite3 connection with sane defaults for web apps.
-    - WAL: better concurrency
-    - busy_timeout: reduce 'database is locked'
-    - row_factory: allow dict(row) usage
-    """
-    path = _db_path()
-    # ensure dir exists
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-    except Exception as e:
-        import traceback
-        print(f"[DB ERROR] 無法建立資料庫目錄 {path}, 錯誤詳情: {e}\n{traceback.format_exc()}")
-
-    conn = sqlite3.connect(path, timeout=30.0, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-
-    try:
-        conn.execute("PRAGMA foreign_keys = ON;")
-    except Exception:
-        pass
-    try:
-        conn.execute("PRAGMA journal_mode = WAL;")
-    except Exception:
-        pass
-    try:
-        conn.execute("PRAGMA synchronous = NORMAL;")
-    except Exception:
-        pass
-    try:
-        conn.execute("PRAGMA busy_timeout = 30000;")  # 30s
-    except Exception:
-        pass
-
-    return conn
 
 def ensure_cycle_rollover() -> None:
     conn = _conn()
@@ -1640,9 +1576,9 @@ def update_user_nickname(user_id: int, nickname: str) -> None:
     """
     conn = _conn()
     try:
-        # 嚴格限制：HTML Escape + Strip + Max Length 10
+        # [資安防護] 嚴格限制：必須先截斷長度再進行 HTML Escape，否則切斷實體字元(如 &amp;)會破壞前端版面
         raw = str(nickname or "").strip()
-        safe_nick = html.escape(raw)[:10]
+        safe_nick = html.escape(raw[:10])
         
         conn.execute("UPDATE users SET nickname = ? WHERE id = ?", (safe_nick, int(user_id)))
         conn.commit()
