@@ -651,580 +651,164 @@ def _style() -> None:
         """
         <style>
         :root {
-          --bg: #05070a;
-          --card: rgba(20, 24, 32, 0.6);
-          --card-hover: rgba(28, 34, 46, 0.8);
-          --border: rgba(255, 255, 255, 0.08);
-          --border-hover: rgba(120, 180, 255, 0.3);
-          --text: #e2e8f0;
-          --muted: #8492a6;
-          --accent: #3b82f6;
-          --accent-glow: rgba(59, 130, 246, 0.4);
-          --shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+          /* 核心色票 (High-Tech / Quant Style) */
+          --bg-main: #020408;       /* 極黑底色 */
+          --bg-sidebar: #0B0E14;    /* 側邊欄深藍灰 */
+          --bg-card: rgba(18, 23, 33, 0.65);
+          --bg-hover: rgba(30, 41, 59, 0.6);
+          
+          --text-primary: #F8FAFC;
+          --text-secondary: #94A3B8;
+          --text-accent: #38BDF8;   /* 電光藍 */
+          
+          --border-dim: rgba(255, 255, 255, 0.06);
+          --border-light: rgba(255, 255, 255, 0.12);
+          
+          --accent-blue: #3B82F6;
+          --accent-gold: #D4AF37;
+          
+          --shadow-soft: 0 4px 20px rgba(0, 0, 0, 0.4);
         }
 
+        /* 全域背景重置 */
         .stApp {
-          background: radial-gradient(circle at 15% 0%, rgba(30, 58, 138, 0.15) 0%, transparent 40%),
-                      radial-gradient(circle at 85% 100%, rgba(15, 118, 110, 0.1) 0%, transparent 40%),
-                      var(--bg);
-          color: var(--text);
+          background-color: var(--bg-main);
+          background-image: 
+            radial-gradient(circle at 10% 10%, rgba(56, 189, 248, 0.05) 0%, transparent 40%),
+            radial-gradient(circle at 90% 90%, rgba(212, 175, 55, 0.03) 0%, transparent 40%);
+          color: var(--text-primary);
         }
 
-        html, body, [class*="css"]  {
-          font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
-        }
-
-        html { color-scheme: dark; }
-
-        div[data-testid="stTextInput"] input,
-        div[data-testid="stTextInput"] textarea,
-        div[data-testid="stNumberInput"] input,
-        div[data-testid="stTextArea"] textarea,
-        div[data-testid="stPassword"] input {
-          background: rgba(0, 0, 0, 0.2) !important;
-          border: 1px solid var(--border) !important;
-          border-radius: 8px !important;
-          color: var(--text) !important;
-          transition: all 0.2s ease;
-        }
-        div[data-testid="stTextInput"] input:focus,
-        div[data-testid="stTextArea"] textarea:focus,
-        div[data-testid="stPassword"] input:focus {
-          border-color: var(--accent) !important;
-          box-shadow: 0 0 0 1px var(--accent-glow) !important;
-        }
-        div[data-testid="stTextInput"] input::placeholder,
-        div[data-testid="stTextArea"] textarea::placeholder,
-        div[data-testid="stPassword"] input::placeholder {
-          color: var(--muted) !important;
-        }
-
-        div[data-testid="stSidebar"] {
-          background: rgba(10, 14, 20, 0.95);
-          border-right: 1px solid var(--border);
-          backdrop-filter: blur(10px);
-          -webkit-backdrop-filter: blur(10px);
-        }
-
-        .block-container {
-          padding-top: 2rem;
-          padding-bottom: 4rem;
-          max-width: 1280px;
-        }
-
-        .card {
-          background: var(--card);
-          border: 1px solid var(--border);
-          border-radius: 12px;
-          padding: 20px;
-          box-shadow: var(--shadow);
-          backdrop-filter: blur(8px);
-          transition: all 0.3s ease;
-        }
-        .card:hover {
-          background: var(--card-hover);
-          border-color: var(--border-hover);
-          transform: translateY(-2px);
-        }
-
-        .metric-row {
-          display: flex;
-          gap: 16px;
-          flex-wrap: wrap;
-          margin-bottom: 24px;
-        }
-        .metric {
-          padding: 16px;
-          border-radius: 12px;
-          border: 1px solid var(--border);
-          background: var(--card);
-          min-width: 180px;
-          flex: 1;
-          display: flex;
-          flex-direction: column;
-          gap: 4px;
-          box-shadow: 0 4px 12px rgba(0,0,0,0.2);
-        }
-        .metric .k { color: var(--muted); font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
-        .metric .v { color: #ffffff; font-size: 28px; font-weight: 700; line-height: 1.2; }
-
-        .small-muted { color: var(--muted); font-size: 13px; }
-
-        .auth_title {
-          font-size: 24px;
-          font-weight: 800;
-          letter-spacing: 0.5px;
-          margin: 0 0 16px 0;
-          color: #ffffff;
-        }
-
-        header[data-testid="stHeader"] {
-          background: transparent !important;
-          z-index: 2147483640 !important;
-          pointer-events: auto !important;
-        }
-
-        footer { visibility: hidden !important; }
-        #MainMenu { visibility: hidden !important; }
-
-        div[data-testid="stToolbar"] { display: none !important; }
-        div[data-testid="stStatusWidget"] { display: none !important; }
-        div[data-testid="stDecoration"] { display: none !important; }
-
-        div[data-testid="stAppViewBlockContainer"] {
-            opacity: 1 !important;
-            transition: none !important;
-            filter: none !important;
-            animation: none !important;
+        /* --- 側邊欄修復 (關鍵修正) --- */
+        section[data-testid="stSidebar"] {
+            background-color: var(--bg-sidebar);
+            border-right: 1px solid var(--border-dim);
+            /* 強制設定寬度與層級，避免被自訂 HTML 蓋過 */
+            z-index: 100;
         }
         
-        .main .block-container {
-            padding-top: 90px !important;
-        }
-
-        .stButton > button[kind="primary"], .stDownloadButton > button[kind="primary"] {
-          background: linear-gradient(to right, #2563eb, #3b82f6) !important;
-          border: none !important;
-          color: #ffffff !important;
-          font-weight: 600 !important;
-          letter-spacing: 0.5px !important;
-        }
-        .stButton > button[kind="primary"]:hover, .stDownloadButton > button[kind="primary"]:hover {
-          background: linear-gradient(to right, #1d4ed8, #2563eb) !important;
-          box-shadow: 0 4px 12px var(--accent-glow) !important;
-        }
-
-        .stButton > button[kind="secondary"], .stDownloadButton > button[kind="secondary"] {
-          background: rgba(255, 255, 255, 0.05) !important;
-          border: 1px solid var(--border) !important;
-          color: #e2e8f0 !important;
-        }
-        .stButton > button[kind="secondary"]:hover, .stDownloadButton > button[kind="secondary"]:hover {
-          background: rgba(255, 255, 255, 0.1) !important;
-          border-color: rgba(255, 255, 255, 0.2) !important;
-        }
-
-        .stButton > button, .stDownloadButton > button {
-          width: 100%;
-          border-radius: 8px;
-          padding: 8px 16px;
-          transition: all 0.2s ease;
-        }
-
-        div[data-baseweb="input"] input,
-        div[data-baseweb="textarea"] textarea,
-        div[data-baseweb="select"] > div {
-          background: rgba(0, 0, 0, 0.2) !important;
-          border: 1px solid var(--border) !important;
-          border-radius: 8px !important;
-          color: var(--text) !important;
-        }
-
-        div[data-testid="stSidebar"] label[data-baseweb="radio"] > div > div:first-child { display: none !important; }
-        div[data-testid="stSidebar"] input[type="radio"] { opacity: 0 !important; width: 0 !important; height: 0 !important; }
-        div[data-testid="stSidebar"] label[data-baseweb="radio"] svg { display: none !important; }
-        
-        div[data-testid="stSidebar"] label[data-baseweb="radio"] {
-          width: 100%;
-          border: 1px solid transparent;
-          border-radius: 8px;
-          padding: 10px 16px;
-          margin: 4px 0;
-          background: transparent;
-          color: var(--muted);
-          transition: all 0.2s ease;
-        }
-        div[data-testid="stSidebar"] label[data-baseweb="radio"]:hover {
-          background: rgba(255,255,255,0.03);
-          color: var(--text);
-        }
-        div[data-testid="stSidebar"] label[data-baseweb="radio"]:has(input:checked) {
-          background: rgba(59, 130, 246, 0.1);
-          border-color: rgba(59, 130, 246, 0.3);
-          color: #ffffff;
-          font-weight: 600;
-        }
-
-        .pm_legend { display: flex; gap: 12px; flex-wrap: wrap; margin: 8px 0 16px 0; }
-        .pm_key { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); }
-        
-        .pm_grid { display: grid; gap: 4px; padding: 8px 0; }
-        .pm_cell {
-          width: 12px; height: 12px; border-radius: 2px;
-          border: 1px solid rgba(255,255,255,0.05);
-          background: rgba(255,255,255,0.05);
-          transition: transform 0.2s ease;
-        }
-        .pm_cell:hover { transform: scale(1.2); z-index: 2; border-color: rgba(255,255,255,0.5); }
-        .pm_cell.pm_done { background: #3b82f6; border-color: #2563eb; }
-        .pm_cell.pm_running { background: #10b981; border-color: #059669; }
-        .pm_cell.pm_reserved { background: #f59e0b; border-color: #d97706; }
-        .pm_cell.pm_available { background: rgba(255,255,255,0.1); }
-
-        div[data-testid="stSidebarContent"] { padding-bottom: 220px !important; }
-
-        .help_wrap { display: inline-flex; position: relative; align-items: center; margin-left: 8px; z-index: 50; }
-        .help_icon {
-          width: 20px; height: 20px; border-radius: 50%;
-          display: inline-flex; align-items: center; justify-content: center;
-          font-size: 12px; font-weight: 700;
-          border: 1px solid var(--border);
-          background: rgba(255,255,255,0.05); color: var(--muted);
-          cursor: help; transition: all 0.2s ease;
-        }
-        .help_wrap:hover .help_icon { border-color: var(--accent); background: var(--accent-glow); color: #ffffff; }
-        .help_tip {
-          position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%) translateY(4px);
-          width: max-content; max-width: 320px; padding: 12px 16px;
-          border-radius: 8px; background: #1e293b;
-          border: 1px solid #334155; box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
-          color: #f8fafc; font-size: 13px; line-height: 1.5;
-          opacity: 0; pointer-events: none; transition: all 0.2s ease; backdrop-filter: blur(8px);
-          z-index: 999999;
-          white-space: normal;
-        }
-        .help_wrap:hover .help_tip { opacity: 1; transform: translateX(-50%) translateY(0); }
-        
-        /* [專家修復] 針對左下角 User HUD 內的提示框，強制向右展開，避免被螢幕左側切斷 */
-        .user_hud .help_tip {
-          left: 0;
-          transform: translateY(4px);
-        }
-        .user_hud .help_wrap:hover .help_tip {
-          transform: translateY(0);
-        }
-
-        .sec_h3 { font-size: 24px; font-weight: 800; color: #ffffff; margin: 32px 0 16px 0; display: flex; align-items: center; }
-        .sec_h4 { font-size: 18px; font-weight: 700; color: #e2e8f0; margin: 24px 0 12px 0; display: flex; align-items: center; }
-
-        .panel {
-          border-radius: 12px; border: 1px solid var(--border);
-          background: var(--card); padding: 24px;
-          margin: 16px 0; box-shadow: var(--shadow);
-        }
-
-        .user_hud {
-          position: fixed; left: 16px; bottom: 16px; width: 268px;
-          padding: 16px; border-radius: 12px;
-          border: 1px solid var(--border);
-          background: rgba(15, 23, 42, 0.85);
-          box-shadow: 0 8px 32px rgba(0,0,0,0.5);
-          backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-          z-index: 100000;
-        }
-        .user_hud .hud_name { font-size: 15px; font-weight: 700; color: #ffffff; margin-bottom: 12px; }
-        .user_hud .hud_row { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
-        .user_hud .hud_k { font-size: 13px; color: var(--muted); }
-        .user_hud .hud_v { font-size: 15px; font-weight: 700; color: #ffffff; }
-        .user_hud .hud_div { height: 1px; background: var(--border); margin: 12px 0; }
-        
-        .pill {
-            display: inline-block; padding: 4px 10px; border-radius: 6px;
-            font-size: 12px; font-weight: 600; text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        .pill-ok { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
-        .pill-info { background: rgba(59, 130, 246, 0.15); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.3); }
-        .pill-warn { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
-        .pill-bad { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
-        .pill-neutral { background: rgba(255, 255, 255, 0.1); color: #94a3b8; border: 1px solid rgba(255, 255, 255, 0.2); }
-
-        #custom-sys-menu-btn {
-            position: fixed !important;
-            top: 16px !important;
-            left: 16px !important;
-            width: 44px !important;
-            height: 44px !important;
-            background: linear-gradient(135deg, rgba(30,41,59,0.95) 0%, rgba(15,23,42,0.98) 100%) !important;
-            border-radius: 12px !important;
-            border: 1px solid rgba(255,255,255,0.15) !important;
-            z-index: 2147483647 !important;
-            cursor: pointer !important;
-            display: flex !important;
-            align-items: center !important;
-            justify-content: center !important;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.6) !important;
+        /* 側邊欄內的按鈕樣式重寫 (取代原生 stButton) */
+        [data-testid="stSidebar"] button[kind="secondary"], 
+        [data-testid="stSidebar"] button[kind="primary"] {
+            background: transparent !important;
+            border: 1px solid transparent !important;
+            color: var(--text-secondary) !important;
+            text-align: left !important;
+            justify-content: flex-start !important;
+            padding: 12px 16px !important;
+            margin: 2px 0 !important;
+            border-radius: 8px !important;
+            font-weight: 500 !important;
             transition: all 0.2s ease !important;
-            pointer-events: auto !important;
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
+            width: 100%;
         }
-        #custom-sys-menu-btn:hover {
-            background: linear-gradient(135deg, rgba(59,130,246,0.9) 0%, rgba(37,99,235,0.95) 100%) !important;
-            border-color: rgba(96,165,250,0.5) !important;
-            transform: translateY(-2px);
-            box-shadow: 0 8px 24px rgba(37,99,235,0.4) !important;
+        
+        [data-testid="stSidebar"] button[kind="secondary"]:hover,
+        [data-testid="stSidebar"] button[kind="primary"]:hover {
+            background: rgba(255, 255, 255, 0.04) !important;
+            color: var(--text-primary) !important;
+            transform: translateX(4px);
         }
-        #custom-sys-menu-btn svg {
-            fill: #ffffff !important;
-            width: 22px !important;
-            height: 22px !important;
+        
+        /* 選中狀態 (Primary) 的特殊樣式 */
+        [data-testid="stSidebar"] button[kind="primary"] {
+            background: linear-gradient(90deg, rgba(59, 130, 246, 0.15) 0%, transparent 100%) !important;
+            border-left: 3px solid var(--accent-blue) !important;
+            color: #FFFFFF !important;
+            font-weight: 600 !important;
         }
 
-        /* --- [排行榜美化系統] --- */
-        /* 1. 隱藏 Streamlit 原生 Radio 的醜陋圓點 */
-        .lb-period-selector div[role="radiogroup"] > label > div:first-child {
+        /* 隱藏側邊欄原生裝飾 */
+        [data-testid="stSidebarNav"] {
             display: none !important;
         }
-        .lb-period-selector div[role="radiogroup"] {
-            display: flex;
-            gap: 8px;
-            background: rgba(255, 255, 255, 0.03);
-            padding: 4px;
+        
+        /* User HUD 樣式 (固定於側邊欄底部) */
+        .user_hud {
+            margin-top: 20px;
+            padding: 16px;
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid var(--border-dim);
             border-radius: 12px;
-            border: 1px solid rgba(255, 255, 255, 0.08);
         }
-        .lb-period-selector label {
-            flex: 1;
-            text-align: center;
-            padding: 8px 16px !important;
-            border-radius: 8px !important;
-            border: 1px solid transparent !important;
-            transition: all 0.2s ease !important;
-            margin: 0 !important;
-            background: transparent;
-            color: #94a3b8 !important;
-            font-weight: 600 !important;
+        .user_hud .hud_row {
             display: flex;
-            justify-content: center;
-            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 13px;
         }
-        /* 選中狀態模擬 */
-        .lb-period-selector label[data-baseweb="radio"]:has(input:checked) {
-            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%) !important;
-            color: #ffffff !important;
-            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.4);
-            border: 1px solid rgba(255, 255, 255, 0.1) !important;
-        }
-        .lb-period-selector label:hover {
-            background: rgba(255, 255, 255, 0.05);
-            color: #e2e8f0 !important;
+        .user_hud .hud_k { color: var(--text-secondary); }
+        .user_hud .hud_v { color: var(--text-primary); font-family: monospace; font-weight: 600; }
+
+        /* --- 主內容區塊優化 --- */
+        .block-container {
+            padding-top: 3rem;
+            max-width: 1400px;
         }
 
-        /* 2. 排行榜表格樣式 (取代 DataFrame) */
-        .lb-table {
-            width: 100%;
-            border-collapse: separate;
-            border-spacing: 0 8px;
-            margin-top: 10px;
-        }
-        .lb-row {
-            background: rgba(30, 41, 59, 0.4);
+        /* 卡片 (Card) 樣式 */
+        .panel, .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-dim);
             border-radius: 12px;
-            transition: transform 0.2s ease, background 0.2s ease;
+            padding: 24px;
+            box-shadow: var(--shadow-soft);
+            backdrop-filter: blur(12px);
+            margin-bottom: 20px;
         }
-        .lb-row:hover {
-            transform: scale(1.01);
-            background: rgba(30, 41, 59, 0.7);
-            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
-        }
-        .lb-cell {
-            padding: 16px;
-            color: #e2e8f0;
-            vertical-align: middle;
-            border-top: 1px solid rgba(255,255,255,0.05);
-            border-bottom: 1px solid rgba(255,255,255,0.05);
-        }
-        .lb-row td:first-child {
-            border-left: 1px solid rgba(255,255,255,0.05);
-            border-top-left-radius: 12px;
-            border-bottom-left-radius: 12px;
-            width: 60px;
-            text-align: center;
-        }
-        .lb-row td:last-child {
-            border-right: 1px solid rgba(255,255,255,0.05);
-            border-top-right-radius: 12px;
-            border-bottom-right-radius: 12px;
-            text-align: right;
-            font-family: monospace;
-            font-size: 1.1em;
-            font-weight: 700;
-            color: #60a5fa;
+
+        /* 輸入框 (Input) 統一 */
+        div[data-baseweb="input"] {
+            background-color: rgba(0, 0, 0, 0.2) !important;
+            border-color: var(--border-dim) !important;
+            border-radius: 8px !important;
         }
         
-        /* CSS 獎牌渲染 */
-        .rank-badge {
-            width: 32px;
-            height: 32px;
+        /* Metric 數字優化 */
+        [data-testid="stMetricValue"] {
+            font-family: 'Roboto Mono', monospace;
+            font-weight: 700;
+            color: var(--text-accent);
+        }
+
+        /* Help Icon */
+        .help_icon {
             display: inline-flex;
             align-items: center;
             justify-content: center;
+            width: 18px;
+            height: 18px;
+            border: 1px solid var(--text-secondary);
             border-radius: 50%;
-            font-weight: 800;
-            font-size: 14px;
-            color: #fff;
-            text-shadow: 0 1px 2px rgba(0,0,0,0.5);
-            box-shadow: 0 4px 10px rgba(0,0,0,0.3);
-        }
-        .rank-1 {
-            background: linear-gradient(135deg, #FFD700 0%, #FDB931 100%);
-            border: 2px solid #FFF8D6;
-            box-shadow: 0 0 15px rgba(255, 215, 0, 0.4);
-        }
-        .rank-2 {
-            background: linear-gradient(135deg, #E0E0E0 0%, #BDBDBD 100%);
-            border: 2px solid #FFFFFF;
-        }
-        .rank-3 {
-            background: linear-gradient(135deg, #CD7F32 0%, #A0522D 100%);
-            border: 2px solid #FFDAB9;
-        }
-        .rank-other {
-            background: rgba(255,255,255,0.1);
-            color: #94a3b8;
-            border: 1px solid rgba(255,255,255,0.1);
-            width: 28px; height: 28px; font-size: 12px;
-        }
-
-        /* 3. 暱稱設定卡片美化 (Expert Style) */
-        .nick-card {
-            background: linear-gradient(135deg, rgba(255,215,0,0.08) 0%, rgba(0,0,0,0.2) 100%);
-            border: 1px solid rgba(255,215,0,0.4);
-            border-radius: 16px;
-            padding: 24px;
-            position: relative;
-            overflow: hidden;
-            margin-bottom: 28px;
-            box-shadow: 0 4px 24px rgba(255, 215, 0, 0.05);
-        }
-        .nick-card::before {
-            content: '';
-            position: absolute;
-            top: 0; left: 0; width: 6px; height: 100%;
-            background: linear-gradient(to bottom, #FFD700, #FDB931);
-            box-shadow: 2px 0 15px rgba(255, 215, 0, 0.6);
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-left: 6px;
+            cursor: help;
         }
         
-        /* 純 CSS 皇冠渲染 (去除 Emoji) */
-        .crown-icon {
-            display: inline-block;
-            width: 28px; height: 28px;
-            background: linear-gradient(135deg, #FFD700 0%, #FDB931 100%);
-            /* CSS Crown Polygon */
-            clip-path: polygon(5% 100%, 100% 100%, 95% 0%, 75% 65%, 50% 10%, 25% 65%, 5% 0%);
-            margin-right: 12px;
-            vertical-align: text-bottom;
-            box-shadow: 0 2px 10px rgba(255, 215, 0, 0.8);
+        /* 隱藏無用元素 */
+        #MainMenu, footer, header {
+            visibility: hidden;
         }
+        
+        /* 排行榜表格 (Leaderboard Table) */
+        .lb-table { width: 100%; border-collapse: separate; border-spacing: 0 4px; }
+        .lb-row { background: rgba(255,255,255,0.03); transition: background 0.2s; }
+        .lb-row:hover { background: rgba(255,255,255,0.06); }
+        .lb-cell { padding: 12px; border-bottom: 1px solid var(--border-dim); color: var(--text-primary); }
+        .rank-badge {
+            width: 24px; height: 24px; border-radius: 4px;
+            display: inline-flex; align-items: center; justify-content: center;
+            font-weight: 700; font-size: 12px;
+        }
+        .rank-1 { background: var(--accent-gold); color: #000; }
+        .rank-2 { background: #E2E8F0; color: #000; }
+        .rank-3 { background: #B45309; color: #FFF; }
+        .rank-other { background: rgba(255,255,255,0.1); color: var(--text-secondary); }
 
-        /* 4. 排行榜週期選單美化 (Segmented Control 模擬) */
-        /* 強制隱藏 Streamlit Radio 的圓點與預設樣式 */
-        .lb-period-selector div.stRadio > label { display: none !important; } /* Hide label title */
-        .lb-period-selector div[role="radiogroup"] {
-            display: flex !important;
-            flex-direction: row !important;
-            background: rgba(15, 23, 42, 0.6) !important;
-            padding: 6px !important;
-            border-radius: 12px !important;
-            border: 1px solid rgba(255, 255, 255, 0.1) !important;
-            gap: 8px !important;
-            width: fit-content !important;
-            margin-bottom: 20px !important;
-        }
-        .lb-period-selector div[role="radiogroup"] label {
-            margin-right: 0px !important;
-            padding: 8px 24px !important;
-            border-radius: 8px !important;
-            border: 1px solid transparent !important;
-            background: transparent !important;
-            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
-            color: #94a3b8 !important;
-            font-weight: 600 !important;
-            font-size: 14px !important;
-            cursor: pointer !important;
-            display: flex !important;
-            align-items: center !important;
-            justify-content: center !important;
-            min-width: 100px !important;
-        }
-        /* 選中狀態的高亮 */
-        .lb-period-selector div[role="radiogroup"] label:has(input:checked) {
-            background: #3b82f6 !important;
-            color: #ffffff !important;
-            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4) !important;
-            border: 1px solid rgba(255, 255, 255, 0.1) !important;
-            transform: translateY(-1px) !important;
-        }
-        /* Hover 效果 */
-        .lb-period-selector div[role="radiogroup"] label:hover:not(:has(input:checked)) {
-            background: rgba(255, 255, 255, 0.05) !important;
-            color: #e2e8f0 !important;
-        }
-        /* 隱藏原生 input */
-        .lb-period-selector input[type="radio"] {
-            display: none !important;
-        }
-        /* 隱藏 Streamlit 原生 Radio 裝飾 div */
-        .lb-period-selector div[role="radiogroup"] label > div:first-child {
-            display: none !important;
-        }
         </style>
         """,
         unsafe_allow_html=True,
-    )
-
-    st.components.v1.html(
-        """
-        <script>
-        (function() {
-            const doc = window.parent && window.parent.document ? window.parent.document : document;
-            
-            function checkSidebarState() {
-                try {
-                    const sidebar = doc.querySelector('section[data-testid="stSidebar"]');
-                    if (!sidebar) return false;
-                    const transform = window.getComputedStyle(sidebar).getPropertyValue('transform');
-                    const left = sidebar.getBoundingClientRect().left;
-                    return (transform !== 'matrix(1, 0, 0, 1, 0, 0)' && left < 0) === false;
-                } catch (e) {
-                    return false;
-                }
-            }
-
-            function injectMenuButton() {
-                try {
-                    if (checkSidebarState()) {
-                        const existing = doc.getElementById('custom-sys-menu-btn');
-                        if (existing) existing.style.display = 'none';
-                        return;
-                    }
-
-                    let btn = doc.getElementById('custom-sys-menu-btn');
-                    if (!btn) {
-                        btn = doc.createElement('div');
-                        btn.id = 'custom-sys-menu-btn';
-                        btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"></path></svg>';
-                        
-                        btn.addEventListener('click', function(e) {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            
-                            const stSidebar = doc.querySelector('section[data-testid="stSidebar"]');
-                            if (stSidebar) {
-                                stSidebar.style.setProperty('transform', 'translateX(0)', 'important');
-                                stSidebar.style.setProperty('min-width', '16rem', 'important');
-                            }
-                        });
-                        doc.body.appendChild(btn);
-                    }
-                    btn.style.display = 'flex';
-                } catch (err) {}
-            }
-
-            const observer = new MutationObserver(() => { injectMenuButton(); });
-            if (doc.body) {
-                observer.observe(doc.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
-            }
-            setInterval(injectMenuButton, 800);
-            
-            if (doc.defaultView) {
-                doc.defaultView.addEventListener('resize', injectMenuButton);
-            }
-        })();
-        </script>
-        """,
-        height=0,
     )
 
 _LAST_ROLLOVER_CHECK = 0.0
@@ -3562,26 +3146,30 @@ def _render_audit(audit: Dict[str, Any]) -> None:
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 def _page_leaderboard(user: Dict[str, Any]) -> None:
+    # 使用 SVG 替代 Emoji，提升專業度
+    icon_svg = """
+    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="#D4AF37" stroke="#FFF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    """
+    
     st.markdown(
-        """
-        <div style="background: linear-gradient(135deg, rgba(255,215,0,0.1) 0%, rgba(255,140,0,0.05) 100%); 
-                    border: 1px solid rgba(255, 215, 0, 0.3); 
-                    border-radius: 12px; 
-                    padding: 20px 24px; 
+        f"""
+        <div style="background: rgba(212, 175, 55, 0.05); 
+                    border: 1px solid rgba(212, 175, 55, 0.2); 
+                    border-radius: 8px; 
+                    padding: 20px; 
                     margin-bottom: 24px;
-                    box-shadow: 0 8px 32px rgba(255, 215, 0, 0.05);
-                    display: flex; justify-content: space-between; align-items: center;">
-            <div style="display: flex; align-items: center; gap: 16px;">
-                <div style="width: 48px; height: 48px; background: linear-gradient(135deg, #FFD700 0%, #FF8C00 100%); border-radius: 12px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 16px rgba(255, 215, 0, 0.4);">
-                    <span style="font-size: 24px;">🏆</span>
+                    display: flex; align-items: center; gap: 16px;">
+            <div style="width: 48px; height: 48px; background: rgba(0,0,0,0.3); border-radius: 8px; display: flex; align-items: center; justify-content: center; border: 1px solid rgba(255,255,255,0.1);">
+                {icon_svg}
+            </div>
+            <div>
+                <div style="display: flex; align-items: center;">
+                    <h3 style="margin: 0; font-size: 20px; font-weight: 700; color: #F8FAFC;">英雄榜</h3>
+                    {_help_icon_html("展示平台數據統計與排名，包括算力貢獻、積分收益、單次最高分與累積時長。")}
                 </div>
-                <div>
-                    <div style="display: flex; align-items: center;">
-                        <h2 style="margin: 0; padding: 0; font-size: 28px; font-weight: 900; background: linear-gradient(135deg, #FFD700 0%, #FFFFFF 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 1px;">英雄榜</h2>
-                        """ + _help_icon_html("此區塊展示全平台數據統計與排名。分為算力貢獻、積分收益、單次最高分與累積掛機時長。排名前列者將獲得專屬自訂稱號與相關權限。") + """
-                    </div>
-                    <div style="font-size: 13px; color: #94a3b8; margin-top: 4px;">展示頂尖貢獻者與幸運兒。數據每分鐘更新一次。</div>
-                </div>
+                <div style="font-size: 13px; color: #94A3B8; margin-top: 4px;">數據每分鐘更新一次。</div>
             </div>
         </div>
         """, unsafe_allow_html=True
