@@ -118,11 +118,10 @@ def _render_brand_header(animate: bool, dim: bool = False) -> None:
     st.markdown(
         f"""
 <style>
-iframe[data-sheep-brand="1"],
-iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
+iframe[data-sheep-brand="1"] {{
   position: fixed !important;
-  top: 4px !important;
-  left: 70px !important;
+  left: 72px !important;
+  top: 6px !important;
   width: 280px !important;
   height: 80px !important;
   border: 0 !important;
@@ -139,6 +138,9 @@ header[data-testid="stHeader"] {{
     z-index: 999998 !important;
 }}
 
+/* Sidebar toggle controls: support both new and legacy Streamlit selectors */
+button[data-testid="stExpandSidebarButton"],
+button[data-testid="stSidebarCollapseButton"],
 div[data-testid="collapsedControl"],
 div[data-testid="stSidebarCollapsedControl"] {{
     position: fixed !important;
@@ -149,6 +151,19 @@ div[data-testid="stSidebarCollapsedControl"] {{
     display: block !important;
     opacity: 1 !important;
     visibility: visible !important;
+    transform: none !important;
+}}
+
+button[data-testid="stExpandSidebarButton"],
+button[data-testid="stSidebarCollapseButton"] {{
+    background: rgba(10, 14, 20, 0.70) !important;
+    border: 1px solid rgba(255, 255, 255, 0.10) !important;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55) !important;
+    border-radius: 10px !important;
+}}
+button[data-testid="stExpandSidebarButton"]:hover,
+button[data-testid="stSidebarCollapseButton"]:hover {{
+    border-color: rgba(59, 130, 246, 0.55) !important;
 }}
 
 @media (max-width: 720px) {{
