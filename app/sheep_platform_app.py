@@ -4634,6 +4634,115 @@ def _render_user_hud(user: Dict[str, Any]) -> None:
     st.markdown(hud_html, unsafe_allow_html=True)
 
 
+def _nav_pages_for_role(role: str) -> List[str]:
+    base = ["新手教學", "控制台", "排行榜", "任務", "提交", "結算"]
+    if str(role or "").strip().lower() == "admin":
+        return base + ["管理"]
+    return base
+
+
+def _sync_nav_state(pages: List[str]) -> None:
+    # URL query param -> session_state
+    try:
+        q_page = str(st.query_params.get("page", "") or "").strip()
+        if q_page in pages:
+            st.session_state["nav_page"] = q_page
+    except Exception:
+        pass
+
+    # Pending navigation requests (e.g., from in-page buttons)
+    if "nav_page_pending" in st.session_state:
+        try:
+            pending = str(st.session_state.pop("nav_page_pending") or "").strip()
+        except Exception:
+            pending = ""
+        if pending and pending in pages:
+            st.session_state["nav_page"] = pending
+            try:
+                st.query_params["page"] = pending
+            except Exception:
+                pass
+
+    if "nav_page" not in st.session_state or st.session_state["nav_page"] not in pages:
+        st.session_state["nav_page"] = pages[0]
+        try:
+            st.query_params["page"] = pages[0]
+        except Exception:
+            pass
+
+
+def _set_nav_page(target: str) -> None:
+    st.session_state["nav_page"] = target
+    try:
+        st.query_params["page"] = target
+    except Exception:
+        pass
+    st.rerun()
+
+
+def _sidebar_layout_v2(user: Dict[str, Any], role: str) -> str:
+    pages = _nav_pages_for_role(role)
+    _sync_nav_state(pages)
+
+    current_page = str(st.session_state.get("nav_page") or pages[0])
+
+    # Centralized sidebar styling to avoid scattered CSS collisions
+    st.markdown(
+        """<style>
+        section[data-testid="stSidebar"] {
+            border-right: 1px solid rgba(255,255,255,0.06);
+        }
+        section[data-testid="stSidebar"] .stButton > button {
+            border-radius: 10px !important;
+            min-height: 40px !important;
+        }
+        section[data-testid="stSidebar"] .stButton > button[kind="secondary"] {
+            border: 1px solid rgba(255,255,255,0.08) !important;
+            background: rgba(10,14,20,0.35) !important;
+        }
+        section[data-testid="stSidebar"] .stButton > button[kind="primary"] {
+            border: 1px solid rgba(59,130,246,0.45) !important;
+            background: rgba(59,130,246,0.20) !important;
+        }
+        .sidebar_meta {
+            margin-top: -6px;
+            margin-bottom: 10px;
+            opacity: 0.80;
+            font-size: 12px;
+        }
+        .sidebar_divider {
+            height: 1px;
+            background: rgba(255,255,255,0.08);
+            margin: 10px 0;
+        }
+        </style>""",
+        unsafe_allow_html=True,
+    )
+
+    with st.sidebar:
+        st.markdown(f"### {APP_TITLE}")
+        st.markdown(
+            f'<div class="sidebar_meta">{html.escape(str(user.get("username") or ""))} · {html.escape(str(role or ""))}</div>',
+            unsafe_allow_html=True,
+        )
+
+        # Navigation buttons (stable keys; no default radio indicator)
+        for p in pages:
+            is_active = (p == current_page)
+            btn_type = "primary" if is_active else "secondary"
+            if st.button(p, key=f"nav_v2_{p}", type=btn_type, use_container_width=True):
+                _set_nav_page(p)
+
+        st.markdown('<div class="sidebar_divider"></div>', unsafe_allow_html=True)
+
+        if st.button("登出", key="logout_btn_v2", type="secondary", use_container_width=True):
+            _logout()
+            st.rerun()
+
+        _render_user_hud(user)
+
+    return str(st.session_state.get("nav_page") or pages[0])
+
 
 def main() -> None:
     st.set_page_config(page_title=APP_TITLE, layout="wide", initial_sidebar_state="expanded")
@@ -4661,63 +4770,7 @@ def main() -> None:
 
     role = str(user.get("role") or "user")
 
-    # [新增] 排行榜頁面入口
-    pages = ["新手教學", "控制台", "排行榜", "任務", "提交", "結算"] + (["管理"] if role == "admin" else [])
-
-    # [專家級修復] 利用 URL 查詢參數持久化當前頁面狀態，徹底解決頁面自動重整(location.reload)導致的閃退回首頁問題
-    try:
-        q_page = st.query_params.get("page", "")
-        if q_page in pages:
-            st.session_state["nav_page"] = q_page
-    except Exception:
-        pass
-
-    if "nav_page_pending" in st.session_state:
-        try:
-            _pending = str(st.session_state.pop("nav_page_pending") or "").strip()
-        except Exception:
-            _pending = ""
-        if _pending and _pending in pages:
-            st.session_state["nav_page"] = _pending
-            try:
-                st.query_params["page"] = _pending
-            except Exception:
-                pass
-
-    if "nav_page" not in st.session_state or st.session_state["nav_page"] not in pages:
-        st.session_state["nav_page"] = pages[0]
-        try:
-            st.query_params["page"] = pages[0]
-        except Exception:
-            pass
-
-    with st.sidebar:
-        st.markdown(f"### {APP_TITLE}")
-        st.markdown(f'<div class="small-muted">{user["username"]} · {role}</div>', unsafe_allow_html=True)
-
-        # Navigation (custom buttons instead of st.radio) to avoid default red dot indicator
-        current_page = str(st.session_state.get("nav_page") or pages[0])
-
-        for p in pages:
-            is_active = (p == current_page)
-            btn_type = "primary" if is_active else "secondary"
-            if st.button(p, key=f"nav_btn_{p}", type=btn_type, use_container_width=True):
-                st.session_state["nav_page"] = p
-                try:
-                    st.query_params["page"] = p
-                except Exception:
-                    pass
-                st.rerun()
-
-        st.markdown('<div style="height: 10px"></div>', unsafe_allow_html=True)
-
-        if st.button("登出", key="logout_btn", type="secondary", use_container_width=True):
-            _logout()
-            st.rerun()
-
-        _render_user_hud(user)
-
-    page = str(st.session_state.get("nav_page") or pages[0])
+    page = _sidebar_layout_v2(user=user, role=role)
 
     import traceback
     try:
