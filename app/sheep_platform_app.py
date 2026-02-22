@@ -788,6 +788,17 @@ def _style() -> None:
         div[data-testid="stStatusWidget"] { display: none !important; }
         div[data-testid="stDecoration"] { display: none !important; }
 
+        /* [專家級核心修復] 終極滅絕 Streamlit 自動刷新時的閃爍與變暗效果 */
+        div[data-testid="stAppViewBlockContainer"] {
+            opacity: 1 !important;
+            transition: none !important;
+            filter: none !important;
+            animation: none !important;
+        }
+        .stApp * {
+            transition-duration: 0s !important;
+        }
+
         /* 3. 修正主內容區塊的 Padding，防止內容被固定的 Brand Header 遮擋 */
         .main .block-container {
             padding-top: 100px !important;
@@ -1095,18 +1106,18 @@ def _init_once() -> None:
     try:
         uname_norm = normalize_username(admin_username)
         row = db.get_user_by_username(uname_norm)
-    except Exception:
+    except Exception:   
         row = None
 
     try:
         if row:
             conn = db._conn()
             try:
-                pw_hash = hash_password(admin_password)
-                pw_hash_str = pw_hash.decode('utf-8') if isinstance(pw_hash, bytes) else str(pw_hash)
+                # [專家級修復] 若管理員帳號已存在，僅確保其權限為 admin 且未被停用，絕對不覆蓋其密碼
+                # 避免管理員自行修改密碼後，伺服器重啟又被洗掉的嚴重資安 Bug
                 conn.execute(
-                    "UPDATE users SET password_hash = ?, role = 'admin', disabled = 0 WHERE id = ?",
-                    (pw_hash_str, int(row["id"])),
+                    "UPDATE users SET role = 'admin', disabled = 0 WHERE id = ?",
+                    (int(row["id"]),),
                 )
                 conn.commit()
             finally:

@@ -372,12 +372,19 @@ class JobManager:
                     progress["sync"] = sync
 
                 progress["updated_at"] = db.utc_now_iso()
-                db.update_task_progress(task_id, progress)
+                # [專家級容錯防護] K線同步回呼極為頻繁，若遇 SQLite 鎖死 (database is locked) 絕不能讓主執行緒崩潰
+                try:
+                    db.update_task_progress(task_id, progress)
+                except Exception as db_err:
+                    print(f"[WARN] K線同步進度寫入 DB 失敗 (可忽略): {db_err}")
 
             # [專家級修正] 強制寫入狀態，確保 K 線下載期間前端不會停留在 "queued" 假死
             progress["phase"] = "sync_data"
             progress["phase_msg"] = f"準備向交易所拉取 {pool['symbol']} ({pool['timeframe_min']}m) 歷史 K 線資料..."
-            db.update_task_progress(task_id, progress)
+            try:
+                db.update_task_progress(task_id, progress)
+            except Exception as e:
+                print(f"[WARN] 初始化 K 線狀態寫入 DB 失敗: {e}")
 
             csv_main, _ = bt_module.ensure_bitmart_data(
                 symbol=str(pool["symbol"]),

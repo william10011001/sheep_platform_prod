@@ -1395,7 +1395,12 @@ def get_task(task_id: int) -> Optional[dict]:
 def update_task_progress(task_id: int, progress: dict) -> None:
     conn = _conn()
     try:
-        conn.execute("UPDATE mining_tasks SET progress_json = ?, updated_at = ? WHERE id = ?", (json.dumps(progress, ensure_ascii=False), _now_iso(), task_id))
+        # [專家級修復] 更新進度時必須同時更新 last_heartbeat
+        # 否則伺服器端執行的任務會因為 last_heartbeat 停滯，而被 clean_zombie_tasks 誤殺！
+        conn.execute(
+            "UPDATE mining_tasks SET progress_json = ?, updated_at = ?, last_heartbeat = ? WHERE id = ?", 
+            (json.dumps(progress, ensure_ascii=False), _now_iso(), _now_iso(), task_id)
+        )
         conn.commit()
     finally:
         conn.close()
@@ -1403,7 +1408,11 @@ def update_task_progress(task_id: int, progress: dict) -> None:
 def update_task_status(task_id: int, status: str, finished: bool = False) -> None:
     conn = _conn()
     try:
-        conn.execute("UPDATE mining_tasks SET status = ?, updated_at = ? WHERE id = ?", (status, _now_iso(), task_id))
+        # [專家級修復] 狀態變更時亦同步更新 heartbeat，防範殭屍誤判
+        conn.execute(
+            "UPDATE mining_tasks SET status = ?, updated_at = ?, last_heartbeat = ? WHERE id = ?", 
+            (status, _now_iso(), _now_iso(), task_id)
+        )
         conn.commit()
     finally:
         conn.close()
