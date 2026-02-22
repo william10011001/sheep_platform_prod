@@ -15,7 +15,7 @@ import streamlit as st
 import traceback
 import sys
 
-# --- 專家級版本相容修復：解決 dataframe_selector 遺失問題 ---
+# 系統版本相容性處理：解決 dataframe_selector 遺失問題
 def _get_orig_dataframe():
     # 嘗試取得 Streamlit 原始的 dataframe 渲染方法，避開遞迴
     if hasattr(st, "_sheep_orig_dataframe"):
@@ -94,9 +94,9 @@ _BRAND_WEBM_1 = os.environ.get("SHEEP_BRAND_WEBM_1", "static/羊LOGO影片(去�
 
 def _mask_username(username: str, nickname: str = None) -> str:
     """
-    [Expert Privacy] 用戶名遮罩邏輯 V3：
+    用戶名隱私遮罩邏輯：
     1. 若有設定 nickname，直接顯示。
-    2. 無 nickname 時，根據 username 長度進行智慧遮罩，保護隱私。
+    2. 無 nickname 時，根據 username 長度進行遮罩。
     """
     if nickname and str(nickname).strip():
         return str(nickname).strip()
@@ -146,10 +146,10 @@ def _render_brand_header(animate: bool, dim: bool = False) -> None:
     v1 = _read_file_b64(_BRAND_WEBM_1)
     dim_css = ""
 
-    # [UI Critical Fix] 修復側邊欄按鈕消失與 Header 遮擋問題
-    # 1. iframe[data-sheep-brand="1"]: 品牌 Logo，置於左上，但在手機版需調整位置。
-    # 2. header[data-testid="stHeader"]: 設定背景透明並允許點擊穿透 (pointer-events: none)，但其子元素 (如按鈕) 需恢復點擊。
-    # 3. div[data-testid="stSidebarCollapsedControl"]: 強制提升層級至最高，確保漢堡選單可見且可點。
+    # 修復側邊欄按鈕與頂部導覽列遮擋問題
+    # 1. iframe[data-sheep-brand="1"]: 品牌 Logo 定位。
+    # 2. header[data-testid="stHeader"]: 設定背景透明並允許點擊穿透。
+    # 3. div[data-testid="stSidebarCollapsedControl"]: 強制提升層級確保選單可見。
     st.markdown(
         f"""
 <style>
@@ -180,7 +180,7 @@ header[data-testid="stHeader"] > div {{
     pointer-events: auto !important;
 }}
 
-/* [Critical] 強制顯示並提升側邊欄展開按鈕層級 */
+/* 強制顯示並提升側邊欄展開按鈕層級 */
 section[data-testid="stSidebar"] > div:first-child {{
     z-index: 999999 !important;
 }}
@@ -693,17 +693,21 @@ def _style() -> None:
           color: var(--text);
         }
 
-        /* 強制顯示側邊欄按鈕並置於最上層 */
-        [data-testid="stSidebarCollapsedControl"] {
+        /* 強制顯示側邊欄按鈕並置於最上層，確保各版本 Streamlit 皆可操作 */
+        div[data-testid="stSidebarCollapsedControl"],
+        div[data-testid="collapsedControl"] {
             z-index: 999999 !important;
-            display: block !important;
+            display: flex !important;
             visibility: visible !important;
+            opacity: 1 !important;
             pointer-events: auto !important;
             color: var(--text) !important;
-            background: rgba(10, 14, 23, 0.6);
-            border-radius: 4px;
-            margin-top: 4px;
-            margin-left: 4px;
+            background: rgba(10, 14, 23, 0.8) !important;
+            border-radius: 6px !important;
+            margin-top: 4px !important;
+            margin-left: 4px !important;
+            padding: 4px !important;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.5) !important;
         }
         
         /* 針對 Streamlit 新版 Header 結構的額外修復 */
@@ -1090,7 +1094,7 @@ def _style() -> None:
             width: 28px; height: 28px; font-size: 12px;
         }
 
-        /* 3. 暱稱設定卡片美化 (Expert Style) */
+        /* 3. 暱稱設定卡片樣式 */
         .nick-card {
             background: linear-gradient(135deg, rgba(255,215,0,0.08) 0%, rgba(0,0,0,0.2) 100%);
             border: 1px solid rgba(255,215,0,0.4);
@@ -1177,79 +1181,7 @@ def _style() -> None:
         unsafe_allow_html=True,
     )
 
-    st.components.v1.html(
-        """
-        <script>
-        (function() {
-            const doc = window.parent && window.parent.document ? window.parent.document : document;
-            
-            function isSidebarOpen() {
-                try {
-                    const sidebar = doc.querySelector('section[data-testid="stSidebar"]');
-                    if (!sidebar) return false;
-                    const transform = window.getComputedStyle(sidebar).getPropertyValue('transform');
-                    const left = sidebar.getBoundingClientRect().left;
-                    return (transform === 'matrix(1, 0, 0, 1, 0, 0)' || left >= 0);
-                } catch (e) {
-                    return false;
-                }
-            }
-
-            function injectMenuButton() {
-                try {
-                    let btn = doc.getElementById('custom-sys-menu-btn');
-                    if (!btn) {
-                        btn = doc.createElement('div');
-                        btn.id = 'custom-sys-menu-btn';
-                        btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"></path></svg>';
-                        
-                        btn.addEventListener('click', function(e) {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            
-                            const stSidebar = doc.querySelector('section[data-testid="stSidebar"]');
-                            if (!stSidebar) return;
-                            
-                            const isOpen = isSidebarOpen();
-                            
-                            if (isOpen) {
-                                const closeBtn = doc.querySelector('section[data-testid="stSidebar"] button[kind="headerNoPadding"]');
-                                if (closeBtn) {
-                                    closeBtn.click();
-                                    return;
-                                }
-                                stSidebar.style.setProperty('transform', 'translateX(-100%)', 'important');
-                                stSidebar.style.setProperty('min-width', '0', 'important');
-                            } else {
-                                const openBtn = doc.querySelector('div[data-testid="collapsedControl"] button') || doc.querySelector('div[data-testid="stSidebarCollapsedControl"] button') || doc.querySelector('button[aria-label="Open sidebar"]');
-                                if (openBtn) {
-                                    openBtn.click();
-                                    return;
-                                }
-                                stSidebar.style.setProperty('transform', 'translateX(0)', 'important');
-                                stSidebar.style.setProperty('min-width', '16rem', 'important');
-                            }
-                        });
-                        doc.body.appendChild(btn);
-                    }
-                    btn.style.display = 'flex';
-                } catch (err) {}
-            }
-
-            const observer = new MutationObserver(() => { injectMenuButton(); });
-            if (doc.body) {
-                observer.observe(doc.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
-            }
-            setInterval(injectMenuButton, 800);
-            
-            if (doc.defaultView) {
-                doc.defaultView.addEventListener('resize', injectMenuButton);
-            }
-        })();
-        </script>
-        """,
-        height=0,
-    )
+    # 移除舊版自訂按鈕腳本，完全依賴原生的側邊欄控制元件與上方的 CSS 權重覆蓋。
 
 _LAST_ROLLOVER_CHECK = 0.0
 
@@ -1278,8 +1210,7 @@ def _init_once() -> None:
         if row:
             conn = db._conn()
             try:
-                # [專家級修復] 若管理員帳號已存在，僅確保其權限為 admin 且未被停用，絕對不覆蓋其密碼
-                # 避免管理員自行修改密碼後，伺服器重啟又被洗掉的嚴重資安 Bug
+                # 若管理員帳號已存在，確保權限狀態正確，不覆蓋現有密碼
                 conn.execute(
                     "UPDATE users SET role = 'admin', disabled = 0 WHERE id = ?",
                     (int(row["id"]),),
