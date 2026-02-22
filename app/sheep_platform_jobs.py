@@ -80,15 +80,14 @@ class JobManager:
         self._threads: Dict[int, threading.Thread] = {}
         self._stop_flags: Dict[int, threading.Event] = {}
 
-        # [專家級防護] 伺服器重啟時，將先前遺留(已斷線)但狀態卡在 running 的殭屍任務自動重置回 assigned
         try:
             conn = db._conn()
             conn.execute("UPDATE mining_tasks SET status = 'assigned' WHERE status = 'running'")
             conn.commit()
             conn.close()
-            print("[SYSTEM] 已重置所有遺留的殭屍任務狀態為 'assigned'")
+            print("[SYSTEM] 系統啟動，已重置中止的任務狀態。")
         except Exception as e:
-            print(f"[SYSTEM ERROR] 無法重置殭屍任務: {e}")
+            print(f"[SYSTEM ERROR] 任務狀態重置失敗: {e}")
 
         self._queue_by_user: Dict[int, Deque[Tuple[int, Any]]] = {}
         self._queued_set_by_user: Dict[int, Set[int]] = {}
@@ -279,11 +278,10 @@ class JobManager:
 
                 time.sleep(0.05 if started_any else 0.5)
             except Exception as e:
-                # [專家級最大化顯示] 捕捉排程器內部的致命錯誤並強制輸出至 sys.stderr，保障排程器永不掛死
                 import traceback
                 import sys
                 timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
-                print(f"\n[{timestamp}] [SCHEDULER CRITICAL ERROR] 排程器迴圈發生異常: {e}\n{traceback.format_exc()}\n", file=sys.stderr)
+                print(f"\n[{timestamp}] [SCHEDULER ERROR] 迴圈異常: {e}\n{traceback.format_exc()}\n", file=sys.stderr)
                 time.sleep(1.0)
 
     def _run_task(self, task_id: int, bt_module, stop_flag: threading.Event) -> None:

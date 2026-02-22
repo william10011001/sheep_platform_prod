@@ -157,49 +157,22 @@ iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
   pointer-events: none !important;
 }}
 
-/* [專家級終極修復] 徹底解決左側選單按鈕消失或無法點擊的問題 */
+/* 隱藏原生側邊欄控制鈕，改由自訂模組接管 */
         div[data-testid="stSidebarCollapsedControl"],
         div[data-testid="collapsedControl"],
-        button[kind="headerNoPadding"] {{
-            position: fixed !important;
-            left: 0px !important;
-            top: 0px !important;
-            z-index: 2147483647 !important;
-            padding: 12px 16px !important;
-            background: rgba(30, 41, 59, 0.95) !important;
-            border-bottom-right-radius: 12px !important;
-            border-right: 1px solid rgba(255,255,255,0.15) !important;
-            border-bottom: 1px solid rgba(255,255,255,0.15) !important;
-            box-shadow: 4px 4px 16px rgba(0,0,0,0.8) !important;
-            opacity: 1 !important;
-            visibility: visible !important;
-            display: flex !important;
-            align-items: center !important;
-            justify-content: center !important;
-            transition: all 0.2s ease !important;
-            cursor: pointer !important;
-            pointer-events: auto !important;
-        }}
-        div[data-testid="stSidebarCollapsedControl"]:hover,
-        div[data-testid="collapsedControl"]:hover,
-        button[kind="headerNoPadding"]:hover {{
-            background: rgba(59, 130, 246, 0.95) !important;
-            transform: scale(1.05) !important;
-            transform-origin: top left !important;
-        }}
-        div[data-testid="stSidebarCollapsedControl"] svg,
-        div[data-testid="collapsedControl"] svg,
-        button[kind="headerNoPadding"] svg {{
-            fill: #ffffff !important;
-            width: 28px !important;
-            height: 28px !important;
-        }}
-        /* 確保 Streamlit 頂部導覽列不遮擋此按鈕 */
-        header[data-testid="stHeader"] {{
+        button[kind="headerNoPadding"] {
+            display: none !important;
+        }
+        
+        header[data-testid="stHeader"] {
             background: transparent !important;
-            z-index: 2147483640 !important;
+            z-index: 99999 !important;
+            pointer-events: none !important;
+        }
+        
+        header[data-testid="stHeader"] * {
             pointer-events: auto !important;
-        }}
+        }
 
 @media (max-width: 720px) {{
   iframe[data-sheep-brand="1"],
@@ -791,46 +764,22 @@ def _style() -> None:
           pointer-events: auto !important;
         }
 
-        /* 原生側邊欄控制鈕：固定左上角，避免被任何層蓋住或被 overflow 裁切 */
-        div[data-testid="stSidebarCollapsedControl"],
-        div[data-testid="collapsedControl"],
-        button[aria-label="Open sidebar"],
-        button[kind="headerNoPadding"] {
-          position: fixed !important;
-          left: 8px !important;
-          top: 8px !important;
-          z-index: 2147483647 !important;
-          opacity: 1 !important;
-          visibility: visible !important;
-          pointer-events: auto !important;
-        }
         footer { visibility: hidden !important; }
         #MainMenu { visibility: hidden !important; }
 
-        /* [專家級修復] 徹底隱藏 Toolbar 避免任何層級遮擋側邊欄按鈕 */
         div[data-testid="stToolbar"] { display: none !important; }
         div[data-testid="stStatusWidget"] { display: none !important; }
         div[data-testid="stDecoration"] { display: none !important; }
 
-        /* [專家級核心修復] 終極滅絕 Streamlit 自動刷新時的閃爍與變暗效果 */
         div[data-testid="stAppViewBlockContainer"] {
             opacity: 1 !important;
             transition: none !important;
             filter: none !important;
             animation: none !important;
         }
-        .stApp * {
-            transition-duration: 0s !important;
-        }
-
-        /* 3. 修正主內容區塊的 Padding，防止內容被固定的 Brand Header 遮擋 */
+        
         .main .block-container {
-            padding-top: 100px !important;
-        }
-
-        /* 讓 header 內部的元素（如按鈕）可點擊，但自身不阻擋滑鼠 */
-        header[data-testid="stHeader"] * {
-            pointer-events: auto !important;
+            padding-top: 90px !important;
         }
 
         .stButton > button[kind="primary"], .stDownloadButton > button[kind="primary"] {
@@ -980,34 +929,36 @@ def _style() -> None:
         .pill-bad { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
         .pill-neutral { background: rgba(255, 255, 255, 0.1); color: #94a3b8; border: 1px solid rgba(255, 255, 255, 0.2); }
 
-        /* [專家級防護] 自訂側邊欄呼叫按鈕樣式 (當原生按鈕死掉時的無敵防線) */
-        # [專家級防護] 自訂側邊欄呼叫按鈕樣式 (當原生按鈕死掉時的無敵防線)
-        #custom-sidebar-trigger {
+        #custom-sys-menu-btn {
             position: fixed !important;
-            top: 10px !important;
-            left: 10px !important;
-            width: 48px !important;
-            height: 48px !important;
-            background: rgba(30, 41, 59, 0.98) !important;
-            border-radius: 8px !important;
-            border: 1px solid rgba(255,255,255,0.25) !important;
+            top: 16px !important;
+            left: 16px !important;
+            width: 44px !important;
+            height: 44px !important;
+            background: linear-gradient(135deg, rgba(30,41,59,0.95) 0%, rgba(15,23,42,0.98) 100%) !important;
+            border-radius: 12px !important;
+            border: 1px solid rgba(255,255,255,0.15) !important;
             z-index: 2147483647 !important;
             cursor: pointer !important;
             display: flex !important;
             align-items: center !important;
             justify-content: center !important;
-            box-shadow: 0px 4px 16px rgba(0,0,0,0.8) !important;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.6) !important;
             transition: all 0.2s ease !important;
             pointer-events: auto !important;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
         }
-        #custom-sidebar-trigger:hover {
-            background: rgba(59, 130, 246, 0.95) !important;
-            transform: scale(1.05) !important;
+        #custom-sys-menu-btn:hover {
+            background: linear-gradient(135deg, rgba(59,130,246,0.9) 0%, rgba(37,99,235,0.95) 100%) !important;
+            border-color: rgba(96,165,250,0.5) !important;
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(37,99,235,0.4) !important;
         }
-        #custom-sidebar-trigger svg {
-            fill: #fff !important;
-            width: 28px !important;
-            height: 28px !important;
+        #custom-sys-menu-btn svg {
+            fill: #ffffff !important;
+            width: 22px !important;
+            height: 22px !important;
         }
 
         /* --- [排行榜美化系統] --- */
@@ -1213,99 +1164,65 @@ def _style() -> None:
         unsafe_allow_html=True,
     )
 
-    # [專家級修復] 嚴格分離 JS 注入，避免 Streamlit Markdown 剝離 <script> 導致純文字外洩
     st.components.v1.html(
         """
-      <script>
-(function() {
-  const parentDoc = window.parent && window.parent.document ? window.parent.document : document;
-
-  function qsAny(selectors) {
-    for (const sel of selectors) {
-      try {
-        const el = parentDoc.querySelector(sel);
-        if (el) return el;
-      } catch (err) {
-        console.error("[sidebar_failsafe] Invalid selector:", sel, err);
-      }
-    }
-    return null;
-  }
-
-  function isSidebarExpanded() {
-    try {
-      const sidebar = parentDoc.querySelector('section[data-testid="stSidebar"]');
-      if (!sidebar) return false;
-      const rect = sidebar.getBoundingClientRect();
-      return rect.width > 50 && rect.left >= 0;
-    } catch (err) {
-      return false;
-    }
-  }
-
-  function ensureTrigger() {
-    try {
-      if (isSidebarExpanded()) {
-        const old = parentDoc.getElementById('custom-sidebar-trigger');
-        if (old) old.style.display = 'none';
-        return;
-      }
-
-      let btn = parentDoc.getElementById('custom-sidebar-trigger');
-      if (!btn) {
-        btn = parentDoc.createElement('div');
-        btn.id = 'custom-sidebar-trigger';
-        btn.setAttribute('role', 'button');
-        btn.setAttribute('aria-label', 'Open sidebar (failsafe)');
-        btn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"></path></svg>';
-        btn.style.cssText = 'position:fixed; top:10px; left:10px; width:48px; height:48px; display:flex; align-items:center; justify-content:center; background:rgba(30,41,59,0.98); border:1px solid rgba(255,255,255,0.25); border-radius:8px; box-shadow:0px 4px 16px rgba(0,0,0,0.8); z-index:2147483647; cursor:pointer; pointer-events:auto;';
-
-        btn.addEventListener('click', function(e) {
-          e.preventDefault();
-          e.stopPropagation();
-
-          try {
-            const nativeBtn = qsAny([
-              'button[aria-label="Open sidebar"]',
-              'div[data-testid="stSidebarCollapsedControl"] button',
-              'div[data-testid="collapsedControl"] button',
-              'button[kind="headerNoPadding"]'
-            ]);
-
-            if (nativeBtn) {
-              nativeBtn.dispatchEvent(new MouseEvent('click', { view: window.parent, bubbles: true, cancelable: true }));
-              return;
+        <script>
+        (function() {
+            const doc = window.parent && window.parent.document ? window.parent.document : document;
+            
+            function checkSidebarState() {
+                try {
+                    const sidebar = doc.querySelector('section[data-testid="stSidebar"]');
+                    if (!sidebar) return false;
+                    const transform = window.getComputedStyle(sidebar).getPropertyValue('transform');
+                    const left = sidebar.getBoundingClientRect().left;
+                    return (transform !== 'matrix(1, 0, 0, 1, 0, 0)' && left < 0) === false;
+                } catch (e) {
+                    return false;
+                }
             }
 
-            const sidebar = parentDoc.querySelector('section[data-testid="stSidebar"]');
-            if (sidebar) {
-              sidebar.style.setProperty('display', 'block', 'important');
-              sidebar.style.setProperty('visibility', 'visible', 'important');
-              sidebar.style.setProperty('min-width', '16rem', 'important');
-              sidebar.style.setProperty('transform', 'translateX(0px)', 'important');
-              return;
+            function injectMenuButton() {
+                try {
+                    if (checkSidebarState()) {
+                        const existing = doc.getElementById('custom-sys-menu-btn');
+                        if (existing) existing.style.display = 'none';
+                        return;
+                    }
+
+                    let btn = doc.getElementById('custom-sys-menu-btn');
+                    if (!btn) {
+                        btn = doc.createElement('div');
+                        btn.id = 'custom-sys-menu-btn';
+                        btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"></path></svg>';
+                        
+                        btn.addEventListener('click', function(e) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            
+                            const stSidebar = doc.querySelector('section[data-testid="stSidebar"]');
+                            if (stSidebar) {
+                                stSidebar.style.setProperty('transform', 'translateX(0)', 'important');
+                                stSidebar.style.setProperty('min-width', '16rem', 'important');
+                            }
+                        });
+                        doc.body.appendChild(btn);
+                    }
+                    btn.style.display = 'flex';
+                } catch (err) {}
             }
-          } catch (clickErr) {}
-        }, { capture: true });
 
-        parentDoc.body.appendChild(btn);
-      }
-      btn.style.display = 'flex';
-    } catch (ensureErr) {}
-  }
-
-  let tries = 0;
-  const timer = setInterval(() => {
-    tries += 1;
-    ensureTrigger();
-    if (tries >= 60) clearInterval(timer);
-  }, 500);
-
-  if (parentDoc.defaultView) {
-    parentDoc.defaultView.addEventListener('resize', ensureTrigger);
-  }
-})();
-</script>
+            const observer = new MutationObserver(() => { injectMenuButton(); });
+            if (doc.body) {
+                observer.observe(doc.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
+            }
+            setInterval(injectMenuButton, 800);
+            
+            if (doc.defaultView) {
+                doc.defaultView.addEventListener('resize', injectMenuButton);
+            }
+        })();
+        </script>
         """,
         height=0,
     )
@@ -2729,16 +2646,16 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
             # [專家級修復] 修正引數錯位問題：明確指定 cycle_id 與 min_tasks 避免資料庫關聯崩潰
             db.assign_tasks_for_user(int(user["id"]), cycle_id=int(cycle["id"]), min_tasks=min_tasks)
         except AttributeError as ae:
-            st.error(f" 系統錯誤：核心函數遺失。\n\n詳細錯誤：{ae}")
-            st.info(" 提示：您的 `sheep_platform_db.py` 檔案內容疑似被意外覆蓋，請復原正確的資料庫邏輯。")
-            import traceback
-            st.code(traceback.format_exc(), language="python")
+            st.error(f"系統核心函數遺失。")
+            with st.expander("詳細錯誤資訊", expanded=True):
+                import traceback
+                st.code(traceback.format_exc(), language="python")
             return
         except Exception as general_e:
-            # [最大化錯誤顯示] 防止分配過程的未知錯誤導致控制台白畫面
-            st.error(f" 分配任務時發生未預期的錯誤：{general_e}")
-            import traceback
-            st.code(traceback.format_exc(), language="python")
+            st.error(f"分配任務時發生未預期錯誤。")
+            with st.expander("詳細錯誤資訊", expanded=True):
+                import traceback
+                st.code(traceback.format_exc(), language="python")
             return
 
         tasks = db.list_tasks_for_user(int(user["id"]), cycle_id=int(cycle["id"]))
@@ -2827,11 +2744,10 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
             st.info("尚未建立有效的結算週期，目前無全域進度可顯示。")
 
     except Exception as dashboard_e:
-        # [極端專家修復] 最強保護網：不論是上述哪一行程式碼出錯（包含_render_global_progress），都會被攔截並印出精準 Traceback
-        st.error(f"控制台頁面發生嚴重錯誤，已啟動防護隔離：{str(dashboard_e)}", icon="🚨")
-        st.warning("請將下方完整錯誤訊息截圖提供給開發人員進行緊急除錯：")
-        import traceback
-        st.code(traceback.format_exc(), language="python")
+        st.error("控制台頁面發生異常。")
+        with st.expander("錯誤追蹤紀錄 (Traceback)", expanded=True):
+            import traceback
+            st.code(traceback.format_exc(), language="python")
         return
 
 def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
@@ -3660,7 +3576,10 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
                     <span style="font-size: 24px;">🏆</span>
                 </div>
                 <div>
-                    <h2 style="margin: 0; padding: 0; font-size: 28px; font-weight: 900; background: linear-gradient(135deg, #FFD700 0%, #FFFFFF 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 1px;">英雄榜</h2>
+                    <div style="display: flex; align-items: center;">
+                        <h2 style="margin: 0; padding: 0; font-size: 28px; font-weight: 900; background: linear-gradient(135deg, #FFD700 0%, #FFFFFF 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 1px;">英雄榜</h2>
+                        """ + _help_icon_html("此區塊展示全平台數據統計與排名。分為算力貢獻、積分收益、單次最高分與累積掛機時長。排名前列者將獲得專屬自訂稱號與相關權限。") + """
+                    </div>
                     <div style="font-size: 13px; color: #94a3b8; margin-top: 4px;">展示頂尖貢獻者與幸運兒。數據每分鐘更新一次。</div>
                 </div>
             </div>
@@ -4890,7 +4809,6 @@ def main() -> None:
 
     page = str(st.session_state.get("nav_page") or pages[0])
 
-    # [專家修復] 全域頁面路由錯誤攔截，最大化顯示錯誤細節與 Traceback，便於光速除錯
     import traceback
     try:
         if page == "新手教學":
@@ -4913,19 +4831,18 @@ def main() -> None:
 
         err_id = str(uuid.uuid4())
         ts_utc = datetime.now(timezone.utc).isoformat()
-
         tb = traceback.format_exc()
 
-        # 伺服器端也輸出一份，方便用 err_id 對 log
         try:
-            print(f"[route_error] id={err_id} ts_utc={ts_utc} page={page} user={(user.get('username') if isinstance(user, dict) else '')}", flush=True)
+            print(f"[ERROR] id={err_id} ts_utc={ts_utc} page={page} user={(user.get('username') if isinstance(user, dict) else '')}", flush=True)
             print(tb, flush=True)
         except Exception:
             pass
 
-        st.error(f"頁面「{page}」發生錯誤，已觸發全域保護機制。")
-        st.info(f"錯誤編號：{err_id}（請連同下方錯誤訊息一起提供）")
-        st.code(tb, language="python")
+        st.error(f"頁面渲染發生錯誤。")
+        st.info(f"錯誤參考編號：{err_id}")
+        with st.expander("錯誤追蹤紀錄 (Traceback)", expanded=True):
+            st.code(tb, language="python")
     return
 
 
