@@ -110,7 +110,56 @@ def _read_file_b64(path_str: str) -> str:
     except Exception:
         return ""
 
+def _inject_sidebar_toggle_bridge() -> None:
+    # A fixed floating button that toggles Streamlit sidebar via JS click.
+    # This avoids dependency on Streamlit's own expand button visibility/layout.
+    st.components.v1.html(
+        """
+        <style>
+          .sheep_sidebar_toggle_btn {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            z-index: 2147483647;
+            border-radius: 10px;
+            padding: 10px 12px;
+            font-size: 13px;
+            line-height: 1;
+            border: 1px solid rgba(255,255,255,0.10);
+            background: rgba(10,14,20,0.70);
+            color: rgba(255,255,255,0.92);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.55);
+            cursor: pointer;
+            user-select: none;
+          }
+          .sheep_sidebar_toggle_btn:hover {
+            border-color: rgba(59,130,246,0.55);
+          }
+        </style>
 
+        <button class="sheep_sidebar_toggle_btn" id="sheepSidebarToggleBtn" type="button">選單</button>
+
+        <script>
+          (function () {
+            function toggleSidebar() {
+              // Prefer clicking the correct Streamlit control (even if 0x0 size).
+              var collapseBtn = document.querySelector('button[data-testid="stSidebarCollapseButton"]');
+              var expandBtn = document.querySelector('button[data-testid="stExpandSidebarButton"]');
+
+              // If sidebar is expanded, collapse exists; otherwise expand exists.
+              if (collapseBtn) { collapseBtn.click(); return; }
+              if (expandBtn) { expandBtn.click(); return; }
+            }
+
+            var btn = document.getElementById('sheepSidebarToggleBtn');
+            if (btn) {
+              btn.addEventListener('click', function () { toggleSidebar(); });
+            }
+          })();
+        </script>
+        """,
+        height=0,
+    )
 def _render_brand_header(animate: bool, dim: bool = False) -> None:
     v1 = _read_file_b64(_BRAND_WEBM_1)
     dim_css = ""
@@ -4760,6 +4809,7 @@ def _sidebar_layout_v2(user: Dict[str, Any], role: str) -> str:
 
 
 def main() -> None:
+    _inject_sidebar_toggle_bridge()
     st.set_page_config(page_title=APP_TITLE, layout="wide", initial_sidebar_state="expanded")
     _style()
     _bootstrap()
