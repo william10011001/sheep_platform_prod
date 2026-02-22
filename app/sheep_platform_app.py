@@ -146,74 +146,63 @@ def _render_brand_header(animate: bool, dim: bool = False) -> None:
     v1 = _read_file_b64(_BRAND_WEBM_1)
     dim_css = ""
 
-    # 修復側邊欄按鈕與頂部導覽列遮擋問題
-    # 1. iframe[data-sheep-brand="1"]: 品牌 Logo 定位。
-    # 2. header[data-testid="stHeader"]: 設定背景透明並允許點擊穿透。
-    # 3. div[data-testid="stSidebarCollapsedControl"]: 強制提升層級確保選單可見。
     st.markdown(
         f"""
 <style>
-/* 品牌 Logo 容器定位 */
 iframe[data-sheep-brand="1"],
 iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
   position: fixed !important;
   top: 4px !important;
-  left: 60px !important; /* 避開左側漢堡選單區域 (約 50px) */
+  left: 70px !important;
   width: 280px !important;
   height: 80px !important;
   border: 0 !important;
-  z-index: 999990 !important; /* 低於 Header 控制項但高於內容 */
+  z-index: 999990 !important;
   background: transparent !important;
   pointer-events: none !important;
 }}
 
-/* Streamlit Header 透明化與互動修正 */
 header[data-testid="stHeader"] {{
-    background: transparent !important;
+    background-color: transparent !important;
+    background-image: none !important;
+    border-bottom: none !important;
+    box-shadow: none !important;
     z-index: 999998 !important;
-    pointer-events: none !important; /* 讓點擊穿透 Header 空白處 */
-    height: 70px !important;
 }}
 
-/* 恢復 Header 內控制項 (如選單按鈕、三點選單) 的互動 */
-header[data-testid="stHeader"] > div {{
-    pointer-events: auto !important;
-}}
-
-/* 強制顯示並提升側邊欄展開按鈕層級 */
-section[data-testid="stSidebar"] > div:first-child {{
-    z-index: 999999 !important;
-}}
-div[data-testid="stSidebarCollapsedControl"],
 div[data-testid="collapsedControl"],
-button[kind="header"] {{
-    z-index: 999999 !important;
-    pointer-events: auto !important;
+div[data-testid="stSidebarCollapsedControl"] {{
     display: flex !important;
     visibility: visible !important;
     opacity: 1 !important;
-    color: rgba(255, 255, 255, 0.8) !important;
+    z-index: 999999 !important;
+    background-color: rgba(15, 23, 42, 0.7) !important;
+    border-radius: 8px !important;
+    margin: 8px !important;
+    padding: 4px !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    backdrop-filter: blur(8px) !important;
+    pointer-events: auto !important;
 }}
 
-/* 手機版適配 */
+div[data-testid="collapsedControl"]:hover,
+div[data-testid="stSidebarCollapsedControl"]:hover {{
+    background-color: rgba(30, 41, 59, 0.9) !important;
+    border-color: rgba(59, 130, 246, 0.5) !important;
+}}
+
 @media (max-width: 720px) {{
   iframe[data-sheep-brand="1"],
   iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
-    left: 50px !important; /* 手機版左側空間較小 */
+    left: 60px !important;
     width: 240px !important;
     height: 70px !important;
     top: 2px !important;
   }}
-  
-  /* 確保手機版漢堡選單不被遮擋 */
-  div[data-testid="stSidebarCollapsedControl"] {{
-      margin-left: 0 !important;
-  }}
 }}
 
-/* 調整主內容頂部間距，避免被 Header 蓋住 */
 div[data-testid="stAppViewContainer"] > .main {{
-  padding-top: 40px !important;
+  padding-top: 60px !important;
 }}
 
 {dim_css}
@@ -693,32 +682,36 @@ def _style() -> None:
           color: var(--text);
         }
 
-        /* 強制顯示側邊欄按鈕並置於最上層，確保各版本 Streamlit 皆可操作 */
-        div[data-testid="stSidebarCollapsedControl"],
-        div[data-testid="collapsedControl"] {
+        header[data-testid="stHeader"] {
+            background-color: transparent !important;
+            box-shadow: none !important;
+            border-bottom: none !important;
+            z-index: 999990 !important;
+        }
+
+        div[data-testid="collapsedControl"],
+        div[data-testid="stSidebarCollapsedControl"] {
             z-index: 999999 !important;
             display: flex !important;
             visibility: visible !important;
             opacity: 1 !important;
             pointer-events: auto !important;
-            color: var(--text) !important;
-            background: rgba(10, 14, 23, 0.8) !important;
-            border-radius: 6px !important;
-            margin-top: 4px !important;
-            margin-left: 4px !important;
-            padding: 4px !important;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.5) !important;
+            color: #e2e8f0 !important;
+            background: rgba(15, 23, 42, 0.7) !important;
+            border-radius: 8px !important;
+            margin-top: 8px !important;
+            margin-left: 8px !important;
+            border: 1px solid rgba(255, 255, 255, 0.1) !important;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.4) !important;
+            backdrop-filter: blur(8px) !important;
+            transition: all 0.2s ease !important;
         }
         
-        /* 針對 Streamlit 新版 Header 結構的額外修復 */
-        header[data-testid="stHeader"] {
-            background: transparent !important;
-            pointer-events: none !important;
-            z-index: 999990;
-        }
-        /* 恢復 Header 內部按鈕的互動 */
-        header[data-testid="stHeader"] > div {
-            pointer-events: auto !important;
+        div[data-testid="collapsedControl"]:hover,
+        div[data-testid="stSidebarCollapsedControl"]:hover {
+            background: rgba(30, 41, 59, 0.9) !important;
+            border-color: rgba(59, 130, 246, 0.5) !important;
+            color: #ffffff !important;
         }
 
         html, body, [class*="css"]  {
@@ -2409,7 +2402,6 @@ def _render_global_progress(cycle_id: int) -> None:
 
     st.markdown(_section_title_html("全域挖掘進度", "統計全部用戶已跑組合數、任務完成數與全域進度。", level=4), unsafe_allow_html=True)
     
-    # [專家級視覺優化] 使用更清晰的進度條與 KPI 卡片
     st.progress(float(ratio))
     
     kcols = st.columns(4)
@@ -2598,17 +2590,16 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
             conn.close()
             
         try:
-            # [專家級修復] 修正引數錯位問題：明確指定 cycle_id 與 min_tasks 避免資料庫關聯崩潰
             db.assign_tasks_for_user(int(user["id"]), cycle_id=int(cycle["id"]), min_tasks=min_tasks)
         except AttributeError as ae:
-            st.error(f"系統核心函數遺失。")
-            with st.expander("詳細錯誤資訊", expanded=True):
+            st.error("系統核心函數遺失。")
+            with st.expander("詳細錯誤追蹤 (Traceback)", expanded=True):
                 import traceback
                 st.code(traceback.format_exc(), language="python")
             return
         except Exception as general_e:
-            st.error(f"分配任務時發生未預期錯誤。")
-            with st.expander("詳細錯誤資訊", expanded=True):
+            st.error(f"分配任務時發生未預期錯誤：{str(general_e)}")
+            with st.expander("詳細錯誤追蹤 (Traceback)", expanded=True):
                 import traceback
                 st.code(traceback.format_exc(), language="python")
             return
@@ -2834,7 +2825,6 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                         tid = int(t["id"])
                         st_raw = str(t.get("status") or "")
                         
-                        # [專家級修復] 擴大可排程狀態，包含 queued 與 意外死掉的 running
                         if st_raw not in ("assigned", "queued", "error", "running"):
                             continue
                         if job_mgr.is_running(tid):
@@ -2842,15 +2832,12 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                         if job_mgr.is_queued(int(user["id"]), tid):
                             continue
                             
-                        # 如果任務在 DB 是 running，但 job_mgr 判斷它根本沒在跑，這就是「殭屍任務」
-                        # 我們主動將其降級回 assigned 讓它能被重新領取
                         if st_raw == "running":
                             try:
                                 db.update_task_status(tid, "assigned")
                             except Exception:
                                 pass
                         elif st_raw == "error":
-                            # [專家級修復] 若之前發生錯誤卡在 error，重新排程時也應初始化狀態
                             try:
                                 db.update_task_status(tid, "assigned")
                             except Exception:
@@ -2859,10 +2846,8 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                         to_queue.append(tid)
                     
                     if to_queue:
-                        # 呼叫 job_mgr 實際將任務加入排程列隊，這行非常關鍵，否則任務無法啟動且會報錯
                         result = job_mgr.enqueue_many(int(user["id"]), to_queue, bt)
                         
-                        # [專家級 UX 修復] 將任務狀態變更為 queued 的同時，立即注入詳細的排隊進度 JSON，打破點擊後毫無反應的死寂
                         for qid in to_queue:
                             db.update_task_status(qid, "queued")
                             db.update_task_progress(qid, {
@@ -3646,9 +3631,8 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
                 else:
                     st.warning("稱號不可為空")
     elif period_hours == 720:
-        st.info(f" 提示：月度算力榜前 5 名即可解鎖自訂暱稱功能。{my_rank_info}")
+        st.info(f"提示：月度算力榜前 5 名即可解鎖自訂暱稱功能。{my_rank_info}")
 
-    # 4. 排行榜 HTML 渲染器 (修復 HTML 外洩問題)
     def _render_html_table(rows: list, val_col: str, val_fmt: str, unit: str):
         if not rows:
             st.markdown('<div class="panel" style="text-align:center; color:#64748b; padding:40px; font-size:14px;">此區間尚無數據，快來搶頭香！</div>', unsafe_allow_html=True)
@@ -3686,7 +3670,6 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
             is_me = (r.get("username") == user["username"])
             bg_style = 'style="background: rgba(59, 130, 246, 0.15); border: 1px solid rgba(59, 130, 246, 0.4); box-shadow: 0 4px 12px rgba(0,0,0,0.2);"' if is_me else ""
             
-            # [專家級修復] 同樣去除行內 HTML 縮排，確保 Markdown 不會介入干擾
             row_html = (
                 f'<tr class="lb-row" {bg_style}>\n'
                 f'<td><div class="rank-badge {rank_class}">{rank}</div></td>\n'
@@ -3730,12 +3713,16 @@ def _page_submissions(user: Dict[str, Any]) -> None:
     try:
         subs = db.list_submissions(user_id=int(user["id"]), limit=300)
     except AttributeError as ae:
-        st.error(f" 系統錯誤：`list_submissions` 函數遺失。\n\n詳細錯誤：{ae}")
+        st.error("系統錯誤：`list_submissions` 函數遺失。")
+        with st.expander("詳細錯誤追蹤 (Traceback)", expanded=True):
+            import traceback
+            st.code(traceback.format_exc(), language="python")
         return
     except Exception as e:
-        st.error(f" 載入提交紀錄時發生錯誤：{str(e)}")
-        import traceback
-        st.code(traceback.format_exc(), language="text")
+        st.error(f"載入提交紀錄時發生錯誤：{str(e)}")
+        with st.expander("詳細錯誤追蹤 (Traceback)", expanded=True):
+            import traceback
+            st.code(traceback.format_exc(), language="python")
         return
     if not subs:
         st.info("無提交紀錄。")
@@ -3831,12 +3818,16 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
                 
             ov = db.list_task_overview(limit=500)
         except AttributeError as ae:
-            st.error(f"系統錯誤：管理核心函數遺失。\n\n詳細錯誤：{ae}")
+            st.error("系統錯誤：管理核心函數遺失。")
+            with st.expander("詳細錯誤追蹤 (Traceback)", expanded=True):
+                import traceback
+                st.code(traceback.format_exc(), language="python")
             ov = None
         except Exception as e:
-            st.error(f" 載入管理總覽時發生錯誤：{str(e)}")
-            import traceback
-            st.code(traceback.format_exc(), language="text")
+            st.error(f"載入管理總覽時發生錯誤：{str(e)}")
+            with st.expander("詳細錯誤追蹤 (Traceback)", expanded=True):
+                import traceback
+                st.code(traceback.format_exc(), language="python")
             ov = None
         if ov:
             rows = []
@@ -3991,10 +3982,10 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
                             st.success(f'已匯入 {int(result.get("applied") or 0)} 筆。')
                             st.rerun()
                     except Exception as imp_err:
-                        # [最大化錯誤顯示] 防護破損檔案造成的致命解析錯誤
                         st.error(f"檔案解析或匯入過程發生致命錯誤：{imp_err}")
-                        import traceback
-                        st.code(traceback.format_exc(), language="python")
+                        with st.expander("詳細錯誤追蹤 (Traceback)", expanded=True):
+                            import traceback
+                            st.code(traceback.format_exc(), language="python")
 
 
         if st.button("執行本週期最近一週"):

@@ -417,7 +417,6 @@ def _full_sync_bitmart_csv(symbol: str,
     guard = 0
 
     fetch_lock_path = Path(str(csv_path) + ".net.lock")
-    # [專家級修復] 延長全量同步的鎖定等待時間，避免並發任務互相踩踏導致 Timeout 崩潰
     fetch_timeout = 600.0 if not csv_path.exists() else 10.0
 
     try:
@@ -450,9 +449,6 @@ def _full_sync_bitmart_csv(symbol: str,
                 if df.empty:
                     if after >= end_ts:
                         break
-                    # [專家級修復] 智慧斷層跳躍：若過濾後為空，直接將 after 推進到 API 回傳的最大時間
-                    # 避免在歷史無資料的空窗期中以 200 根的龜速推進，引發海量請求與 Rate Limit 卡死
-                    # 加入空陣列防呆與型別保護，避免 API 異常時轉換失敗導致系統崩潰
                     safe_api_ts = []
                     for r in rows:
                         if r and len(r) > 0:
@@ -2825,12 +2821,10 @@ def _simulate_long_core_py(o, h, l, c, entry_sig, tp_pct, sl_pct, max_hold, fee_
       entry_idx_arr, exit_idx_arr,
       entry_px_arr, exit_px_arr,
       net_ret_arr, bars_held_arr, reason_arr(int8: 1=SL,2=TP,3=SL_samebar,4=TP_samebar,5=TIME)
-    任何「交易明細的 dict」都放到 Python 外面組，避免 JIT 崩潰。
     """
     n = len(c)
     perbar = np.zeros(n, dtype=np.float64)
 
-    # [專家級防護] 最大筆數不會超過訊號數（最後一根不能進場），增加長度判定避免 IndexError
     max_trades = int(np.sum(entry_sig[:-1])) if len(entry_sig) > 1 else 0
     entry_idx_arr = np.full(max_trades, -1, dtype=np.int64)
     exit_idx_arr  = np.full(max_trades, -1, dtype=np.int64)
@@ -3389,7 +3383,6 @@ fee_side=0.0002, slippage=0.0, worst_case=True):
     """
     n = len(c)
     perbar = np.zeros(n, dtype=np.float64)
-    # [專家級防護] 安全取得最大交易數，避免長度不足引發崩潰
     max_trades = int(np.sum(entry_sig[:-1])) if len(entry_sig) > 1 else 0
     entry_idx_arr = np.full(max_trades, -1, dtype=np.int64)
     exit_idx_arr = np.full(max_trades, -1, dtype=np.int64)
@@ -3431,9 +3424,6 @@ fee_side=0.0002, slippage=0.0, worst_case=True):
             # TP = Low_val * (1.0 - tp_pct)
             # SL = High_val * (1.0 + sl_pct)
             
-            # [專家級修復] 嚴謹判斷 tp_pct 與 sl_pct 是否為乘數(Ratio)。
-            # 若為百分比 (例如 5% = 0.05，60% = 0.60)，數值通常小於 0.85。若為乘數 (例如 1.02 或 0.98)，則大於 0.85。
-            # 以 0.85 作為分水嶺，完美避開使用者設定 60% 停利(0.60)被誤判為乘數的災難性 Bug。
             is_ratio = (tp_pct >= 0.85 or sl_pct >= 0.85)
             
             if is_ratio:
@@ -3524,7 +3514,6 @@ fee_side=0.0002, slippage=0.0, worst_case=True):
     """
     n = len(c)
     perbar = np.zeros(n, dtype=np.float64)
-    # [專家級防護] 預估最多交易數不超過 entry 訊號數，增加長度防護避免崩潰
     max_trades = int(np.sum(entry_sig[:-1])) if len(entry_sig) > 1 else 0
     entry_idx_arr = np.full(max_trades, -1, dtype=np.int64)
     exit_idx_arr = np.full(max_trades, -1, dtype=np.int64)
@@ -3650,7 +3639,6 @@ def _simulate_short_core_py(o, h, l, c, entry_sig, tp_pct, sl_pct, max_hold, fee
     """純 Python 做空模擬版本"""
     n = len(c)
     perbar = np.zeros(n, dtype=np.float64)
-    # [專家級防護] 安全取得最大交易數，避免長度不足引發崩潰
     max_trades = int(np.sum(entry_sig[:-1])) if len(entry_sig) > 1 else 0
     entry_idx_arr = np.full(max_trades, -1, dtype=np.int64)
     exit_idx_arr  = np.full(max_trades, -1, dtype=np.int64)
@@ -4620,14 +4608,11 @@ reverse_mode: bool = False) -> Dict:
     avg_hold = np.mean(bars_held) if bars_held.size else 0.0
     time_in_mkt = (np.sum(bars_held) / len(df) * 100.0) if len(df) > 0 else 0.0
 
-    # 修正：序列化前過濾掉 _ts，避免 json.dumps 失敗，並增強 NumPy Scalar 判斷
     safe_params = {k: v for k, v in family_params.items() if not k.startswith("_")}
     
-    # [專家級防護] 徹底解決 NumPy 或 Pandas 資料型別混入導致 json.dumps 崩潰的問題
     try:
         family_params_json = _fast_json_dumps(safe_params)
     except Exception:
-        # 最後防線，將所有非基本型別轉為字串
         safe_params_str = {k: (v if isinstance(v, (int, float, str, bool, list, dict)) else str(v)) for k, v in safe_params.items()}
         family_params_json = json.dumps(safe_params_str, ensure_ascii=False)
 
@@ -5866,7 +5851,6 @@ def run_grid_gpu(df: pd.DataFrame,
             _log(f"→ Numba 批次：size={es.shape[0]}, T={T}")
             t0 = time.perf_counter()
             
-            # [專家級修復] 單家族模式也必須正確判斷是否為反向做空策略，否則做空參數計算全錯
             is_reverse = False
             if batch_meta and batch_meta[0]["family"] == "OB_FVG":
                 is_reverse = batch_meta[0]["family_params"].get("reverse", False)
@@ -6131,8 +6115,6 @@ def build_cache_for_family(df: pd.DataFrame,
     """依家族與參數清單，批量產生 entry signal（布林陣列），含記憶體快取。"""
     _log = logger if callable(logger) else (lambda msg: None)
 
-    # 0. 檢查通用快取 (Expert Cache Check)
-    # 使用 JSON dump 參數列表作為指紋 (Key)，確保參數一致時直接命中
     try:
         cache_key = f"{fam}_{json.dumps(plist, sort_keys=True)}"
         if cache_key in GENERIC_SIG_CACHE:
@@ -6153,7 +6135,6 @@ def build_cache_for_family(df: pd.DataFrame,
     Np = len(plist)
     last_t = time.perf_counter()
 
-    # [專家修正] 準備時間戳 (供需要時間感知的策略使用)
     ts_vals = df["ts"].values
 
     if fam == "RSI" and Np > 0:
@@ -6226,7 +6207,6 @@ def build_cache_for_family(df: pd.DataFrame,
                     res = signal_from_family(fam, o_np, h_np, l_np, c_np, v_np, prm)
                     sig = res[0] if isinstance(res, tuple) else res
                 
-                # [專家防護] 限制 OB_FVG 指紋快取數量，避免無限膨脹
                 if len(OB_FVG_cache) > 200:
                     OB_FVG_cache.clear()
                 OB_FVG_cache[key] = sig
@@ -6238,15 +6218,12 @@ def build_cache_for_family(df: pd.DataFrame,
                 _log(f"   OB_FVG 快取 {i}/{Np}（{i/Np*100:.1f}%）")
                 last_t = now_t
     else:
-        # 其他所有家族 (包含 TEMA_RSI, Laguerre 等)
         for i, prm in enumerate(plist, start=1):
-            # [專家修正] 注入時間戳，確保依賴 _ts 的策略能正常運作
             prm_run = prm.copy()
             prm_run["_ts"] = ts_vals
             
             res = signal_from_family(fam, o_np, h_np, l_np, c_np, v_np, prm_run)
             
-            # 若回傳 (sig, arrays)，只保留 sig 以節省記憶體並相容批次運算
             if isinstance(res, tuple):
                 sig_only = res[0]
             else:
@@ -6255,15 +6232,12 @@ def build_cache_for_family(df: pd.DataFrame,
             out.append(np.asarray(sig_only, dtype=np.bool_))
             
             now_t = time.perf_counter()
-            # [專家級修正] 提高回報頻率，讓 UI 不會卡住
             if now_t - last_t >= 0.3:
                 _log(f"進度 {i}/{Np} ({i/Np*100:.1f}%)")
                 last_t = now_t
 
     _log(f"   {fam} 訊號快取完成，寫入全域快取...")
-    # 寫入快取
     try:
-        # [專家防護] 限制快取容量，防止多參數掃描導致伺服器 OOM (Out Of Memory) 崩潰
         if len(GENERIC_SIG_CACHE) > 80:
             _log("全域訊號快取已滿，進行清理釋放記憶體...")
             GENERIC_SIG_CACHE.clear()
@@ -6932,7 +6906,6 @@ def apply_1m_microfill(
             high_val = float(highest_arr[base_idx])
             low_val = float(lowest_arr[base_idx])
 
-            # [專家級修復] 統一在 1m 精準撮合中使用 0.85 閾值判斷 Ratio/Pct
             is_ratio = (tp_pct >= 0.85 or sl_pct >= 0.85)
 
             if reverse_mode:

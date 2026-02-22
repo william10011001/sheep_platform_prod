@@ -58,7 +58,6 @@ def run_weekly_check(week_start_ts: str, week_end_ts: str) -> None:
         sl = float(params.get("sl"))
         mh = int(params.get("max_hold"))
 
-        # [專家級修復] 週結算不需同步 1m 資料，避免 CronJob 逾時
         csv_main, _ = bt.ensure_bitmart_data(
             symbol=str(pool["symbol"]),
             main_step_min=int(pool["timeframe_min"]),

@@ -331,7 +331,7 @@ class JobManager:
             db.update_task_progress(task_id, progress)
 
             _SYNC_RE = re.compile(r"^\s*(\S+)\s+已寫入\s+(\d+)\s*/\s*(\d+)\s*$")
-            t0 = time.time()  # [專家級修復] 提前記錄起始時間，讓資料同步階段也能顯示已耗時
+            t0 = time.time()
 
             def _progress_cb(frac: float, msg: str) -> None:
                 if stop_flag.is_set():
@@ -339,7 +339,7 @@ class JobManager:
                 progress["phase"] = "sync_data"
                 progress["phase_progress"] = float(frac)
                 progress["phase_msg"] = str(msg)
-                progress["elapsed_s"] = round(float(max(0.0, time.time() - t0)), 3) # [專家級修復] 即時更新耗時
+                progress["elapsed_s"] = round(float(max(0.0, time.time() - t0)), 3)
 
                 m = _SYNC_RE.match(str(msg))
                 if m:
@@ -370,13 +370,11 @@ class JobManager:
                     progress["sync"] = sync
 
                 progress["updated_at"] = db.utc_now_iso()
-                # [專家級容錯防護] K線同步回呼極為頻繁，若遇 SQLite 鎖死 (database is locked) 絕不能讓主執行緒崩潰
                 try:
                     db.update_task_progress(task_id, progress)
                 except Exception as db_err:
                     print(f"[WARN] K線同步進度寫入 DB 失敗 (可忽略): {db_err}")
 
-            # [專家級修正] 強制寫入狀態，確保 K 線下載期間前端不會停留在 "queued" 假死
             progress["phase"] = "sync_data"
             progress["phase_msg"] = f"準備向交易所拉取 {pool['symbol']} ({pool['timeframe_min']}m) 歷史 K 線資料..."
             try:
@@ -407,11 +405,9 @@ class JobManager:
 
             combos = bt_module.grid_combinations_from_ui(family, grid_spec)
             
-            # [防護機制] 檢查展開後的組合是否為空，避免除以零或無盡迴圈
             if not combos:
                 raise ValueError(f"格點參數展開失敗或為空，請檢查策略池 ({pool['name']}) 的參數設定範圍。")
             
-            # [深度防御] 確保所有參與種子計算的數值皆非 None 且型別正確
             safe_cycle_id = int(task.get("cycle_id") if task.get("cycle_id") is not None else 0)
             safe_pool_seed = int(pool.get("seed") if pool.get("seed") is not None else 0)
             safe_partition_idx = int(partition_idx if partition_idx is not None else 0)
@@ -478,7 +474,6 @@ class JobManager:
             sig_cache = None
             if use_fast_path and part:
                 try:
-                    # [專家級即時進度] 建立專屬 Logger，將指標計算進度即時寫入 DB 讓 UI 顯示
                     def _cache_logger(msg: str):
                         progress["phase"] = "build_grid"
                         progress["phase_msg"] = f"指標計算中: {msg}"
