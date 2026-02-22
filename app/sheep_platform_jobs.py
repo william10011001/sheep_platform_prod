@@ -621,17 +621,12 @@ class JobManager:
             import traceback, sys
             err_trace = traceback.format_exc()
             
-            # [錯誤處理] 輸出至標準錯誤串流並寫入日誌
+            # [專家級最大化顯示] 同時輸出到終端、審計日誌與任務進度 JSON
             print(f"\n{'!'*60}\n[FATAL TASK ERROR] Task ID: {task_id}\n{err_trace}\n{'!'*60}", file=sys.stderr)
             
             try:
                 # 嘗試從 DB 抓取最新任務狀態
                 current_t = db.get_task(task_id)
-                
-                # 若 DB 連線失敗，進行最後一次重試
-                if not current_t:
-                    time.sleep(1)
-                    current_t = db.get_task(task_id)
                 prog = _json_load(current_t.get("progress_json") or "{}") if current_t else {}
                 
                 # 記錄極致詳細的錯誤現場
@@ -658,13 +653,7 @@ class JobManager:
                         self._stop_flags.pop(task_id, None)
                         
             except Exception as nested_err:
-                # 嚴重錯誤：錯誤處理器本身崩潰，寫入緊急日誌檔案
                 print(f"[CRITICAL] 錯誤處理器本身也發生錯誤: {nested_err}\n{traceback.format_exc()}", file=sys.stderr)
-                try:
-                    with open("critical_error.log", "a") as f:
-                        f.write(f"Task {task_id} nested error: {nested_err}\n")
-                except:
-                    pass
 
 
 JOB_MANAGER = JobManager()

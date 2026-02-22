@@ -71,29 +71,11 @@ def _conn() -> sqlite3.Connection:
     except Exception:
         pass
     try:
-        # 設定 60 秒等待時間，大幅降低 database is locked 機率
-        conn.execute("PRAGMA busy_timeout = 60000;")
+        conn.execute("PRAGMA busy_timeout = 30000;")
     except Exception:
         pass
 
     return conn
-
-# [專家級修正] 新增重試裝飾器，用於關鍵寫入操作
-def _retry_on_lock(func):
-    import time
-    def wrapper(*args, **kwargs):
-        attempts = 0
-        while attempts < 5:
-            try:
-                return func(*args, **kwargs)
-            except sqlite3.OperationalError as e:
-                if "locked" in str(e).lower():
-                    attempts += 1
-                    time.sleep(0.2 * attempts)
-                else:
-                    raise
-        raise sqlite3.OperationalError("Database locked after 5 retries")
-    return wrapper
 
 
 def init_db() -> None:
@@ -1362,7 +1344,6 @@ def get_task(task_id: int) -> Optional[dict]:
     finally:
         conn.close()
 
-@_retry_on_lock
 def update_task_progress(task_id: int, progress: dict) -> None:
     conn = _conn()
     try:
