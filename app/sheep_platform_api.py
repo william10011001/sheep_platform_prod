@@ -523,8 +523,6 @@ def issue_token(req: Request, body: TokenRequest):
 
     # [專家除錯] 修正遺失的方法調用，並套用強化的 Bytes/String 驗證護城河
     from sheep_platform_security import verify_password
-    # [安全性補丁] 處理 bcrypt 雜湊值的 str/bytes 混用情況
-    from sheep_platform_security import verify_password
     is_valid = False
     try:
         # 強制將資料庫雜湊值正規化（使用更安全的字串轉換）
@@ -544,7 +542,9 @@ def issue_token(req: Request, body: TokenRequest):
             pw_bin = body.password.encode("utf-8")
             hash_bin = raw_hash.encode("utf-8") if isinstance(raw_hash, str) else raw_hash
             is_valid = verify_password(pw_bin, hash_bin)
-        except:
+        except Exception as verify_err:
+            import traceback
+            print(f"[API Security Error] 密碼驗證引擎崩潰 (User: {body.username}): {verify_err}\n{traceback.format_exc()}")
             is_valid = False
 
     if not is_valid:

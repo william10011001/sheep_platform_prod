@@ -2726,10 +2726,17 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
             conn.close()
             
         try:
-            db.assign_tasks_for_user(int(user["id"]), min_tasks)
+            # [專家級修復] 修正引數錯位問題：明確指定 cycle_id 與 min_tasks 避免資料庫關聯崩潰
+            db.assign_tasks_for_user(int(user["id"]), cycle_id=int(cycle["id"]), min_tasks=min_tasks)
         except AttributeError as ae:
             st.error(f" 系統錯誤：核心函數遺失。\n\n詳細錯誤：{ae}")
             st.info(" 提示：您的 `sheep_platform_db.py` 檔案內容疑似被意外覆蓋，請復原正確的資料庫邏輯。")
+            import traceback
+            st.code(traceback.format_exc(), language="python")
+            return
+        except Exception as general_e:
+            # [最大化錯誤顯示] 防止分配過程的未知錯誤導致控制台白畫面
+            st.error(f" 分配任務時發生未預期的錯誤：{general_e}")
             import traceback
             st.code(traceback.format_exc(), language="python")
             return
@@ -3639,14 +3646,81 @@ def _render_audit(audit: Dict[str, Any]) -> None:
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 def _page_leaderboard(user: Dict[str, Any]) -> None:
-    st.markdown(_section_title_html("英雄榜", "展示頂尖貢獻者與幸運兒。數據每分鐘更新一次。", level=3), unsafe_allow_html=True)
+    st.markdown(
+        """
+        <div style="background: linear-gradient(135deg, rgba(255,215,0,0.1) 0%, rgba(255,140,0,0.05) 100%); 
+                    border: 1px solid rgba(255, 215, 0, 0.3); 
+                    border-radius: 12px; 
+                    padding: 20px 24px; 
+                    margin-bottom: 24px;
+                    box-shadow: 0 8px 32px rgba(255, 215, 0, 0.05);
+                    display: flex; justify-content: space-between; align-items: center;">
+            <div style="display: flex; align-items: center; gap: 16px;">
+                <div style="width: 48px; height: 48px; background: linear-gradient(135deg, #FFD700 0%, #FF8C00 100%); border-radius: 12px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 16px rgba(255, 215, 0, 0.4);">
+                    <span style="font-size: 24px;">🏆</span>
+                </div>
+                <div>
+                    <h2 style="margin: 0; padding: 0; font-size: 28px; font-weight: 900; background: linear-gradient(135deg, #FFD700 0%, #FFFFFF 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 1px;">英雄榜</h2>
+                    <div style="font-size: 13px; color: #94a3b8; margin-top: 4px;">展示頂尖貢獻者與幸運兒。數據每分鐘更新一次。</div>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True
+    )
 
-    # 1. 美化後的週期選單 (Inject custom container class)
-    st.markdown('<div class="lb-period-selector">', unsafe_allow_html=True)
+    # 1. 徹底拋棄原生 Radio 紅點：注入頂級 Segmented Control CSS 模擬器
+    st.markdown('''
+        <style>
+        /* 隱藏原生 Radio 按鈕及其圓點 */
+        div[data-testid="stRadio"] > label { display: none !important; }
+        div[data-testid="stRadio"] div[role="radiogroup"] {
+            display: flex !important;
+            flex-direction: row !important;
+            gap: 12px !important;
+            background: rgba(15, 23, 42, 0.5) !important;
+            padding: 8px !important;
+            border-radius: 16px !important;
+            border: 1px solid rgba(255, 255, 255, 0.05) !important;
+            width: fit-content !important;
+            margin-bottom: 15px !important;
+        }
+        div[data-testid="stRadio"] div[role="radiogroup"] label {
+            background: rgba(255, 255, 255, 0.03) !important;
+            border: 1px solid rgba(255, 255, 255, 0.05) !important;
+            border-radius: 10px !important;
+            padding: 10px 24px !important;
+            cursor: pointer !important;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+        }
+        div[data-testid="stRadio"] div[role="radiogroup"] label:hover {
+            background: rgba(255, 255, 255, 0.08) !important;
+            border-color: rgba(255, 255, 255, 0.15) !important;
+            transform: translateY(-2px);
+        }
+        div[data-testid="stRadio"] div[role="radiogroup"] label:has(input:checked) {
+            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%) !important;
+            border-color: #60a5fa !important;
+            box-shadow: 0 8px 20px rgba(37, 99, 235, 0.3) !important;
+            transform: translateY(-2px);
+        }
+        div[data-testid="stRadio"] div[role="radiogroup"] label div[data-testid="stMarkdownContainer"] p {
+            color: #cbd5e1 !important;
+            font-weight: 600 !important;
+            font-size: 15px !important;
+            margin: 0 !important;
+        }
+        div[data-testid="stRadio"] div[role="radiogroup"] label:has(input:checked) div[data-testid="stMarkdownContainer"] p {
+            color: #ffffff !important;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.2) !important;
+        }
+        div[data-testid="stRadio"] div[role="radiogroup"] label > div:first-child {
+            display: none !important; /* 強制消滅原生選取圓圈 */
+        }
+        </style>
+    ''', unsafe_allow_html=True)
+    
     period_map = {"1 小時": 1, "24 小時": 24, "30 天 (月賽)": 720}
-    # 使用 label_visibility="collapsed" 隱藏標題，CSS 會接手剩餘的美化
     period_label = st.radio("統計週期", list(period_map.keys()), index=1, horizontal=True, key="lb_period", label_visibility="collapsed")
-    st.markdown('</div>', unsafe_allow_html=True)
     
     period_hours = period_map[period_label]
 
@@ -4040,13 +4114,19 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
         if report_file is not None:
             if st.button("匯入"):
                 with st.spinner("匯入中"):
-                    result = _import_weekly_report_csv(report_file)
-                if not result.get("ok"):
-                    st.error("匯入失敗。")
-                    st.write(result)
-                else:
-                    st.success(f'已匯入 {int(result.get("applied") or 0)} 筆。')
-                    st.rerun()
+                    try:
+                        result = _import_weekly_report_csv(report_file)
+                        if not result.get("ok"):
+                            st.error("匯入失敗。")
+                            st.write(result)
+                        else:
+                            st.success(f'已匯入 {int(result.get("applied") or 0)} 筆。')
+                            st.rerun()
+                    except Exception as imp_err:
+                        # [最大化錯誤顯示] 防護破損檔案造成的致命解析錯誤
+                        st.error(f"檔案解析或匯入過程發生致命錯誤：{imp_err}")
+                        import traceback
+                        st.code(traceback.format_exc(), language="python")
 
 
         if st.button("執行本週期最近一週"):

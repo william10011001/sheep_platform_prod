@@ -952,6 +952,10 @@ class UiLogger:
         
         # 錯誤訊息強制顯示，並使用不同顏色 (透過 syntax highlighting trick)
         # 這裡繼續用 text 但加上顯眼的標記
+        # [專家級效能防護] 限制 UI Logger 緩衝區大小，避免海量輸出導致 Streamlit 前端渲染卡死
+        if len(self._buf) > 80:
+            self._buf = self._buf[-80:]
+            
         if self._box:
             self._box.code("\n".join(self._buf), language="diff" if is_error else "text")
 
