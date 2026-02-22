@@ -1470,22 +1470,123 @@ def set_data_hash(symbol: str, tf_min: int, years: int, data_hash: str, ts: str)
         conn.close()
 
 def worker_heartbeat(worker_id: str, user_id: int, task_id: int = None) -> None:
-    pass
+    conn = _conn()
+    try:
+        if task_id is not None:
+            conn.execute(
+                "UPDATE mining_tasks SET last_heartbeat = ? WHERE id = ? AND user_id = ?",
+                (_now_iso(), task_id, user_id)
+            )
+            conn.commit()
+    except Exception as e:
+        print(f"[DB ERROR] worker_heartbeat 失敗: {e}")
+    finally:
+        conn.close()
 
 def upsert_worker(worker_id: str, user_id: int, version: str, protocol: int, meta: dict) -> None:
-    pass
+    # 由於沒有獨立的 workers 表，這裡將其記錄在 audit_logs 作為心跳註冊，保證最大化顯示節點狀態
+    write_audit_log(user_id, "worker_register", {
+        "worker_id": worker_id, "version": version, "protocol": protocol, "meta": meta
+    })
 
 def claim_next_task(user_id: int, worker_id: str) -> Optional[dict]:
-    return None
+    import uuid
+    conn = _conn()
+    try:
+        # 尋找 assigned 且屬於該用戶的任務
+        row = conn.execute(
+            "SELECT t.*, p.family, p.symbol, p.timeframe_min, p.years, p.grid_spec_json, p.risk_spec_json, p.seed, p.name as pool_name "
+            "FROM mining_tasks t LEFT JOIN factor_pools p ON t.pool_id = p.id "
+            "WHERE t.user_id = ? AND t.status IN ('assigned', 'queued') ORDER BY t.id ASC LIMIT 1",
+            (user_id,)
+        ).fetchone()
+        
+        if not row:
+            return None
+            
+        task_id = row["id"]
+        lease_id = str(uuid.uuid4())
+        
+        cur = conn.execute(
+            "UPDATE mining_tasks SET status = 'running', updated_at = ? WHERE id = ? AND status IN ('assigned', 'queued')",
+            (_now_iso(), task_id)
+        )
+        if cur.rowcount == 0:
+            return None # 被搶走
+            
+        conn.commit()
+        d = dict(row)
+        d["lease_id"] = lease_id
+        d["lease_worker_id"] = worker_id
+        return d
+    except Exception as e:
+        import traceback
+        print(f"[DB ERROR] claim_next_task 嚴重錯誤: {e}\n{traceback.format_exc()}")
+        return None
+    finally:
+        conn.close()
 
 def update_task_progress_with_lease(task_id: int, user_id: int, worker_id: str, lease_id: str, progress: dict) -> bool:
-    return False
+    conn = _conn()
+    try:
+        # lease 機制雖然在單機版弱化，但保留狀態檢查確保安全
+        cur = conn.execute(
+            "UPDATE mining_tasks SET progress_json = ?, updated_at = ?, last_heartbeat = ? WHERE id = ? AND user_id = ? AND status = 'running'",
+            (json.dumps(progress, ensure_ascii=False), _now_iso(), _now_iso(), task_id, user_id)
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    except Exception as e:
+        print(f"[DB ERROR] update_task_progress_with_lease: {e}")
+        return False
+    finally:
+        conn.close()
 
 def release_task_with_lease(task_id: int, user_id: int, worker_id: str, lease_id: str, progress: dict) -> bool:
-    return False
+    conn = _conn()
+    try:
+        cur = conn.execute(
+            "UPDATE mining_tasks SET status = 'assigned', progress_json = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+            (json.dumps(progress, ensure_ascii=False), _now_iso(), task_id, user_id)
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    except Exception as e:
+        print(f"[DB ERROR] release_task_with_lease: {e}")
+        return False
+    finally:
+        conn.close()
 
 def finish_task_with_lease(task_id: int, user_id: int, worker_id: str, lease_id: str, candidates: list, final_progress: dict) -> Optional[int]:
-    return None
+    conn = _conn()
+    try:
+        cur = conn.execute(
+            "UPDATE mining_tasks SET status = 'completed', progress_json = ?, updated_at = ? WHERE id = ? AND user_id = ? AND status = 'running'",
+            (json.dumps(final_progress, ensure_ascii=False), _now_iso(), task_id, user_id)
+        )
+        if cur.rowcount == 0:
+            return None
+            
+        task_info = get_task(task_id)
+        pool_id = task_info["pool_id"] if task_info else 0
+        best_candidate_id = None
+        
+        for cand in candidates:
+            sc = cand.get("score", 0.0)
+            prms = cand.get("params", {})
+            mets = cand.get("metrics", {})
+            cid = insert_candidate(task_id, user_id, pool_id, prms, mets, sc)
+            if best_candidate_id is None:
+                best_candidate_id = cid
+                
+        conn.commit()
+        return best_candidate_id
+    except Exception as e:
+        import traceback
+        print(f"[DB ERROR] finish_task_with_lease: {e}\n{traceback.format_exc()}")
+        return None
+    finally:
+        conn.close()
 
 def utc_now_iso() -> str:
     return _now_iso()

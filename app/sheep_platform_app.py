@@ -974,7 +974,13 @@ def _style() -> None:
             height: 28px !important;
         }
         </style>
-        
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # [專家級修復] 嚴格分離 JS 注入，避免 Streamlit Markdown 剝離 <script> 導致純文字外洩
+    st.components.v1.html(
+        """
       <script>
 (function() {
   const parentDoc = window.parent && window.parent.document ? window.parent.document : document;
@@ -996,10 +1002,8 @@ def _style() -> None:
       const sidebar = parentDoc.querySelector('section[data-testid="stSidebar"]');
       if (!sidebar) return false;
       const rect = sidebar.getBoundingClientRect();
-      // 專家級容錯：精準檢查寬度與邊界，相容各瀏覽器與字元編碼異常
       return rect.width > 50 && rect.left >= 0;
     } catch (err) {
-      console.error("[sidebar_failsafe] Error checking sidebar state:", err);
       return false;
     }
   }
@@ -1019,8 +1023,6 @@ def _style() -> None:
         btn.setAttribute('role', 'button');
         btn.setAttribute('aria-label', 'Open sidebar (failsafe)');
         btn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"></path></svg>';
-
-        // 內聯樣式：確保在所有的 CSS 崩壞下依然能獨立運作
         btn.style.cssText = 'position:fixed; top:10px; left:10px; width:48px; height:48px; display:flex; align-items:center; justify-content:center; background:rgba(30,41,59,0.98); border:1px solid rgba(255,255,255,0.25); border-radius:8px; box-shadow:0px 4px 16px rgba(0,0,0,0.8); z-index:2147483647; cursor:pointer; pointer-events:auto;';
 
         btn.addEventListener('click', function(e) {
@@ -1048,18 +1050,13 @@ def _style() -> None:
               sidebar.style.setProperty('transform', 'translateX(0px)', 'important');
               return;
             }
-            console.warn('[sidebar_failsafe] No native button or sidebar element found.');
-          } catch (clickErr) {
-            console.error('[sidebar_failsafe] Click handler error:', clickErr);
-          }
+          } catch (clickErr) {}
         }, { capture: true });
 
         parentDoc.body.appendChild(btn);
       }
       btn.style.display = 'flex';
-    } catch (ensureErr) {
-      console.error("[sidebar_failsafe] ensureTrigger encountered error:", ensureErr);
-    }
+    } catch (ensureErr) {}
   }
 
   let tries = 0;
@@ -1075,7 +1072,7 @@ def _style() -> None:
 })();
 </script>
         """,
-        unsafe_allow_html=True,
+        height=0,
     )
 
 _LAST_ROLLOVER_CHECK = 0.0
@@ -3260,7 +3257,15 @@ def _render_candidates_and_submit(user: Dict[str, Any], task_row: Dict[str, Any]
     df = pd.DataFrame(rows)
     st.dataframe(df, use_container_width=True, hide_index=True)
 
-    sel = st.number_input("候選編號", min_value=int(df["candidate_id"].min()), max_value=int(df["candidate_id"].max()), value=int(df["candidate_id"].min()), step=1)
+    # [專家級修復] 防護 DataFrame 為空造成的 NaN min/max 崩潰
+    if df.empty or "candidate_id" not in df.columns:
+        st.warning("目前無有效的候選資料可供提交。")
+        return
+        
+    min_cid = int(df["candidate_id"].min())
+    max_cid = int(df["candidate_id"].max())
+    
+    sel = st.number_input("候選編號", min_value=min_cid, max_value=max_cid, value=min_cid, step=1)
 
     cand = next((c for c in cands if int(c["id"]) == int(sel)), None)
     if not cand:

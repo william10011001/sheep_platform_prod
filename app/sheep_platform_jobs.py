@@ -240,12 +240,31 @@ class JobManager:
                     if mem_free_pct < 0.15:
                         if alive > 0: # 僅在還有任務跑時列印，避免洗版
                              print(f"[RESOURCES ALERT] 內存不足 ({mem_free_pct:.1%}), 暫緩發放新任務...")
-                        alive = 999999 
-
-                    while alive < max(1, limit):
-                        item = self._pick_next_locked()
-                        if item is None:
-                            break
+                        # [專家級修復] 使用 break 而不是 alive=999999 來跳出調度，避免破壞外部迴圈邏輯與鎖機制
+                        pass
+                    else:
+                        while alive < max(1, limit):
+                            item = self._pick_next_locked()
+                            if item is None:
+                                break
+                            task_id, bt_module, _uid = item
+    
+                            th = self._threads.get(task_id)
+                            if th is not None and th.is_alive():
+                                continue
+    
+                            trow = db.get_task(int(task_id))
+                            if not trow or str(trow.get("status")) not in ("assigned", "queued"):
+                                continue
+    
+                            flag = threading.Event()
+                            th = threading.Thread(target=self._run_task, args=(int(task_id), bt_module, flag), daemon=True)
+                            self._threads[int(task_id)] = th
+                            self._stop_flags[int(task_id)] = flag
+                            
+                            th.start()
+                            alive += 1
+                            started_any = True
                         task_id, bt_module, _uid = item
 
                         th = self._threads.get(task_id)
