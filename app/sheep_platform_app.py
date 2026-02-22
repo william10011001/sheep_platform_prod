@@ -36,31 +36,41 @@ def _dataframe_compat(data=None, **kwargs):
     # 取得原始 dataframe 方法
     orig = _get_orig_dataframe()
     
-    # 處理舊版參數與新版 UI 寬度適配
-    if "width" in kwargs and str(kwargs["width"]) == "stretch":
-        kwargs.pop("width")
-        kwargs["use_container_width"] = True
-        
-    # 移除新舊版本衝突的參數
-    pop_args = ["hide_index"] # 如果版本太舊不支援此參數，先移除
+    # [Expert Compatibility] 處理舊版參數與新版 UI 寬度適配
+    # Streamlit 1.23+ 使用 use_container_width，舊版可能僅支援 width 或無此參數
+    if "width" in kwargs:
+        if str(kwargs["width"]) == "stretch":
+            kwargs.pop("width")
+            kwargs["use_container_width"] = True
+        else:
+            # 若指定數值寬度，保留之，但嘗試轉為 int
+            try:
+                kwargs["width"] = int(kwargs["width"])
+            except:
+                kwargs.pop("width")
+
+    # 移除潛在衝突參數
+    pop_args = ["hide_index"] 
     
     try:
-        # 第一次嘗試執行
         return orig(data, **kwargs)
     except (TypeError, Exception):
-        # 如果報錯（通常是參數不支持），移除爭議參數後再試一次
-        for arg in pop_args:
-            kwargs.pop(arg, None)
+        # Retry logic: 移除可能導致版本衝突的參數
+        clean_kwargs = {k: v for k, v in kwargs.items() if k not in pop_args}
         try:
-            return orig(data, **kwargs)
+            return orig(data, **clean_kwargs)
         except Exception:
-            # 最後防線：退回靜態表格顯示，確保資料不丟失
-            return st.table(data)
+            # 最終防線：使用 st.table 呈現數據，確保資訊不遺失
+            try:
+                return st.table(data)
+            except:
+                st.error("表格資料渲染失敗。")
 
 # 執行覆蓋，僅在尚未覆蓋時進行
 if getattr(st.dataframe, "__name__", "") != "_dataframe_compat":
     st._sheep_orig_dataframe = st.dataframe
     st.dataframe = _dataframe_compat
+
 # --------------------------------------------------------
 import backtest_panel2 as bt
 import sheep_platform_db as db
@@ -79,18 +89,12 @@ from sheep_platform_audit import audit_candidate
 APP_TITLE = "羊肉爐挖礦分潤任務平台"
 
 _BRAND_WEBM_1 = os.environ.get("SHEEP_BRAND_WEBM_1", "static/羊LOGO影片(去背).webm")
-# 注意：舊版 Streamlit 的 st.components.v1.html 不支援 key=
-# 因此不使用 key，並改用更穩的 CSS selector 來固定 iframe
-
 
 def _mask_username(username: str, nickname: str = None) -> str:
     """
-    專家級隱私遮罩邏輯 (V2)：
-    1. 若有設定 nickname，直接回傳 nickname (前端 CSS 會負責加上皇冠)。
-    2. 遮罩邏輯：
-       - 長度 <= 2: 顯示首字 + *
-       - 長度 3~4: 首1 + ** + 尾1
-       - 長度 >= 5: 首1 + *** + 尾2
+    [Expert Privacy] 用戶名遮罩邏輯 V3：
+    1. 若有設定 nickname，直接顯示。
+    2. 無 nickname 時，根據 username 長度進行智慧遮罩，保護隱私。
     """
     if nickname and str(nickname).strip():
         return str(nickname).strip()
@@ -98,14 +102,15 @@ def _mask_username(username: str, nickname: str = None) -> str:
     s = str(username or "")
     n = len(s)
     if n <= 0:
-        return "???"
+        return "Unknown"
     if n <= 2:
         return s[0] + "*"
     if n <= 4:
         return f"{s[0]}**{s[-1]}"
+    if n <= 8:
+        return f"{s[:2]}****{s[-2:]}"
     
-    # 長度 >= 5: 首1 + *** + 尾2 (例如 s***pd)
-    return f"{s[0]}***{s[-2:]}"
+    return f"{s[:3]}****{s[-3:]}"
 
 def _abs_asset_path(p: str) -> str:
     p = (p or "").strip()
@@ -139,51 +144,74 @@ def _render_brand_header(animate: bool, dim: bool = False) -> None:
     v1 = _read_file_b64(_BRAND_WEBM_1)
     dim_css = ""
 
+    # [UI Critical Fix] 修復側邊欄按鈕消失與 Header 遮擋問題
+    # 1. iframe[data-sheep-brand="1"]: 品牌 Logo，置於左上，但在手機版需調整位置。
+    # 2. header[data-testid="stHeader"]: 設定背景透明並允許點擊穿透 (pointer-events: none)，但其子元素 (如按鈕) 需恢復點擊。
+    # 3. div[data-testid="stSidebarCollapsedControl"]: 強制提升層級至最高，確保漢堡選單可見且可點。
     st.markdown(
         f"""
 <style>
+/* 品牌 Logo 容器定位 */
 iframe[data-sheep-brand="1"],
 iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
   position: fixed !important;
-  top: 0 !important;
-  /* 教授級終極修正：將 Header 偏移 60px 避開側邊欄控制鈕區域 */
-  left: 60px !important; 
-  width: 300px !important;
-  height: 84px !important;
+  top: 4px !important;
+  left: 60px !important; /* 避開左側漢堡選單區域 (約 50px) */
+  width: 280px !important;
+  height: 80px !important;
   border: 0 !important;
-  /* 降低層級避免遮擋 React 交互層 */
-  z-index: 500 !important;
+  z-index: 999990 !important; /* 低於 Header 控制項但高於內容 */
   background: transparent !important;
   pointer-events: none !important;
 }}
 
+/* Streamlit Header 透明化與互動修正 */
 header[data-testid="stHeader"] {{
-            background: transparent !important;
-            z-index: 99999 !important;
-            pointer-events: none !important;
-        }}
-        
-        header[data-testid="stHeader"] * {{
-            pointer-events: auto !important;
-        }}
-        
-        div[data-testid="stSidebarCollapsedControl"],
-        div[data-testid="collapsedControl"] {{
-            z-index: 2147483647 !important;
-            pointer-events: auto !important;
-            opacity: 1 !important;
-        }}
+    background: transparent !important;
+    z-index: 999998 !important;
+    pointer-events: none !important; /* 讓點擊穿透 Header 空白處 */
+    height: 70px !important;
+}}
 
+/* 恢復 Header 內控制項 (如選單按鈕、三點選單) 的互動 */
+header[data-testid="stHeader"] > div {{
+    pointer-events: auto !important;
+}}
+
+/* [Critical] 強制顯示並提升側邊欄展開按鈕層級 */
+section[data-testid="stSidebar"] > div:first-child {{
+    z-index: 999999 !important;
+}}
+div[data-testid="stSidebarCollapsedControl"],
+div[data-testid="collapsedControl"],
+button[kind="header"] {{
+    z-index: 999999 !important;
+    pointer-events: auto !important;
+    display: flex !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    color: rgba(255, 255, 255, 0.8) !important;
+}}
+
+/* 手機版適配 */
 @media (max-width: 720px) {{
   iframe[data-sheep-brand="1"],
   iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
-    width: 270px !important;
-    height: 78px !important;
+    left: 50px !important; /* 手機版左側空間較小 */
+    width: 240px !important;
+    height: 70px !important;
+    top: 2px !important;
+  }}
+  
+  /* 確保手機版漢堡選單不被遮擋 */
+  div[data-testid="stSidebarCollapsedControl"] {{
+      margin-left: 0 !important;
   }}
 }}
 
+/* 調整主內容頂部間距，避免被 Header 蓋住 */
 div[data-testid="stAppViewContainer"] > .main {{
-  padding-top: 0 !important;
+  padding-top: 40px !important;
 }}
 
 {dim_css}
