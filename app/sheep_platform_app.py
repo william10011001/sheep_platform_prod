@@ -861,7 +861,7 @@ def _style() -> None:
         .pm_cell.pm_reserved { background: #f59e0b; border-color: #d97706; }
         .pm_cell.pm_available { background: rgba(255,255,255,0.1); }
 
-        div[data-testid="stSidebarContent"] { padding-bottom: 220px !important; }
+        div[data-testid="stSidebarContent"] { padding-bottom: 40px !important; }
 
         .help_wrap { display: inline-flex; position: relative; align-items: center; margin-left: 8px; z-index: 50; }
         .help_icon {
@@ -885,7 +885,6 @@ def _style() -> None:
         }
         .help_wrap:hover .help_tip { opacity: 1; transform: translateX(-50%) translateY(0); }
         
-        /* [專家修復] 針對左下角 User HUD 內的提示框，強制向右展開，避免被螢幕左側切斷 */
         .user_hud .help_tip {
           left: 0;
           transform: translateY(4px);
@@ -904,13 +903,14 @@ def _style() -> None:
         }
 
         .user_hud {
-          position: fixed; left: 16px; bottom: 16px; width: 268px;
+          margin-top: 24px;
+          width: 100%;
+          box-sizing: border-box;
           padding: 16px; border-radius: 12px;
           border: 1px solid var(--border);
           background: rgba(15, 23, 42, 0.85);
-          box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+          box-shadow: 0 4px 12px rgba(0,0,0,0.3);
           backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-          z-index: 100000;
         }
         .user_hud .hud_name { font-size: 15px; font-weight: 700; color: #ffffff; margin-bottom: 12px; }
         .user_hud .hud_row { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; }
@@ -2624,11 +2624,11 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
     try:
         cycle = db.get_active_cycle()
         if not cycle or "id" not in cycle:
-            st.warning("⚠️ 週期尚未初始化，系統正在嘗試建立新週期...")
+            st.warning("週期尚未初始化，系統正在嘗試建立新週期。")
             db.ensure_cycle_rollover()
             cycle = db.get_active_cycle()
             if not cycle:
-                st.error(" 週期建立失敗，請通知系統管理員檢查資料庫權限。")
+                st.error("週期建立失敗，請通知系統管理員檢查資料庫權限。")
                 return
 
         pools = db.list_factor_pools(cycle_id=int(cycle["id"])) if cycle else []
@@ -3172,8 +3172,6 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
             unsafe_allow_html=True,
         )
         
-        # [專家級 UI] 動態工作流與精準進度回饋
-        # 定義不同階段的視覺效果與動畫
         phase_color = "#94a3b8"
         is_animating = False
         
@@ -3188,7 +3186,6 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
             is_animating = True
         elif str(phase) == "grid_search":
             phase_color = "#10b981"
-            phase_icon = "⚡"
             is_animating = True
         elif str(phase) == "error":
             phase_color = "#ef4444"
@@ -3244,12 +3241,11 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                         f'<span>預估剩餘: <span style="color:#fbbf24; font-weight:bold;">{et}</span></span>'
                         f'</div>', unsafe_allow_html=True)
 
-        # [最大化錯誤顯示]
         if last_error:
-            st.error(f" 任務發生錯誤:\n\n{last_error}")
+            st.error(f"任務發生錯誤:\n\n{last_error}")
             if prog.get("debug_traceback"):
-                with st.expander(" 點擊展開詳細錯誤追蹤 (Traceback)"):
-                    st.code(prog.get("debug_traceback"), language="python")
+                with st.expander("點擊展開詳細錯誤追蹤 (Traceback)"):
+                    st.code(prog.get("debug_traceback"), language="python") 
 
         # Progress visualization
         sync = prog.get("sync")
@@ -3573,14 +3569,14 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
                     display: flex; justify-content: space-between; align-items: center;">
             <div style="display: flex; align-items: center; gap: 16px;">
                 <div style="width: 48px; height: 48px; background: linear-gradient(135deg, #FFD700 0%, #FF8C00 100%); border-radius: 12px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 16px rgba(255, 215, 0, 0.4);">
-                    <span style="font-size: 24px;">🏆</span>
+                    <span style="font-size: 24px; font-weight: bold; color: #fff;">1</span>
                 </div>
                 <div>
                     <div style="display: flex; align-items: center;">
-                        <h2 style="margin: 0; padding: 0; font-size: 28px; font-weight: 900; background: linear-gradient(135deg, #FFD700 0%, #FFFFFF 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 1px;">英雄榜</h2>
+                        <h2 style="margin: 0; padding: 0; font-size: 28px; font-weight: 900; background: linear-gradient(135deg, #FFD700 0%, #FFFFFF 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 1px;">排行榜</h2>
                         """ + _help_icon_html("此區塊展示全平台數據統計與排名。分為算力貢獻、積分收益、單次最高分與累積掛機時長。排名前列者將獲得專屬自訂稱號與相關權限。") + """
                     </div>
-                    <div style="font-size: 13px; color: #94a3b8; margin-top: 4px;">展示頂尖貢獻者與幸運兒。數據每分鐘更新一次。</div>
+                    <div style="font-size: 13px; color: #94a3b8; margin-top: 4px;">展示頂尖貢獻者與數據紀錄。數據每分鐘更新一次。</div>
                 </div>
             </div>
         </div>
@@ -4411,7 +4407,7 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
                         st.code(traceback.format_exc(), language="text")
                         st.stop()
 
-        st.markdown(" 新增 Pool (單筆或批量 JSON)")
+        st.markdown("新增 Pool (單筆或批量 JSON)")
         with st.expander("展開批量匯入或手動建立", expanded=False):
             batch_json = st.text_area("貼上 Pool JSON 陣列 (選填)", value="", height=200, help='格式需為 [{"name": "...", "symbol": "...", ...}, ...]')
             
@@ -4431,28 +4427,26 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
             grid_spec_json = st.text_area("單筆: grid_spec_json", value='{"fast_min":3,"fast_max":3,"slow_min":100,"slow_max":100,"rsi_thr_min":20,"rsi_thr_max":20}', height=100)
             risk_spec_json = st.text_area("單筆: risk_spec_json", value='{"tp_min":2.2,"sl_min":6.0,"max_hold_min":10,"max_hold_max":60,"max_hold_step":10}', height=100)
             
-            auto_expand_all = st.checkbox(" [超級加速] 自動套用 14 種熱門組合 (BTC/ETH × 7個週期)", value=True, help="勾選後，系統會將此策略自動複製到 BTC_USDT 與 ETH_USDT，並涵蓋 1m, 5m, 15m, 30m, 1h, 4h, 1d 所有級別。")
+            auto_expand_all = st.checkbox("自動套用 14 種熱門組合 (BTC/ETH × 7個週期)", value=True, help="勾選後，系統會將此策略自動複製到 BTC_USDT 與 ETH_USDT，並涵蓋 1m, 5m, 15m, 30m, 1h, 4h, 1d 所有級別。")
             
             if st.button("確認執行新增並派發任務", type="primary", use_container_width=True):
                 try:
                     if batch_json.strip():
-                        # 批量模式 - 專家級容錯解析
                         clean_json = batch_json.strip()
-                        # 自動修正常見的手寫 JSON 結尾錯誤（如最後多出的逗號或錯誤的括號）
                         if clean_json.endswith('}') and clean_json.count('[') > clean_json.count(']'):
                             clean_json += ']'
                         
                         try:
                             raw_data = json.loads(clean_json)
                         except json.JSONDecodeError as je:
-                            st.error(f"❌ JSON 語法錯誤：{je.msg} (行 {je.lineno}, 列 {je.colno})")
-                            st.info("💡 提示：請檢查 JSON 格式是否正確，括號是否對齊。")
+                            st.error(f"JSON 語法錯誤：{je.msg} (行 {je.lineno}, 列 {je.colno})")
+                            st.info("提示：請檢查 JSON 格式是否正確，括號是否對齊。")
                             with st.expander("查看錯誤位置上下文"):
                                 lines = clean_json.split('\n')
                                 start_err = max(0, je.lineno - 3)
                                 end_err = min(len(lines), je.lineno + 3)
                                 for i in range(start_err, end_err):
-                                    pointer = " <--- 🔴 錯誤位置附近" if (i+1) == je.lineno else ""
+                                    pointer = " <--- 錯誤位置附近" if (i+1) == je.lineno else ""
                                     st.code(f"{i+1}: {lines[i]}{pointer}")
                             st.stop()
 
@@ -4460,7 +4454,6 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
                         success_count = 0
                         for p_idx, p_item in enumerate(pool_list):
                             try:
-                                # 這裡修正了原先重複定義 pool_list 的錯誤，並統一口徑使用 auto_expand 參數
                                 pids = db.create_factor_pool(
                                     cycle_id=cycle_id,
                                     name=str(p_item.get("name", f"Imported Pool {p_idx+1}")),
@@ -4479,9 +4472,8 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
                             except Exception as item_e:
                                 st.error(f"第 {p_idx+1} 個物件匯入失敗：{item_e}")
                         
-                        st.success(f"✅ 成功處理 {success_count} 個策略分片！")
+                        st.success(f"成功處理 {success_count} 個策略分片。")
                     else:
-                        # 單筆模式
                         grid_spec = json.loads(grid_spec_json)
                         risk_spec = json.loads(risk_spec_json)
                         pids = db.create_factor_pool(
@@ -4489,7 +4481,7 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
                             name=str(name),
                             symbol=str(symbol),
                             timeframe_min=int(tf_min),
-                            years=int(years), # 修正：原先誤寫為 tf_min
+                            years=int(years),
                             family=str(family),
                             grid_spec=dict(grid_spec),
                             risk_spec=dict(risk_spec),
@@ -4504,7 +4496,7 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
                     time.sleep(1)
                     st.rerun()
                 except Exception as fatal_e:
-                    st.error(f" 建立失敗：{str(fatal_e)}")
+                    st.error(f"建立失敗：{str(fatal_e)}")
                     st.code(traceback.format_exc(), language="python")
 
         st.markdown("同步任務")

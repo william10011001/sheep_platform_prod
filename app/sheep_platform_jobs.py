@@ -214,15 +214,20 @@ class JobManager:
         return None
 
     def _scheduler_loop(self) -> None:
+        try:
+            import psutil
+            has_psutil = True
+        except ImportError:
+            has_psutil = False
+
         while True:
             try:
-                # 定期清理殭屍任務 (每 5 分鐘執行一次)
                 if time.time() - getattr(self, "_last_zombie_clean", 0) > 300:
                     self._last_zombie_clean = time.time()
                     try:
                         cleared = db.clean_zombie_tasks(timeout_minutes=15)
                         if cleared > 0:
-                            print(f"[SYSTEM] 偵測到斷線，已自動重置 {cleared} 個殭屍任務回待分配狀態")
+                            print(f"[SYSTEM] 偵測到斷線，已重置 {cleared} 個無回應任務。")
                     except Exception:
                         pass
 
@@ -233,24 +238,18 @@ class JobManager:
                     conn.close()
 
                 started_any = False
-                # [專家級資源防護] 避免伺服器因過度併發 14 種組合任務而內存崩潰
-                # [專家修復] 處理 psutil 未安裝引發的 ModuleNotFoundError 無窮迴圈死機問題
+                
                 mem_free_pct = 1.0
-                try:
-                    import psutil
+                if has_psutil:
                     mem_free_pct = psutil.virtual_memory().available / psutil.virtual_memory().total
-                except ImportError:
-                    pass # 若未安裝 psutil 則略過記憶體檢查，確保排程器繼續運作
                 
                 with self._lock:
                     self._cleanup_finished_locked()
                     alive = sum(1 for t in self._threads.values() if t.is_alive())
 
-                    # 如果內存剩餘不足 15%，強制不啟動新任務，防止系統掛死
                     if mem_free_pct < 0.15:
-                        if alive > 0: # 僅在還有任務跑時列印，避免洗版
-                             print(f"[RESOURCES ALERT] 內存不足 ({mem_free_pct:.1%}), 暫緩發放新任務...")
-                        # [專家級修復] 使用 break 而不是 alive=999999 來跳出調度，避免破壞外部迴圈邏輯與鎖機制
+                        if alive > 0:
+                             print(f"[SYSTEM] 系統記憶體低於安全閾值 ({mem_free_pct:.1%})，暫緩新任務發放。")
                         pass
                     else:
                         while alive < max(1, limit):

@@ -239,10 +239,8 @@ def init_db() -> None:
         except Exception:
             pass
         
-        # [專家級效能優化] 針對排行榜聚合查詢建立必要索引，避免全表掃描導致系統卡死
         try:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at)")
-            # 複合索引優化 Leaderboard 統計 (updated_at + status)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_mining_tasks_updated_status ON mining_tasks(updated_at, status)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_candidates_created_at ON candidates(created_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_payouts_created_at ON payouts(created_at)")
@@ -1571,12 +1569,10 @@ def clean_zombie_tasks(timeout_minutes: int = 15) -> int:
 
 def update_user_nickname(user_id: int, nickname: str) -> None:
     """
-    更新用戶暱稱 (需先在應用層檢查權限)。
-    [安全強化] 強制 HTML 轉義、去除首尾空格、限制長度 10 字元。
+    更新用戶暱稱。
     """
     conn = _conn()
     try:
-        # [資安防護] 嚴格限制：必須先截斷長度再進行 HTML Escape，否則切斷實體字元(如 &amp;)會破壞前端版面
         raw = str(nickname or "").strip()
         safe_nick = html.escape(raw[:10])
         
