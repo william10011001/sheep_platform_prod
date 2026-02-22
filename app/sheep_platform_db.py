@@ -71,7 +71,19 @@ def _conn() -> sqlite3.Connection:
     except Exception:
         pass
     try:
-        conn.execute("PRAGMA busy_timeout = 30000;")
+        conn.execute("PRAGMA busy_timeout = 60000;")
+    except Exception:
+        pass
+    try:
+        conn.execute("PRAGMA mmap_size = 268435456;")
+    except Exception:
+        pass
+    try:
+        conn.execute("PRAGMA cache_size = -20000;")
+    except Exception:
+        pass
+    try:
+        conn.execute("PRAGMA temp_store = MEMORY;")
     except Exception:
         pass
 
@@ -533,17 +545,13 @@ def ensure_cycle_rollover() -> None:
             conn.commit()
         else:
             if now_str > active["end_ts"]:
-                # [週期切換專家邏輯]
-                # 1. 關閉舊週期
                 conn.execute("UPDATE mining_cycles SET status = 'completed' WHERE id = ?", (active["id"],))
                 
-                # 2. 建立新週期
                 new_end = (now_dt + _safe_td(days=7)).isoformat()
                 cur2 = conn.execute("INSERT INTO mining_cycles (name, status, start_ts, end_ts) VALUES (?, ?, ?, ?)",
                                 (f"Cycle {active['id'] + 1}", "active", now_str, new_end))
                 new_cycle_id = cur2.lastrowid
                 
-                # 3. 深度繼承：使用 NOT EXISTS 確保幂等性（重複執行也不會爆炸）
                 try:
                     conn.execute("""
                         INSERT INTO factor_pools (

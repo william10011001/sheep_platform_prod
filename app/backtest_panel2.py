@@ -8827,9 +8827,8 @@ def app():
                     ui_logger("CPU 路徑：逐組計算完成")
         except Exception as e:
             err_msg = traceback.format_exc()
-            st.error("回測核心發生致命錯誤，已停止執行。", icon="🚨")
+            st.error("回測核心發生致命錯誤，已停止執行。")
             
-            # 使用強化版 Logger 記錄紅字
             ui_logger(f"CRITICAL EXCEPTION:\n{err_msg}", is_error=True)
             
             with st.expander("點擊查看完整錯誤堆疊 (Traceback)", expanded=True):

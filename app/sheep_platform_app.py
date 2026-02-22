@@ -890,12 +890,11 @@ def _style() -> None:
         .help_wrap:hover .help_tip { opacity: 1; transform: translateX(-50%) translateY(0); }
         
         .user_hud .help_tip {
-          left: auto;
-          right: -10px;
-          transform: translateY(4px);
+          left: 0;
+          transform: translateX(0) translateY(4px);
         }
         .user_hud .help_wrap:hover .help_tip {
-          transform: translateY(0);
+          transform: translateX(0) translateY(0);
         }
 
         .sec_h3 { font-size: 24px; font-weight: 800; color: #ffffff; margin: 32px 0 16px 0; display: flex; align-items: center; }
@@ -3377,7 +3376,7 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
 (function() {{
   try {{
     const w = window.parent || window;
-    const ms = Math.max(500, Math.min(60000, {interval_ms}));
+    const ms = Math.max(1000, Math.min(60000, {interval_ms}));
 
     const ps = w.document.querySelectorAll('button p, button div');
     let targetBtn = null;
@@ -3402,15 +3401,21 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
     w.__sheep_autorefresh_timer = setTimeout(function() {{
       try {{
         if (document.hidden) return;
+        
+        const activeEl = w.document.activeElement;
+        if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT')) {{
+            return;
+        }}
+        
         if (targetBtn && typeof targetBtn.click === 'function') {{
             targetBtn.click();
         }}
       }} catch (e) {{
-        console.warn('[AutoRefresh] 執行異常', e);
+        console.warn('AutoRefresh error', e);
       }}
     }}, ms);
   }} catch (e) {{
-    console.warn('[AutoRefresh] 初始化異常', e);
+    console.warn('AutoRefresh init error', e);
   }}
 }})();
 </script>
@@ -3886,14 +3891,14 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
         try:
             cycle = db.get_active_cycle()
             if not cycle:
-                st.warning("⚠️ 週期尚未初始化")
+                st.warning("週期尚未初始化")
                 st.write("週期", "None", "None", "None")
             else:
                 st.write("週期", cycle.get("name"), cycle.get("start_ts"), cycle.get("end_ts"))
                 
             ov = db.list_task_overview(limit=500)
         except AttributeError as ae:
-            st.error(f" 系統錯誤：管理核心函數遺失。\n\n詳細錯誤：{ae}")
+            st.error(f"系統錯誤：管理核心函數遺失。\n\n詳細錯誤：{ae}")
             ov = None
         except Exception as e:
             st.error(f" 載入管理總覽時發生錯誤：{str(e)}")

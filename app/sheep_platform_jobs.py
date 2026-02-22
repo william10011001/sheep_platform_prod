@@ -593,7 +593,7 @@ class JobManager:
                 _commit()
 
             best_candidate_id = None
-            # [專家修復] 除了資料庫記錄，額外備份一份到磁碟存儲空間，防止 DB 鎖定或損壞
+            
             disk_data = {
                 "task_info": task,
                 "timestamp": db.utc_now_iso(),
@@ -607,7 +607,6 @@ class JobManager:
                     best_candidate_id = int(cid)
                 disk_data["candidates"].append({"id": cid, "score": sc, "params": full_params, "metrics": metrics})
 
-            # 執行磁碟備份
             db.save_candidate_to_disk(task_id, user_id, pool_id, disk_data)
 
             progress["best_candidate_id"] = int(best_candidate_id) if best_candidate_id is not None else None
@@ -615,6 +614,9 @@ class JobManager:
             progress["updated_at"] = db.utc_now_iso()
             db.update_task_progress(task_id, progress)
             db.update_task_status(task_id, "completed", finished=True)
+            
+            import gc
+            gc.collect()
 
         except Exception as e:
             import traceback, sys
