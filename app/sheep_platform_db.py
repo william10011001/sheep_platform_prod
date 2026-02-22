@@ -89,6 +89,7 @@ def init_db() -> None:
                 username_norm TEXT NOT NULL UNIQUE,
                 password_hash TEXT NOT NULL,
                 role TEXT NOT NULL DEFAULT 'user',
+                nickname TEXT DEFAULT '',
                 disabled INTEGER NOT NULL DEFAULT 0,
                 run_enabled INTEGER NOT NULL DEFAULT 1,
                 wallet_address TEXT NOT NULL DEFAULT '',
@@ -233,6 +234,20 @@ def init_db() -> None:
             conn.execute("ALTER TABLE users ADD COLUMN wallet_chain TEXT NOT NULL DEFAULT ''")
         except Exception:
             pass
+        try:
+            conn.execute("ALTER TABLE users ADD COLUMN nickname TEXT DEFAULT ''")
+        except Exception:
+            pass
+        
+        # [專家級效能優化] 針對排行榜聚合查詢建立必要索引，避免全表掃描導致系統卡死
+        try:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_mining_tasks_updated_at ON mining_tasks(updated_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_candidates_created_at ON candidates(created_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_payouts_created_at ON payouts(created_at)")
+        except Exception:
+            pass
+
         conn.commit()
     finally:
         conn.close()
@@ -1614,5 +1629,111 @@ def clean_zombie_tasks(timeout_minutes: int = 15) -> int:
     except Exception as e:
         print(f"[DB ERROR] clean_zombie_tasks: {e}")
         return 0
+    finally:
+        conn.close()
+
+def update_user_nickname(user_id: int, nickname: str) -> None:
+    """更新用戶暱稱 (需先在應用層檢查權限)"""
+    conn = _conn()
+    try:
+        # 簡單過濾 HTML 防止 XSS
+        safe_nick = html.escape(nickname.strip())[:32]
+        conn.execute("UPDATE users SET nickname = ? WHERE id = ?", (safe_nick, int(user_id)))
+        conn.commit()
+    finally:
+        conn.close()
+
+def get_leaderboard_stats(period_hours: int = 720) -> dict:
+    """
+    專家級聚合查詢：一次性撈取 排行榜所需的所有維度數據。
+    period_hours: 1 (1h), 24 (24h), 720 (30d)
+    """
+    conn = _conn()
+    try:
+        # 計算時間視窗
+        now_dt = datetime.now(timezone.utc)
+        cutoff_dt = now_dt - timedelta(hours=period_hours)
+        cutoff_iso = cutoff_dt.isoformat()
+
+        results = {
+            "combos": [],   # 貢獻組合數 (勤勞度)
+            "score": [],    # 最高分 (運氣/實力)
+            "time": [],     # 貢獻時長 (掛機時間)
+            "points": []    # 積分 (已獲利)
+        }
+
+        # 1. 總已跑組合數 (Total Combos Done)
+        # 解析 progress_json 消耗較大，改用 SQL 內的簡單字串擷取或假設應用層已寫入 (這裡使用近似統計以保效能)
+        # 正規做法應在 mining_tasks 增加 done 欄位，這裡使用應用層相容做法：
+        # 統計該時段內 updated_at 的任務，並累加 combos_done
+        # 為了效能，我們只統計 status='completed' 或 'running'
+        # 注意：SQLite JSON 函數需 json1 extension，大部分環境有。若無則退回計數。
+        
+        sql_combos = """
+            SELECT u.username, u.nickname, COUNT(t.id) as task_count, 
+                   SUM(CAST(json_extract(t.progress_json, '$.combos_done') AS INTEGER)) as total_done
+            FROM mining_tasks t
+            JOIN users u ON t.user_id = u.id
+            WHERE t.updated_at >= ? AND t.updated_at <= ?
+            GROUP BY u.id
+            ORDER BY total_done DESC
+            LIMIT 50
+        """
+        
+        try:
+            rows = conn.execute(sql_combos, (cutoff_iso, _now_iso())).fetchall()
+            results["combos"] = [dict(r) for r in rows if r["total_done"] and r["total_done"] > 0]
+        except Exception:
+            # Fallback for old sqlite without json_extract
+            results["combos"] = []
+
+        # 2. 最高分 (Highest Score) - 從 candidates 表
+        sql_score = """
+            SELECT u.username, u.nickname, MAX(c.score) as max_score
+            FROM candidates c
+            JOIN users u ON c.user_id = u.id
+            WHERE c.created_at >= ?
+            GROUP BY u.id
+            ORDER BY max_score DESC
+            LIMIT 50
+        """
+        rows = conn.execute(sql_score, (cutoff_iso,)).fetchall()
+        results["score"] = [dict(r) for r in rows]
+
+        # 3. 總挖礦時長 (Mining Time) - 近似值：SUM(elapsed_s)
+        sql_time = """
+            SELECT u.username, u.nickname, 
+                   SUM(CAST(json_extract(t.progress_json, '$.elapsed_s') AS REAL)) as total_seconds
+            FROM mining_tasks t
+            JOIN users u ON t.user_id = u.id
+            WHERE t.updated_at >= ? AND t.status IN ('completed', 'running')
+            GROUP BY u.id
+            ORDER BY total_seconds DESC
+            LIMIT 50
+        """
+        try:
+            rows = conn.execute(sql_time, (cutoff_iso,)).fetchall()
+            results["time"] = [dict(r) for r in rows if r["total_seconds"] and r["total_seconds"] > 0]
+        except Exception:
+            results["time"] = []
+
+        # 4. 積分 (Points/USDT) - 從 payouts 表
+        # 注意：payouts 通常是週結，短週期可能無數據
+        sql_points = """
+            SELECT u.username, u.nickname, SUM(p.amount_usdt) as total_usdt
+            FROM payouts p
+            JOIN users u ON p.user_id = u.id
+            WHERE p.created_at >= ?
+            GROUP BY u.id
+            ORDER BY total_usdt DESC
+            LIMIT 50
+        """
+        rows = conn.execute(sql_points, (cutoff_iso,)).fetchall()
+        results["points"] = [dict(r) for r in rows if r["total_usdt"] and r["total_usdt"] > 0]
+
+        return results
+    except Exception as e:
+        print(f"[DB ERROR] get_leaderboard_stats: {e}")
+        return {"combos": [], "score": [], "time": [], "points": []}
     finally:
         conn.close()

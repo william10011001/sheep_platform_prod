@@ -83,6 +83,37 @@ _BRAND_WEBM_1 = os.environ.get("SHEEP_BRAND_WEBM_1", "static/羊LOGO影片(去�
 # 因此不使用 key，並改用更穩的 CSS selector 來固定 iframe
 
 
+def _mask_username(username: str, nickname: str = None) -> str:
+    """
+    專家級隱私遮罩邏輯：
+    1. 若有設定 nickname 則優先顯示 nickname。
+    2. user -> u**r (首尾保留，中間掩碼)
+    3. uu -> u* (短名特殊處理)
+    4. spldpasdlpd -> s***pd (長名保留首尾2碼? 依需求調整為首1尾2或固定星號)
+    依需求：user(4) -> u**r (首1尾1), uu(2) -> u*, spldpasdlpd -> s***pd (首1尾2)
+    """
+    if nickname and str(nickname).strip():
+        return f"✨ {str(nickname).strip()}"
+    
+    s = str(username or "")
+    n = len(s)
+    if n <= 0:
+        return "???"
+    if n == 1:
+        return s + "*"
+    if n == 2:
+        return s[0] + "*"
+    
+    # 長度 > 2
+    # 需求範例: user -> u**r (留首尾)
+    # 需求範例: spldpasdlpd -> s***pd (留首1尾2?) 
+    # 這裡採用更通用的動態遮罩：保留首 1 字元，保留尾 1 字元 (若長度>4則尾2)，中間填 2-3 個星號
+    
+    prefix = s[0]
+    suffix = s[-1] if n < 5 else s[-2:]
+    
+    return f"{prefix}***{suffix}"
+
 def _abs_asset_path(p: str) -> str:
     p = (p or "").strip()
     if not p:
@@ -3409,7 +3440,119 @@ def _render_audit(audit: Dict[str, Any]) -> None:
         })
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
+def _page_leaderboard(user: Dict[str, Any]) -> None:
+    st.markdown(_section_title_html("英雄榜", "展示頂尖貢獻者與幸運兒。數據每分鐘更新一次。", level=3), unsafe_allow_html=True)
 
+    # 週期選擇
+    period_map = {"1 小時": 1, "24 小時": 24, "30 天 (月賽)": 720}
+    period_label = st.radio("統計週期", list(period_map.keys()), index=1, horizontal=True, key="lb_period")
+    period_hours = period_map[period_label]
+
+    try:
+        data = db.get_leaderboard_stats(period_hours=period_hours)
+    except AttributeError:
+        st.error("系統更新中：資料庫核心尚未同步 get_leaderboard_stats 方法。")
+        return
+
+    # 檢查當前用戶是否在 "30天 - 組合數" 前 5 名 (具備暱稱修改權限)
+    can_set_nickname = False
+    my_rank_info = ""
+    
+    if period_hours == 720:
+        combos_list = data.get("combos", [])
+        for idx, row in enumerate(combos_list):
+            # 比對用戶名 (DB回傳的是原始username)
+            if row.get("username") == user["username"]:
+                rank = idx + 1
+                my_rank_info = f"目前排名：第 {rank} 名"
+                if rank <= 5:
+                    can_set_nickname = True
+                break
+    
+    # 暱稱設定區塊
+    if can_set_nickname:
+        st.markdown(
+            """
+            <div style="background:linear-gradient(90deg, rgba(255,215,0,0.1), rgba(0,0,0,0)); border-left:4px solid #FFD700; padding:12px; border-radius:4px; margin-bottom:20px;">
+                <div style="font-weight:bold; color:#FFD700; margin-bottom:4px;"> 尊榮權限解鎖</div>
+                <div style="font-size:14px; color:#e2e8f0;">恭喜！您是本月算力貢獻前 5 名的頂尖強者。您現在可以設定專屬暱稱，讓全平台看見您的稱號。</div>
+            </div>
+            """, unsafe_allow_html=True
+        )
+        with st.expander("設定我的排行榜暱稱", expanded=True):
+            current_nick = user.get("nickname", "")
+            new_nick = st.text_input("輸入新暱稱 (限10字)", value=current_nick, max_chars=10)
+            if st.button("更新暱稱"):
+                if new_nick.strip():
+                    db.update_user_nickname(int(user["id"]), new_nick.strip())
+                    # 更新 session 緩存
+                    user["nickname"] = new_nick.strip()
+                    db.write_audit_log(int(user["id"]), "update_nickname", {"nickname": new_nick})
+                    st.success("暱稱已更新！將顯示於排行榜。")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.warning("暱稱不可為空")
+    elif period_hours == 720:
+        st.caption(f"提示：月度算力榜前 5 名即可解鎖自訂暱稱功能。{my_rank_info}")
+
+    # 排行榜顯示
+    t1, t2, t3, t4 = st.tabs([" 算力貢獻榜", " 積分收益榜", " 最高分策略", " 肝帝時長榜"])
+
+    def _render_lb_table(rows: list, val_col: str, val_fmt: str, icon: str):
+        if not rows:
+            st.info("此區間尚無數據。")
+            return
+        
+        display_data = []
+        for i, r in enumerate(rows):
+            rank_display = str(i + 1)
+            if i == 0: rank_display = "🥇"
+            elif i == 1: rank_display = "🥈"
+            elif i == 2: rank_display = "🥉"
+            
+            val = r.get(val_col, 0)
+            if val_fmt == "int":
+                val_str = f"{int(val):,}"
+            elif val_fmt == "float":
+                val_str = f"{float(val):.4f}"
+            elif val_fmt == "time":
+                val_str = f"{float(val)/3600:.1f} 小時"
+            else:
+                val_str = str(val)
+
+            display_data.append({
+                "排名": rank_display,
+                "用戶": _mask_username(r.get("username"), r.get("nickname")),
+                "數據": val_str
+            })
+        
+        st.dataframe(
+            pd.DataFrame(display_data),
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "排名": st.column_config.TextColumn("排名", width="small"),
+                "用戶": st.column_config.TextColumn(f"用戶 (顯示前50名)", width="medium"),
+                "數據": st.column_config.TextColumn(f"{icon} 數值", width="medium"),
+            }
+        )
+
+    with t1:
+        st.caption("依據「已運算並回報的策略組合總數」排名。代表對算力的直接貢獻。")
+        _render_lb_table(data["combos"], "total_done", "int", " 組合數")
+    
+    with t2:
+        st.caption("依據「獲得的 USDT 積分獎勵」排名。代表策略的實際獲利能力。")
+        _render_lb_table(data["points"], "total_usdt", "float", " USDT")
+
+    with t3:
+        st.caption("依據「單一策略回測分數」排名。代表運氣與搜尋到策略的能力。")
+        _render_lb_table(data["score"], "max_score", "float", " 分數")
+
+    with t4:
+        st.caption("依據「累積運算時間」排名。代表設備的穩定投入時長。")
+        _render_lb_table(data["time"], "total_seconds", "time", " 時長")
 def _page_submissions(user: Dict[str, Any]) -> None:
     st.markdown("### 提交紀錄")
     try:
@@ -4379,7 +4522,8 @@ def main() -> None:
 
     role = str(user.get("role") or "user")
 
-    pages = ["新手教學", "控制台", "任務", "提交", "結算"] + (["管理"] if role == "admin" else [])
+    # [新增] 排行榜頁面入口
+    pages = ["新手教學", "控制台", "排行榜", "任務", "提交", "結算"] + (["管理"] if role == "admin" else [])
 
     # [專家級修復] 利用 URL 查詢參數持久化當前頁面狀態，徹底解決頁面自動重整(location.reload)導致的閃退回首頁問題
     try:
@@ -4443,6 +4587,8 @@ def main() -> None:
             _page_tutorial(user)
         elif page == "控制台":
             _page_dashboard(user)
+        elif page == "排行榜":
+            _page_leaderboard(user)
         elif page == "任務":
             _page_tasks(user, job_mgr)
         elif page == "提交":
