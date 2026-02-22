@@ -160,19 +160,19 @@ iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
 /* 隱藏原生側邊欄控制鈕，改由自訂模組接管 */
         div[data-testid="stSidebarCollapsedControl"],
         div[data-testid="collapsedControl"],
-        button[kind="headerNoPadding"] {
+        button[kind="headerNoPadding"] {{
             display: none !important;
-        }
+        }}
         
-        header[data-testid="stHeader"] {
+        header[data-testid="stHeader"] {{
             background: transparent !important;
             z-index: 99999 !important;
             pointer-events: none !important;
-        }
+        }}
         
-        header[data-testid="stHeader"] * {
+        header[data-testid="stHeader"] * {{
             pointer-events: auto !important;
-        }
+        }}
 
 @media (max-width: 720px) {{
   iframe[data-sheep-brand="1"],
