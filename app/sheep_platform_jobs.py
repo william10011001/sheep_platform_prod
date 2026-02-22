@@ -624,30 +624,31 @@ class JobManager:
             
             try:
                 current_t = db.get_task(task_id)
-                prog = _json_load(current_t.get("progress_json") or "{}") if current_t else {}
-                
-                prog["phase"] = "error"
-                prog["last_error"] = f"RuntimeError: {str(e)}"
-                prog["debug_traceback"] = err_trace
-                prog["error_ts"] = db.utc_now_iso()
-                
-                db.update_task_progress(task_id, prog)
-                db.update_task_status(task_id, "error")
-                
-                db.write_audit_log(
-                    user_id=int(current_t["user_id"]) if current_t else None,
-                    action="task_execution_failed",
-                    payload={"task_id": task_id, "exception": str(e), "trace": err_trace[:2000]}
-                )
-                
+                if current_t:
+                    prog = _json_load(current_t.get("progress_json") or "{}")
+                    prog["phase"] = "error"
+                    prog["last_error"] = f"系統執行異常: {str(e)}"
+                    prog["debug_traceback"] = err_trace
+                    prog["error_ts"] = db.utc_now_iso()
+                    
+                    db.update_task_progress(task_id, prog)
+                    db.update_task_status(task_id, "error")
+                    
+                    db.write_audit_log(
+                        user_id=int(current_t.get("user_id") or 0),
+                        action="task_execution_failed",
+                        payload={"task_id": task_id, "exception": str(e), "trace": err_trace[:2000]}
+                    )
+                else:
+                    db.update_task_status(task_id, "error")
+            except Exception as nested_err:
+                print(f"[CRITICAL] 錯誤處理器本身發生異常: {nested_err}\n{traceback.format_exc()}", file=sys.stderr)
+            finally:
                 with self._lock:
                     if task_id in self._threads:
                         self._threads.pop(task_id, None)
                     if task_id in self._stop_flags:
                         self._stop_flags.pop(task_id, None)
-                        
-            except Exception as nested_err:
-                print(f"[CRITICAL] 錯誤處理器本身也發生錯誤: {nested_err}\n{traceback.format_exc()}", file=sys.stderr)
 
 
 JOB_MANAGER = JobManager()

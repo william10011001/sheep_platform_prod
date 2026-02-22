@@ -838,11 +838,13 @@ def finish_task(
     except Exception:
         server_dh = {"data_hash": "", "data_hash_ts": ""}
 
-    worker_dh = str((body.final_progress or {}).get("data_hash") or body.data_hash or "").strip()
+    final_prog = body.final_progress if isinstance(body.final_progress, dict) else {}
+    worker_dh = str(final_prog.get("data_hash") or getattr(body, "data_hash", "") or "").strip()
+    
     if server_dh.get("data_hash") and worker_dh and str(server_dh.get("data_hash")) != worker_dh:
         try:
-            prog = dict(body.final_progress or {})
-            prog["last_error"] = "data_hash_mismatch"
+            prog = dict(final_prog)
+            prog["last_error"] = "資料校驗不符，已拒絕提交"
             prog["server_data_hash"] = str(server_dh.get("data_hash") or "")
             prog["worker_data_hash"] = str(worker_dh)
             prog["updated_at"] = _utc_iso()

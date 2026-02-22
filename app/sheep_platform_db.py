@@ -1343,29 +1343,42 @@ def get_task(task_id: int) -> Optional[dict]:
         conn.close()
 
 def update_task_progress(task_id: int, progress: dict) -> None:
-    conn = _conn()
-    try:
-        # [專家級修復] 更新進度時必須同時更新 last_heartbeat
-        # 否則伺服器端執行的任務會因為 last_heartbeat 停滯，而被 clean_zombie_tasks 誤殺！
-        conn.execute(
-            "UPDATE mining_tasks SET progress_json = ?, updated_at = ?, last_heartbeat = ? WHERE id = ?", 
-            (json.dumps(progress, ensure_ascii=False), _now_iso(), _now_iso(), task_id)
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    for attempt in range(5):
+        try:
+            conn = _conn()
+            try:
+                conn.execute(
+                    "UPDATE mining_tasks SET progress_json = ?, updated_at = ?, last_heartbeat = ? WHERE id = ?", 
+                    (json.dumps(progress, ensure_ascii=False), _now_iso(), _now_iso(), task_id)
+                )
+                conn.commit()
+                break
+            finally:
+                conn.close()
+        except Exception as e:
+            if attempt == 4:
+                print(f"[DB ERROR] update_task_progress 放棄重試: {e}")
+                raise e
+            time.sleep(0.05 * (2 ** attempt))
 
 def update_task_status(task_id: int, status: str, finished: bool = False) -> None:
-    conn = _conn()
-    try:
-        # [專家級修復] 狀態變更時亦同步更新 heartbeat，防範殭屍誤判
-        conn.execute(
-            "UPDATE mining_tasks SET status = ?, updated_at = ?, last_heartbeat = ? WHERE id = ?", 
-            (status, _now_iso(), _now_iso(), task_id)
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    for attempt in range(5):
+        try:
+            conn = _conn()
+            try:
+                conn.execute(
+                    "UPDATE mining_tasks SET status = ?, updated_at = ?, last_heartbeat = ? WHERE id = ?", 
+                    (status, _now_iso(), _now_iso(), task_id)
+                )
+                conn.commit()
+                break
+            finally:
+                conn.close()
+        except Exception as e:
+            if attempt == 4:
+                print(f"[DB ERROR] update_task_status 放棄重試: {e}")
+                raise e
+            time.sleep(0.05 * (2 ** attempt))
 
 def clear_candidates_for_task(task_id: int) -> None:
     conn = _conn()

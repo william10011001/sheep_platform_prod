@@ -878,18 +878,20 @@ def _style() -> None:
         .help_wrap:hover .help_icon { border-color: var(--accent); background: var(--accent-glow); color: #ffffff; }
         .help_tip {
           position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%) translateY(4px);
-          width: max-content; max-width: 320px; padding: 12px 16px;
-          border-radius: 8px; background: #1e293b;
-          border: 1px solid #334155; box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+          width: max-content; max-width: 260px; padding: 12px 16px;
+          border-radius: 8px; background: rgba(30, 41, 59, 0.95);
+          border: 1px solid rgba(255, 255, 255, 0.1); box-shadow: 0 16px 40px rgba(0, 0, 0, 0.8);
           color: #f8fafc; font-size: 13px; line-height: 1.5;
-          opacity: 0; pointer-events: none; transition: all 0.2s ease; backdrop-filter: blur(8px);
-          z-index: 999999;
+          opacity: 0; pointer-events: none; transition: all 0.2s ease; backdrop-filter: blur(12px);
+          z-index: 2147483647;
           white-space: normal;
+          word-break: break-word;
         }
         .help_wrap:hover .help_tip { opacity: 1; transform: translateX(-50%) translateY(0); }
         
         .user_hud .help_tip {
-          left: 0;
+          left: auto;
+          right: -10px;
           transform: translateY(4px);
         }
         .user_hud .help_wrap:hover .help_tip {
@@ -3375,13 +3377,12 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
 (function() {{
   try {{
     const w = window.parent || window;
-    const ms = Math.max(300, Math.min(60000, {interval_ms}));
+    const ms = Math.max(500, Math.min(60000, {interval_ms}));
 
-    // [專家級修復] 尋找並隱藏觸發按鈕，絕不能使用 display: none，否則 JS .click() 會被瀏覽器擋下
-    const ps = w.document.querySelectorAll('button p');
+    const ps = w.document.querySelectorAll('button p, button div');
     let targetBtn = null;
     ps.forEach(p => {{
-        if (p.innerText === 'AutoRefreshHiddenBtn') {{
+        if (p.textContent && p.textContent.trim() === 'AutoRefreshHiddenBtn') {{
             targetBtn = p.closest('button');
             if (targetBtn) {{
                 targetBtn.style.opacity = '0';
@@ -3389,9 +3390,11 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                 targetBtn.style.width = '1px';
                 targetBtn.style.height = '1px';
                 targetBtn.style.pointerEvents = 'none';
+                targetBtn.style.overflow = 'hidden';
             }}
         }}
     }});
+
     if (w.__sheep_autorefresh_timer) {{
       clearTimeout(w.__sheep_autorefresh_timer);
     }}
@@ -3399,17 +3402,15 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
     w.__sheep_autorefresh_timer = setTimeout(function() {{
       try {{
         if (document.hidden) return;
-        if (targetBtn) {{
-            targetBtn.click(); // 觸發 Streamlit 原生 rerun，保留狀態不閃爍
-        }} else {{
-            w.location.reload(); // 防呆退回
+        if (targetBtn && typeof targetBtn.click === 'function') {{
+            targetBtn.click();
         }}
       }} catch (e) {{
-        console.warn('[autorefresh] rerun failed', e);
+        console.warn('[AutoRefresh] 執行異常', e);
       }}
     }}, ms);
   }} catch (e) {{
-    console.warn('[autorefresh] init failed', e);
+    console.warn('[AutoRefresh] 初始化異常', e);
   }}
 }})();
 </script>
