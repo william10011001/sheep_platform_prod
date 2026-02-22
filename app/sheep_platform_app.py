@@ -3181,25 +3181,24 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
     # - keep_polling=True：使用者點過「開始全部任務」(server) 或 run_enabled=True(worker)
     #   即使暫時沒任務，也會持續刷新，才能無縫接新任務。
     if auto_refresh and (any_active or keep_polling):
-        # 重要：不要在 Streamlit 腳本內 time.sleep()，多人同時進站會把執行緒睡死 -> 網站像「進不去」
-        # 改成前端計時器觸發 reload（非阻塞），伺服器不會被睡眠霸佔
         try:
             base_s = float(refresh_s)
         except Exception:
             base_s = 1.0
 
-        # 沒有任務但仍 keep_polling 時，至少 3 秒一次，避免空轉把 DB 打爆
         if not any_active:
             base_s = max(base_s, 3.0)
 
-        # 夾住範圍，避免有人把 refresh 設成 0.1 秒直接 DDOS 自己
         base_s = float(min(30.0, max(0.8, base_s)))
         interval_ms = int(base_s * 1000)
 
-        # 加一點 jitter，避免所有人同一刻打到 cache / DB（stampede）
         try:
             interval_ms = int(interval_ms + random.randint(0, 250))
         except Exception:
+            pass
+
+        # [專家級修復] 放置一個隱藏按鈕，透過 JS 觸發 Streamlit 原生 rerun，徹底消滅全頁面刷新的閃爍與效能問題
+        if st.button("AutoRefreshHiddenBtn", key="hidden_refresh_btn", use_container_width=False):
             pass
 
         st.components.v1.html(
@@ -3210,18 +3209,30 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
     const w = window.parent || window;
     const ms = Math.max(300, Math.min(60000, {interval_ms}));
 
-    // 每次 rerun 都先清掉舊 timer，避免累積多個 timer 造成瘋狂重整
+    // 尋找並隱藏觸發按鈕
+    const ps = w.document.querySelectorAll('button p');
+    let targetBtn = null;
+    ps.forEach(p => {{
+        if (p.innerText === 'AutoRefreshHiddenBtn') {{
+            targetBtn = p.closest('button');
+            if (targetBtn) targetBtn.style.display = 'none';
+        }}
+    }});
+
     if (w.__sheep_autorefresh_timer) {{
       clearTimeout(w.__sheep_autorefresh_timer);
     }}
 
     w.__sheep_autorefresh_timer = setTimeout(function() {{
       try {{
-        // 分頁不在前景就不要刷，避免背景分頁一直打爆伺服器
         if (document.hidden) return;
-        w.location.reload();
+        if (targetBtn) {{
+            targetBtn.click(); // 觸發 Streamlit 原生 rerun，保留狀態不閃爍
+        }} else {{
+            w.location.reload(); // 防呆退回
+        }}
       }} catch (e) {{
-        console.warn('[autorefresh] reload failed', e);
+        console.warn('[autorefresh] rerun failed', e);
       }}
     }}, ms);
   }} catch (e) {{

@@ -4234,11 +4234,10 @@ reverse_mode: bool = False) -> Dict:
     else:
         sig = sig_result
 
-    # 判斷是否需要走 per-entry 模擬 (OB_FVG 區間模式 或 SMC)
+    # 判斷是否需要走 per-entry 模擬 (僅限 OB_FVG 區間模式)
     is_ob_range = (family == "OB_FVG" and family_params.get("ob_range_based", False))
-    is_smc = (family == "SMC")
 
-    if (is_ob_range or is_smc) and zone_arrays is not None:
+    if is_ob_range and zone_arrays is not None:
         # 區間模式：使用 per-entry 模擬
         zone_ob_top, zone_ob_bottom, zone_fvg_top, zone_fvg_bottom, ob_idx_arr, highest_arr, lowest_arr = zone_arrays
         if reverse_mode:

@@ -96,6 +96,7 @@ class JobManager:
 
         self._scheduler = threading.Thread(target=self._scheduler_loop, daemon=True)
         self._scheduler.start()
+        self._last_zombie_clean = time.time()
 
     def is_running(self, task_id: int) -> bool:
         with self._lock:
@@ -216,6 +217,16 @@ class JobManager:
     def _scheduler_loop(self) -> None:
         while True:
             try:
+                # 定期清理殭屍任務 (每 5 分鐘執行一次)
+                if time.time() - getattr(self, "_last_zombie_clean", 0) > 300:
+                    self._last_zombie_clean = time.time()
+                    try:
+                        cleared = db.clean_zombie_tasks(timeout_minutes=15)
+                        if cleared > 0:
+                            print(f"[SYSTEM] 偵測到斷線，已自動重置 {cleared} 個殭屍任務回待分配狀態")
+                    except Exception:
+                        pass
+
                 conn = db._conn()
                 try:
                     limit = int(db.get_setting(conn, "max_concurrent_jobs", 2))

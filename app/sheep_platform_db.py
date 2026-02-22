@@ -1590,3 +1590,20 @@ def finish_task_with_lease(task_id: int, user_id: int, worker_id: str, lease_id:
 
 def utc_now_iso() -> str:
     return _now_iso()
+
+def clean_zombie_tasks(timeout_minutes: int = 15) -> int:
+    """專家級防護：自動清理異常斷線導致卡在 running 狀態的殭屍任務"""
+    conn = _conn()
+    try:
+        cur = conn.execute(
+            "UPDATE mining_tasks SET status = 'assigned', updated_at = ? "
+            "WHERE status = 'running' AND last_heartbeat < datetime(?, ?)",
+            (_now_iso(), _now_iso(), f"-{timeout_minutes} minutes")
+        )
+        conn.commit()
+        return cur.rowcount
+    except Exception as e:
+        print(f"[DB ERROR] clean_zombie_tasks: {e}")
+        return 0
+    finally:
+        conn.close()
