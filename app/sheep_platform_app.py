@@ -141,8 +141,14 @@ header[data-testid="stHeader"] {{
 
 div[data-testid="collapsedControl"],
 div[data-testid="stSidebarCollapsedControl"] {{
-    z-index: 999999 !important;
+    position: fixed !important;
+    top: 10px !important;
+    left: 10px !important;
+    z-index: 1000000 !important;
     pointer-events: auto !important;
+    display: block !important;
+    opacity: 1 !important;
+    visibility: visible !important;
 }}
 
 @media (max-width: 720px) {{
@@ -641,13 +647,31 @@ def _style() -> None:
             box-shadow: none !important;
             border-bottom: none !important;
             z-index: 999990 !important;
-            pointer-events: none !important;
+            pointer-events: auto !important;
         }
 
         div[data-testid="collapsedControl"],
         div[data-testid="stSidebarCollapsedControl"] {
-            z-index: 999999 !important;
+            position: fixed !important;
+            top: 10px !important;
+            left: 10px !important;
+            z-index: 1000000 !important;
             pointer-events: auto !important;
+            display: block !important;
+            opacity: 1 !important;
+            visibility: visible !important;
+        }
+
+        div[data-testid="collapsedControl"] button,
+        div[data-testid="stSidebarCollapsedControl"] button {
+            background: rgba(10, 14, 20, 0.70) !important;
+            border: 1px solid rgba(255, 255, 255, 0.10) !important;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55) !important;
+            border-radius: 10px !important;
+        }
+        div[data-testid="collapsedControl"] button:hover,
+        div[data-testid="stSidebarCollapsedControl"] button:hover {
+            border-color: rgba(59, 130, 246, 0.55) !important;
         }
 
         html, body, [class*="css"]  {
@@ -3443,7 +3467,9 @@ def _render_audit(audit: Dict[str, Any]) -> None:
             "trades": m.get("trades"),
         })
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_leaderboard_stats(period_hours: int) -> Dict[str, Any]:
+    return db.get_leaderboard_stats(period_hours=period_hours)
 def _page_leaderboard(user: Dict[str, Any]) -> None:
     st.markdown(
         """
@@ -3527,7 +3553,7 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
     period_hours = period_map[period_label]
 
     try:
-        data = db.get_leaderboard_stats(period_hours=period_hours)
+        data = _cached_leaderboard_stats(period_hours=period_hours)
     except Exception as e:
         st.error(f"排行榜資料讀取錯誤：{e}")
         import traceback
