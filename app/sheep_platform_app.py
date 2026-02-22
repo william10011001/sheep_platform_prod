@@ -33,38 +33,40 @@ def _get_orig_dataframe():
     return orig
 
 def _dataframe_compat(data=None, **kwargs):
-    # 取得原始 dataframe 方法
     orig = _get_orig_dataframe()
     
-    # [Expert Compatibility] 處理舊版參數與新版 UI 寬度適配
-    # Streamlit 1.23+ 使用 use_container_width，舊版可能僅支援 width 或無此參數
+    # 參數標準化：將舊版 width="stretch" 轉換為 use_container_width
     if "width" in kwargs:
         if str(kwargs["width"]) == "stretch":
-            kwargs.pop("width")
+            kwargs.pop("width", None)
             kwargs["use_container_width"] = True
         else:
-            # 若指定數值寬度，保留之，但嘗試轉為 int
             try:
                 kwargs["width"] = int(kwargs["width"])
             except:
-                kwargs.pop("width")
+                kwargs.pop("width", None)
 
-    # 移除潛在衝突參數
-    pop_args = ["hide_index"] 
-    
+    # 針對 Streamlit 不同版本的參數相容性處理
+    # 優先嘗試帶有所有參數的呼叫
     try:
         return orig(data, **kwargs)
-    except (TypeError, Exception):
-        # Retry logic: 移除可能導致版本衝突的參數
-        clean_kwargs = {k: v for k, v in kwargs.items() if k not in pop_args}
+    except TypeError:
+        # 若失敗，通常是因為不支援 hide_index 或 use_container_width
+        # 逐步降級嘗試
+        retry_kwargs = kwargs.copy()
+        retry_kwargs.pop("hide_index", None)
         try:
-            return orig(data, **clean_kwargs)
-        except Exception:
-            # 最終防線：使用 st.table 呈現數據，確保資訊不遺失
+            return orig(data, **retry_kwargs)
+        except TypeError:
+            retry_kwargs.pop("use_container_width", None)
             try:
-                return st.table(data)
-            except:
-                st.error("表格資料渲染失敗。")
+                return orig(data, **retry_kwargs)
+            except Exception:
+                # 若仍失敗，退回 st.table (最保險的呈現方式)
+                try:
+                    return st.table(data)
+                except:
+                    st.error("數據表格顯示異常")
 
 # 執行覆蓋，僅在尚未覆蓋時進行
 if getattr(st.dataframe, "__name__", "") != "_dataframe_compat":
@@ -684,14 +686,40 @@ def _style() -> None:
         }
 
         .stApp {
-          background: radial-gradient(circle at 15% 0%, rgba(30, 58, 138, 0.15) 0%, transparent 40%),
-                      radial-gradient(circle at 85% 100%, rgba(15, 118, 110, 0.1) 0%, transparent 40%),
-                      var(--bg);
+          background-color: var(--bg);
+          background-image: 
+            radial-gradient(circle at 0% 0%, rgba(30, 58, 138, 0.08) 0%, transparent 50%),
+            radial-gradient(circle at 100% 100%, rgba(15, 118, 110, 0.05) 0%, transparent 50%);
           color: var(--text);
         }
 
+        /* 強制顯示側邊欄按鈕並置於最上層 */
+        [data-testid="stSidebarCollapsedControl"] {
+            z-index: 999999 !important;
+            display: block !important;
+            visibility: visible !important;
+            pointer-events: auto !important;
+            color: var(--text) !important;
+            background: rgba(10, 14, 23, 0.6);
+            border-radius: 4px;
+            margin-top: 4px;
+            margin-left: 4px;
+        }
+        
+        /* 針對 Streamlit 新版 Header 結構的額外修復 */
+        header[data-testid="stHeader"] {
+            background: transparent !important;
+            pointer-events: none !important;
+            z-index: 999990;
+        }
+        /* 恢復 Header 內部按鈕的互動 */
+        header[data-testid="stHeader"] > div {
+            pointer-events: auto !important;
+        }
+
         html, body, [class*="css"]  {
-          font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
+          font-family: "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+          letter-spacing: 0.01em;
         }
 
         html { color-scheme: dark; }
@@ -700,18 +728,20 @@ def _style() -> None:
         div[data-testid="stTextInput"] textarea,
         div[data-testid="stNumberInput"] input,
         div[data-testid="stTextArea"] textarea,
-        div[data-testid="stPassword"] input {
-          background: rgba(0, 0, 0, 0.2) !important;
+        div[data-testid="stPassword"] input,
+        div[data-baseweb="select"] > div {
+          background: rgba(10, 14, 20, 0.4) !important;
           border: 1px solid var(--border) !important;
-          border-radius: 8px !important;
+          border-radius: 6px !important;
           color: var(--text) !important;
-          transition: all 0.2s ease;
+          transition: border-color 0.15s ease, box-shadow 0.15s ease;
         }
         div[data-testid="stTextInput"] input:focus,
         div[data-testid="stTextArea"] textarea:focus,
-        div[data-testid="stPassword"] input:focus {
+        div[data-testid="stPassword"] input:focus,
+        div[data-baseweb="select"] > div:focus-within {
           border-color: var(--accent) !important;
-          box-shadow: 0 0 0 1px var(--accent-glow) !important;
+          box-shadow: 0 0 0 2px var(--accent-glow) !important;
         }
         div[data-testid="stTextInput"] input::placeholder,
         div[data-testid="stTextArea"] textarea::placeholder,

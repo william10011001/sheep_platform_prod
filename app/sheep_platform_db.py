@@ -1351,42 +1351,61 @@ def get_task(task_id: int) -> Optional[dict]:
         conn.close()
 
 def update_task_progress(task_id: int, progress: dict) -> None:
-    for attempt in range(5):
+    # 指數退避重試機制：解決 SQLite database is locked 問題
+    max_retries = 8
+    base_delay = 0.05
+    
+    for attempt in range(max_retries):
         try:
             conn = _conn()
             try:
+                # 啟用立即交易模式，減少死鎖機率
+                conn.execute("BEGIN IMMEDIATE")
                 conn.execute(
                     "UPDATE mining_tasks SET progress_json = ?, updated_at = ?, last_heartbeat = ? WHERE id = ?", 
                     (json.dumps(progress, ensure_ascii=False), _now_iso(), _now_iso(), task_id)
                 )
                 conn.commit()
-                break
+                return # 成功則直接返回
+            except Exception:
+                conn.rollback()
+                raise # 拋出給外層捕獲
             finally:
                 conn.close()
         except Exception as e:
-            if attempt == 4:
-                print(f"[DB ERROR] update_task_progress 放棄重試: {e}")
+            if attempt == max_retries - 1:
+                print(f"[DB ERROR] update_task_progress 最終失敗 (ID: {task_id}): {e}")
                 raise e
-            time.sleep(0.05 * (2 ** attempt))
+            # 加入隨機抖動 (Jitter) 避免多執行緒同時重試
+            sleep_time = base_delay * (1.5 ** attempt) + random.uniform(0, 0.05)
+            time.sleep(sleep_time)
 
 def update_task_status(task_id: int, status: str, finished: bool = False) -> None:
-    for attempt in range(5):
+    max_retries = 8
+    base_delay = 0.05
+    
+    for attempt in range(max_retries):
         try:
             conn = _conn()
             try:
+                conn.execute("BEGIN IMMEDIATE")
                 conn.execute(
                     "UPDATE mining_tasks SET status = ?, updated_at = ?, last_heartbeat = ? WHERE id = ?", 
                     (status, _now_iso(), _now_iso(), task_id)
                 )
                 conn.commit()
-                break
+                return
+            except Exception:
+                conn.rollback()
+                raise
             finally:
                 conn.close()
         except Exception as e:
-            if attempt == 4:
-                print(f"[DB ERROR] update_task_status 放棄重試: {e}")
+            if attempt == max_retries - 1:
+                print(f"[DB ERROR] update_task_status 最終失敗 (ID: {task_id}): {e}")
                 raise e
-            time.sleep(0.05 * (2 ** attempt))
+            sleep_time = base_delay * (1.5 ** attempt) + random.uniform(0, 0.05)
+            time.sleep(sleep_time)
 
 def clear_candidates_for_task(task_id: int) -> None:
     conn = _conn()

@@ -622,20 +622,30 @@ class JobManager:
             import traceback, sys
             err_trace = traceback.format_exc()
             
-            print(f"\n{'='*60}\n[TASK ERROR] Task ID: {task_id}\n{err_trace}\n{'='*60}", file=sys.stderr)
+            # 在控制台輸出錯誤以便即時監控
+            print(f"\n{'='*60}\n[TASK EXCEPTION] Task ID: {task_id}\n{err_trace}\n{'='*60}", file=sys.stderr)
             
             try:
+                # 重新讀取任務以確保 progress_json 是最新的
                 current_t = db.get_task(task_id)
                 if current_t:
                     prog = _json_load(current_t.get("progress_json") or "{}")
                     prog["phase"] = "error"
-                    prog["last_error"] = f"System Exception: {str(e)}"
+                    # 將錯誤訊息與完整堆疊寫入 JSON
+                    prog["last_error"] = f"Runtime Error: {str(e)}"
                     prog["debug_traceback"] = err_trace
                     prog["error_ts"] = db.utc_now_iso()
                     
-                    # 使用多重嘗試寫入狀態
+                    # 寫入資料庫：更新進度與狀態
                     db.update_task_progress(task_id, prog)
                     db.update_task_status(task_id, "error")
+                    
+                    # 寫入審計日誌
+                    db.write_audit_log(
+                        user_id=int(current_t.get("user_id") or 0),
+                        action="task_execution_failed",
+                        payload={"task_id": task_id, "exception": str(e), "trace": err_trace[:4000]}
+                    )
                     
                     db.write_audit_log(
                         user_id=int(current_t.get("user_id") or 0),

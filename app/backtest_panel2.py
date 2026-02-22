@@ -544,13 +544,16 @@ def _append_update_bitmart_csv(symbol: str,
     except Exception:
         return _full_sync_bitmart_csv(symbol=symbol, step_min=step_min, years=years, progress_cb=None)
 
-    if header != "ts,open,high,low,close,volume":
+    # 寬鬆檢查 Header，避免因換行符號差異導致誤判
+    if "ts,open,high,low,close,volume" not in header.replace("\r", ""):
         return _full_sync_bitmart_csv(symbol=symbol, step_min=step_min, years=years, progress_cb=None)
 
     status = _csv_quick_status(symbol, step_min)
     end_closed = _last_closed_open_ts(step_min)
     last_ts = status.get("end_ts_sec")
-    if last_ts is None:
+    
+    # 若無法取得最後時間戳，或時間戳無效，則執行全量同步
+    if last_ts is None or int(last_ts) <= 0:
         return _full_sync_bitmart_csv(symbol=symbol, step_min=step_min, years=years, progress_cb=None)
 
     last_ts = int(last_ts)
