@@ -940,15 +940,20 @@ class UiLogger:
 
         return m
 
-    def __call__(self, msg: str):
-        if not self.enabled:
+    def __call__(self, msg: str, is_error: bool = False):
+        if not self.enabled and not is_error:
             return
+        
         msg = self._normalize_msg(msg)
         dt = time.perf_counter() - self._t0
-        line = f"[+{dt:7.3f}s] {msg}"
+        prefix = " [ERROR] " if is_error else f"[+{dt:7.3f}s] "
+        line = f"{prefix}{msg}"
         self._buf.append(line)
-        # 用 code 區塊固定寬字型，易讀
-        self._box.code("\n".join(self._buf), language="text")
+        
+        # 錯誤訊息強制顯示，並使用不同顏色 (透過 syntax highlighting trick)
+        # 這裡繼續用 text 但加上顯眼的標記
+        if self._box:
+            self._box.code("\n".join(self._buf), language="diff" if is_error else "text")
 
 def setup_gpu_runtime_for_speed(device):
     """盡可能壓榨 NVIDIA CUDA 的推算效率。"""
@@ -8805,10 +8810,17 @@ def app():
                                 progress.progress(min(1.0, min(len(all_jobs), idx)/max(1, len(all_jobs))))
                     ui_logger("CPU 路徑：逐組計算完成")
         except Exception as e:
-            st.error("回測核心發生致命錯誤，已停止執行。")
-            ui_logger(f"錯誤：{e}\n{traceback.format_exc()}")
-            # 將完整錯誤軌跡直接印在前端畫面上，確保錯誤「最大化顯示」
-            st.code(traceback.format_exc(), language="python")
+            err_msg = traceback.format_exc()
+            st.error("回測核心發生致命錯誤，已停止執行。", icon="🚨")
+            
+            # 使用強化版 Logger 記錄紅字
+            ui_logger(f"CRITICAL EXCEPTION:\n{err_msg}", is_error=True)
+            
+            with st.expander("點擊查看完整錯誤堆疊 (Traceback)", expanded=True):
+                st.code(err_msg, language="python")
+            
+            # 停止執行前確保進度條歸零或顯示錯誤
+            progress.progress(0.0)
             st.stop()
         t1 = time.time()
         st.success(f"計算完成：{t1-t0:.2f} 秒")

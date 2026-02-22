@@ -242,7 +242,8 @@ def init_db() -> None:
         # [專家級效能優化] 針對排行榜聚合查詢建立必要索引，避免全表掃描導致系統卡死
         try:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_mining_tasks_updated_at ON mining_tasks(updated_at)")
+            # 複合索引優化 Leaderboard 統計 (updated_at + status)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_mining_tasks_updated_status ON mining_tasks(updated_at, status)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_candidates_created_at ON candidates(created_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_payouts_created_at ON payouts(created_at)")
         except Exception:
@@ -1633,13 +1634,21 @@ def clean_zombie_tasks(timeout_minutes: int = 15) -> int:
         conn.close()
 
 def update_user_nickname(user_id: int, nickname: str) -> None:
-    """更新用戶暱稱 (需先在應用層檢查權限)"""
+    """
+    更新用戶暱稱 (需先在應用層檢查權限)。
+    [安全強化] 強制 HTML 轉義、去除首尾空格、限制長度 10 字元。
+    """
     conn = _conn()
     try:
-        # 簡單過濾 HTML 防止 XSS
-        safe_nick = html.escape(nickname.strip())[:32]
+        # 嚴格限制：HTML Escape + Strip + Max Length 10
+        raw = str(nickname or "").strip()
+        safe_nick = html.escape(raw)[:10]
+        
         conn.execute("UPDATE users SET nickname = ? WHERE id = ?", (safe_nick, int(user_id)))
         conn.commit()
+    except Exception as e:
+        print(f"[DB ERROR] update_user_nickname: {e}")
+        raise
     finally:
         conn.close()
 

@@ -85,34 +85,27 @@ _BRAND_WEBM_1 = os.environ.get("SHEEP_BRAND_WEBM_1", "static/羊LOGO影片(去�
 
 def _mask_username(username: str, nickname: str = None) -> str:
     """
-    專家級隱私遮罩邏輯：
-    1. 若有設定 nickname 則優先顯示 nickname。
-    2. user -> u**r (首尾保留，中間掩碼)
-    3. uu -> u* (短名特殊處理)
-    4. spldpasdlpd -> s***pd (長名保留首尾2碼? 依需求調整為首1尾2或固定星號)
-    依需求：user(4) -> u**r (首1尾1), uu(2) -> u*, spldpasdlpd -> s***pd (首1尾2)
+    專家級隱私遮罩邏輯 (V2)：
+    1. 若有設定 nickname，直接回傳 nickname (前端 CSS 會負責加上皇冠)。
+    2. 遮罩邏輯：
+       - 長度 <= 2: 顯示首字 + *
+       - 長度 3~4: 首1 + ** + 尾1
+       - 長度 >= 5: 首1 + *** + 尾2
     """
     if nickname and str(nickname).strip():
-        return f"✨ {str(nickname).strip()}"
+        return str(nickname).strip()
     
     s = str(username or "")
     n = len(s)
     if n <= 0:
         return "???"
-    if n == 1:
-        return s + "*"
-    if n == 2:
+    if n <= 2:
         return s[0] + "*"
+    if n <= 4:
+        return f"{s[0]}**{s[-1]}"
     
-    # 長度 > 2
-    # 需求範例: user -> u**r (留首尾)
-    # 需求範例: spldpasdlpd -> s***pd (留首1尾2?) 
-    # 這裡採用更通用的動態遮罩：保留首 1 字元，保留尾 1 字元 (若長度>4則尾2)，中間填 2-3 個星號
-    
-    prefix = s[0]
-    suffix = s[-1] if n < 5 else s[-2:]
-    
-    return f"{prefix}***{suffix}"
+    # 長度 >= 5: 首1 + *** + 尾2 (例如 s***pd)
+    return f"{s[0]}***{s[-2:]}"
 
 def _abs_asset_path(p: str) -> str:
     p = (p or "").strip()
@@ -1133,30 +1126,87 @@ def _style() -> None:
             width: 28px; height: 28px; font-size: 12px;
         }
 
-        /* 3. 暱稱設定卡片美化 */
+        /* 3. 暱稱設定卡片美化 (Expert Style) */
         .nick-card {
-            background: linear-gradient(135deg, rgba(255,215,0,0.05) 0%, rgba(0,0,0,0) 100%);
-            border: 1px solid rgba(255,215,0,0.3);
-            border-radius: 12px;
-            padding: 20px;
+            background: linear-gradient(135deg, rgba(255,215,0,0.08) 0%, rgba(0,0,0,0.2) 100%);
+            border: 1px solid rgba(255,215,0,0.4);
+            border-radius: 16px;
+            padding: 24px;
             position: relative;
             overflow: hidden;
-            margin-bottom: 24px;
+            margin-bottom: 28px;
+            box-shadow: 0 4px 24px rgba(255, 215, 0, 0.05);
         }
         .nick-card::before {
             content: '';
             position: absolute;
-            top: 0; left: 0; width: 4px; height: 100%;
-            background: #FFD700;
-            box-shadow: 0 0 10px #FFD700;
+            top: 0; left: 0; width: 6px; height: 100%;
+            background: linear-gradient(to bottom, #FFD700, #FDB931);
+            box-shadow: 2px 0 15px rgba(255, 215, 0, 0.6);
         }
+        
+        /* 純 CSS 皇冠渲染 (去除 Emoji) */
         .crown-icon {
             display: inline-block;
-            width: 24px; height: 24px;
-            background: #FFD700;
+            width: 28px; height: 28px;
+            background: linear-gradient(135deg, #FFD700 0%, #FDB931 100%);
+            /* CSS Crown Polygon */
             clip-path: polygon(5% 100%, 100% 100%, 95% 0%, 75% 65%, 50% 10%, 25% 65%, 5% 0%);
-            margin-right: 8px;
-            vertical-align: bottom;
+            margin-right: 12px;
+            vertical-align: text-bottom;
+            box-shadow: 0 2px 10px rgba(255, 215, 0, 0.8);
+        }
+
+        /* 4. 排行榜週期選單美化 (Segmented Control 模擬) */
+        /* 強制隱藏 Streamlit Radio 的圓點與預設樣式 */
+        .lb-period-selector div.stRadio > label { display: none !important; } /* Hide label title */
+        .lb-period-selector div[role="radiogroup"] {
+            display: flex !important;
+            flex-direction: row !important;
+            background: rgba(15, 23, 42, 0.6) !important;
+            padding: 6px !important;
+            border-radius: 12px !important;
+            border: 1px solid rgba(255, 255, 255, 0.1) !important;
+            gap: 8px !important;
+            width: fit-content !important;
+            margin-bottom: 20px !important;
+        }
+        .lb-period-selector div[role="radiogroup"] label {
+            margin-right: 0px !important;
+            padding: 8px 24px !important;
+            border-radius: 8px !important;
+            border: 1px solid transparent !important;
+            background: transparent !important;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+            color: #94a3b8 !important;
+            font-weight: 600 !important;
+            font-size: 14px !important;
+            cursor: pointer !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            min-width: 100px !important;
+        }
+        /* 選中狀態的高亮 */
+        .lb-period-selector div[role="radiogroup"] label:has(input:checked) {
+            background: #3b82f6 !important;
+            color: #ffffff !important;
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4) !important;
+            border: 1px solid rgba(255, 255, 255, 0.1) !important;
+            transform: translateY(-1px) !important;
+        }
+        /* Hover 效果 */
+        .lb-period-selector div[role="radiogroup"] label:hover:not(:has(input:checked)) {
+            background: rgba(255, 255, 255, 0.05) !important;
+            color: #e2e8f0 !important;
+        }
+        /* 隱藏原生 input */
+        .lb-period-selector input[type="radio"] {
+            display: none !important;
+        }
+        /* 隱藏 Streamlit 原生 Radio 裝飾 div */
+        .lb-period-selector div[role="radiogroup"] label > div:first-child {
+            display: none !important;
         }
         </style>
         """,
@@ -3586,10 +3636,10 @@ def _render_audit(audit: Dict[str, Any]) -> None:
 def _page_leaderboard(user: Dict[str, Any]) -> None:
     st.markdown(_section_title_html("英雄榜", "展示頂尖貢獻者與幸運兒。數據每分鐘更新一次。", level=3), unsafe_allow_html=True)
 
-    # 1. 美化後的週期選單 (Segmented Control)
-    # 使用 CSS class 'lb-period-selector' 來觸發我們注入的樣式
+    # 1. 美化後的週期選單 (Inject custom container class)
     st.markdown('<div class="lb-period-selector">', unsafe_allow_html=True)
     period_map = {"1 小時": 1, "24 小時": 24, "30 天 (月賽)": 720}
+    # 使用 label_visibility="collapsed" 隱藏標題，CSS 會接手剩餘的美化
     period_label = st.radio("統計週期", list(period_map.keys()), index=1, horizontal=True, key="lb_period", label_visibility="collapsed")
     st.markdown('</div>', unsafe_allow_html=True)
     
@@ -3599,9 +3649,11 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
         data = db.get_leaderboard_stats(period_hours=period_hours)
     except Exception as e:
         st.error(f"排行榜資料讀取錯誤：{e}")
+        import traceback
+        st.code(traceback.format_exc(), language="python")
         return
 
-    # 檢查當前用戶是否在 "30天 - 組合數" 前 5 名 (具備暱稱修改權限)
+    # 2. 檢查當前用戶是否在 "30天 - 組合數" 前 5 名
     can_set_nickname = False
     my_rank_info = ""
     
@@ -3610,20 +3662,20 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
         for idx, row in enumerate(combos_list):
             if row.get("username") == user["username"]:
                 rank = idx + 1
-                my_rank_info = f"目前排名：第 {rank} 名"
+                my_rank_info = f"（目前排名：第 {rank} 名）"
                 if rank <= 5:
                     can_set_nickname = True
                 break
     
-    # 2. 尊榮暱稱設定區塊 (美化版)
+    # 3. 尊榮暱稱設定區塊 (美化版)
     if can_set_nickname:
         st.markdown(
             """
             <div class="nick-card">
-                <div style="font-size:18px; font-weight:800; color:#FFD700; margin-bottom:8px;">
-                    <div class="crown-icon"></div>尊榮權限已解鎖
+                <div style="font-size:20px; font-weight:800; color:#FFD700; margin-bottom:12px; display:flex; align-items:center;">
+                    <span class="crown-icon"></span>尊榮權限已解鎖
                 </div>
-                <div style="font-size:14px; color:#cbd5e1; margin-bottom:16px;">
+                <div style="font-size:15px; color:#cbd5e1; line-height:1.6;">
                     恭喜！您是本月算力貢獻前 5 名的頂尖強者。您現在可以設定專屬暱稱，讓全平台看見您的稱號。
                 </div>
             </div>
@@ -3631,25 +3683,27 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
         )
         col_n1, col_n2 = st.columns([3, 1])
         with col_n1:
-            new_nick = st.text_input("輸入新暱稱 (限10字)", value=user.get("nickname", ""), max_chars=10, label_visibility="collapsed", placeholder="請輸入您的尊榮稱號...")
+            # 增加一些 padding 和 placeholder
+            new_nick = st.text_input("設定新暱稱", value=user.get("nickname", ""), max_chars=10, label_visibility="collapsed", placeholder="在此輸入您的尊榮稱號...")
         with col_n2:
             if st.button("更新稱號", type="primary", use_container_width=True):
-                if new_nick.strip():
-                    db.update_user_nickname(int(user["id"]), new_nick.strip())
-                    user["nickname"] = new_nick.strip() # Update session cache
-                    db.write_audit_log(int(user["id"]), "update_nickname", {"nickname": new_nick})
-                    st.success("稱號已閃亮更新！")
+                safe_nick = html.escape(new_nick.strip())
+                if safe_nick:
+                    db.update_user_nickname(int(user["id"]), safe_nick)
+                    user["nickname"] = safe_nick # Update session cache
+                    db.write_audit_log(int(user["id"]), "update_nickname", {"nickname": safe_nick})
+                    st.toast("稱號已閃亮更新！")
                     time.sleep(1)
                     st.rerun()
                 else:
                     st.warning("稱號不可為空")
     elif period_hours == 720:
-        st.info(f"月度算力榜前 5 名即可解鎖自訂暱稱功能。{my_rank_info}")
+        st.info(f" 提示：月度算力榜前 5 名即可解鎖自訂暱稱功能。{my_rank_info}")
 
-    # 3. 排行榜 HTML 渲染器 (取代 st.dataframe)
+    # 4. 排行榜 HTML 渲染器 (修復 HTML 外洩問題)
     def _render_html_table(rows: list, val_col: str, val_fmt: str, unit: str):
         if not rows:
-            st.markdown('<div class="panel" style="text-align:center; color:#64748b; padding:40px;">此區間尚無數據，快來搶頭香！</div>', unsafe_allow_html=True)
+            st.markdown('<div class="panel" style="text-align:center; color:#64748b; padding:40px; font-size:14px;">此區間尚無數據，快來搶頭香！</div>', unsafe_allow_html=True)
             return
 
         html_rows = []
@@ -3662,34 +3716,49 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
             if val_fmt == "int":
                 val_str = f"{int(val):,}"
             elif val_fmt == "float":
-                val_str = f"{float(val):.2f}" # 改為 2 位小數讓畫面更乾淨
+                val_str = f"{float(val):.2f}"
             elif val_fmt == "time":
                 val_str = f"{float(val)/3600:.1f}h"
             else:
                 val_str = str(val)
             
-            username_display = _mask_username(r.get("username"), r.get("nickname"))
+            # 處理暱稱顯示 (CSS 皇冠)
+            raw_nick = r.get("nickname")
+            is_vip = bool(raw_nick and raw_nick.strip())
+            display_name = _mask_username(r.get("username"), raw_nick)
+            
+            # 構建名稱 HTML
+            if is_vip:
+                # 注入 Crown Icon span
+                name_html = f'<span class="crown-icon" style="width:16px; height:16px; margin-right:6px; vertical-align:middle;"></span><span style="color:#FFD700; text-shadow:0 0 10px rgba(255,215,0,0.3);">{html.escape(display_name)}</span>'
+            else:
+                name_html = html.escape(display_name)
             
             # 使用者高亮
             is_me = (r.get("username") == user["username"])
-            bg_style = "background: rgba(59, 130, 246, 0.2); border: 1px solid rgba(59, 130, 246, 0.4);" if is_me else ""
+            bg_style = 'style="background: rgba(59, 130, 246, 0.15); border: 1px solid rgba(59, 130, 246, 0.4); box-shadow: 0 4px 12px rgba(0,0,0,0.2);"' if is_me else ""
             
             row_html = f"""
-            <tr class="lb-row" style="{bg_style}">
+            <tr class="lb-row" {bg_style}>
                 <td><div class="rank-badge {rank_class}">{rank}</div></td>
                 <td class="lb-cell">
-                    <div style="font-weight:600; font-size:15px; color:#f8fafc;">{html.escape(username_display)}</div>
+                    <div style="font-weight:600; font-size:15px; color:#f8fafc; display:flex; align-items:center;">
+                        {name_html}
+                    </div>
                 </td>
                 <td class="lb-cell">
-                    {val_str} <span style="font-size:12px; color:#64748b; font-weight:400;">{unit}</span>
+                    {val_str} <span style="font-size:12px; color:#64748b; font-weight:400; margin-left:4px;">{unit}</span>
                 </td>
             </tr>
             """
             html_rows.append(row_html)
 
+        # 組合 Table，注意：必須使用 unsafe_allow_html=True
         full_table = f"""
-        <table class="lb-table">
+        <table class="lb-table" style="width:100%; border-spacing:0 8px; border-collapse:separate;">
+            <tbody>
             { "".join(html_rows) }
+            </tbody>
         </table>
         """
         st.markdown(full_table, unsafe_allow_html=True)
