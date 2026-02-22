@@ -890,11 +890,11 @@ def _style() -> None:
         .help_wrap:hover .help_tip { opacity: 1; transform: translateX(-50%) translateY(0); }
         
         .user_hud .help_tip {
-          left: 0;
-          transform: translateX(0) translateY(4px);
+          left: 50%;
+          transform: translateX(-35%) translateY(4px);
         }
         .user_hud .help_wrap:hover .help_tip {
-          transform: translateX(0) translateY(0);
+          transform: translateX(-35%) translateY(0);
         }
 
         .sec_h3 { font-size: 24px; font-weight: 800; color: #ffffff; margin: 32px 0 16px 0; display: flex; align-items: center; }
