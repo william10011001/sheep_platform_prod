@@ -975,110 +975,105 @@ def _style() -> None:
         }
         </style>
         
-        <script>
+      <script>
 (function() {
   const parentDoc = window.parent && window.parent.document ? window.parent.document : document;
 
   function qsAny(selectors) {
     for (const sel of selectors) {
-      const el = parentDoc.querySelector(sel);
-      if (el) return el;
+      try {
+        const el = parentDoc.querySelector(sel);
+        if (el) return el;
+      } catch (err) {
+        console.error("[sidebar_failsafe] Invalid selector:", sel, err);
+      }
     }
     return null;
   }
 
   function isSidebarExpanded() {
-    const sidebar = parentDoc.querySelector('section[data-testid="stSidebar"]');
-    if (!sidebar) return false;
-    const rect = sidebar.getBoundingClientRect();
-    return rect.width > 50 && rect.left >= 0;
+    try {
+      const sidebar = parentDoc.querySelector('section[data-testid="stSidebar"]');
+      if (!sidebar) return false;
+      const rect = sidebar.getBoundingClientRect();
+      // 專家級容錯：精準檢查寬度與邊界，相容各瀏覽器與字元編碼異常
+      return rect.width > 50 && rect.left >= 0;
+    } catch (err) {
+      console.error("[sidebar_failsafe] Error checking sidebar state:", err);
+      return false;
+    }
   }
 
   function ensureTrigger() {
-    // 1) 若已展開，不需要 trigger
-    if (isSidebarExpanded()) {
-      const old = parentDoc.getElementById('custom-sidebar-trigger');
-      if (old) old.style.display = 'none';
-      return;
-    }
+    try {
+      if (isSidebarExpanded()) {
+        const old = parentDoc.getElementById('custom-sidebar-trigger');
+        if (old) old.style.display = 'none';
+        return;
+      }
 
-    // 2) 若 trigger 不存在就建立
-    let btn = parentDoc.getElementById('custom-sidebar-trigger');
-    if (!btn) {
-      btn = parentDoc.createElement('div');
-      btn.id = 'custom-sidebar-trigger';
-      btn.setAttribute('role', 'button');
-      btn.setAttribute('aria-label', 'Open sidebar (failsafe)');
-      btn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"></path></svg>';
+      let btn = parentDoc.getElementById('custom-sidebar-trigger');
+      if (!btn) {
+        btn = parentDoc.createElement('div');
+        btn.id = 'custom-sidebar-trigger';
+        btn.setAttribute('role', 'button');
+        btn.setAttribute('aria-label', 'Open sidebar (failsafe)');
+        btn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"></path></svg>';
 
-      // 內聯樣式是最後保險：就算 CSS 被覆蓋也能顯示
-      btn.style.position = 'fixed';
-      btn.style.top = '10px';
-      btn.style.left = '10px';
-      btn.style.width = '48px';
-      btn.style.height = '48px';
+        // 內聯樣式：確保在所有的 CSS 崩壞下依然能獨立運作
+        btn.style.cssText = 'position:fixed; top:10px; left:10px; width:48px; height:48px; display:flex; align-items:center; justify-content:center; background:rgba(30,41,59,0.98); border:1px solid rgba(255,255,255,0.25); border-radius:8px; box-shadow:0px 4px 16px rgba(0,0,0,0.8); z-index:2147483647; cursor:pointer; pointer-events:auto;';
+
+        btn.addEventListener('click', function(e) {
+          e.preventDefault();
+          e.stopPropagation();
+
+          try {
+            const nativeBtn = qsAny([
+              'button[aria-label="Open sidebar"]',
+              'div[data-testid="stSidebarCollapsedControl"] button',
+              'div[data-testid="collapsedControl"] button',
+              'button[kind="headerNoPadding"]'
+            ]);
+
+            if (nativeBtn) {
+              nativeBtn.dispatchEvent(new MouseEvent('click', { view: window.parent, bubbles: true, cancelable: true }));
+              return;
+            }
+
+            const sidebar = parentDoc.querySelector('section[data-testid="stSidebar"]');
+            if (sidebar) {
+              sidebar.style.setProperty('display', 'block', 'important');
+              sidebar.style.setProperty('visibility', 'visible', 'important');
+              sidebar.style.setProperty('min-width', '16rem', 'important');
+              sidebar.style.setProperty('transform', 'translateX(0px)', 'important');
+              return;
+            }
+            console.warn('[sidebar_failsafe] No native button or sidebar element found.');
+          } catch (clickErr) {
+            console.error('[sidebar_failsafe] Click handler error:', clickErr);
+          }
+        }, { capture: true });
+
+        parentDoc.body.appendChild(btn);
+      }
       btn.style.display = 'flex';
-      btn.style.alignItems = 'center';
-      btn.style.justifyContent = 'center';
-      btn.style.background = 'rgba(30, 41, 59, 0.98)';
-      btn.style.border = '1px solid rgba(255,255,255,0.25)';
-      btn.style.borderRadius = '8px';
-      btn.style.boxShadow = '0px 4px 16px rgba(0,0,0,0.8)';
-      btn.style.zIndex = '2147483647';
-      btn.style.cursor = 'pointer';
-      btn.style.pointerEvents = 'auto';
-
-      btn.addEventListener('click', function(e) {
-        e.preventDefault();
-        e.stopPropagation();
-
-        // 優先點原生控制鈕（涵蓋新舊 selector）
-        const nativeBtn = qsAny([
-          'button[aria-label="Open sidebar"]',
-          'div[data-testid="stSidebarCollapsedControl"] button',
-          'div[data-testid="collapsedControl"] button',
-          'button[kind="headerNoPadding"]'
-        ]);
-
-        if (nativeBtn) {
-          nativeBtn.dispatchEvent(new MouseEvent('click', { view: window.parent, bubbles: true, cancelable: true }));
-          return;
-        }
-
-        // 原生按鈕不存在：直接暴力展開 sidebar
-        const sidebar = parentDoc.querySelector('section[data-testid="stSidebar"]');
-        if (sidebar) {
-          sidebar.style.setProperty('display', 'block', 'important');
-          sidebar.style.setProperty('visibility', 'visible', 'important');
-          sidebar.style.setProperty('min-width', '16rem', 'important');
-          sidebar.style.setProperty('transform', 'translateX(0px)', 'important');
-          return;
-        }
-
-        // 連 sidebar 都找不到：代表 React 還沒渲染或 DOM 結構變了
-        console.warn('[sidebar_failsafe] sidebar element not found');
-      }, { capture: true });
-
-      parentDoc.body.appendChild(btn);
+    } catch (ensureErr) {
+      console.error("[sidebar_failsafe] ensureTrigger encountered error:", ensureErr);
     }
-
-    // 3) 若沒展開就顯示
-    btn.style.display = 'flex';
   }
 
-  // 首次與重試（React 常延遲渲染）
   let tries = 0;
   const timer = setInterval(() => {
     tries += 1;
     ensureTrigger();
-    if (tries >= 60) clearInterval(timer); // 30 秒後停止暴力嘗試，避免無限跑
+    if (tries >= 60) clearInterval(timer);
   }, 500);
 
-  // 視窗改變時也重算一次
-  parentDoc.defaultView && parentDoc.defaultView.addEventListener('resize', ensureTrigger);
-
+  if (parentDoc.defaultView) {
+    parentDoc.defaultView.addEventListener('resize', ensureTrigger);
+  }
 })();
-        </script>
+</script>
         """,
         unsafe_allow_html=True,
     )
@@ -2594,8 +2589,8 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
 
     except Exception as dashboard_e:
         # [極端專家修復] 最強保護網：不論是上述哪一行程式碼出錯（包含_render_global_progress），都會被攔截並印出精準 Traceback
-        st.error(f" 控制台頁面發生嚴重錯誤，已啟動防護隔離：{str(dashboard_e)}")
-        st.info("請將下方完整錯誤訊息截圖提供給開發人員進行除錯：")
+        st.error(f"控制台頁面發生嚴重錯誤，已啟動防護隔離：{str(dashboard_e)}", icon="🚨")
+        st.warning("請將下方完整錯誤訊息截圖提供給開發人員進行緊急除錯：")
         import traceback
         st.code(traceback.format_exc(), language="python")
         return

@@ -273,9 +273,10 @@ class JobManager:
 
                 time.sleep(0.05 if started_any else 0.5)
             except Exception as e:
-                # [專家級最大化顯示] 捕捉排程器內部的致命錯誤並強制輸出
+                # [專家級最大化顯示] 捕捉排程器內部的致命錯誤並強制輸出至 sys.stderr，保障排程器永不掛死
                 import traceback
-                print(f"\n[SCHEDULER CRITICAL ERROR] 排程器迴圈發生異常: {e}\n{traceback.format_exc()}\n")
+                import sys
+                print(f"\n[SCHEDULER CRITICAL ERROR] 排程器迴圈發生異常: {e}\n{traceback.format_exc()}\n", file=sys.stderr)
                 time.sleep(1.0)
 
     def _run_task(self, task_id: int, bt_module, stop_flag: threading.Event) -> None:

@@ -726,6 +726,8 @@ def claim_task(
             print(f"\n[!!! DATA INTEGRITY ALERT !!!]\n{error_detail}")
             # 通知 DB 該任務暫時不可領取或標記錯誤，防止 Worker 浪費算力
             db.update_task_progress(int(task["id"]), {"phase": "error", "last_error": "SERVER_DATA_NOT_READY", "detail": str(hash_err)})
+            # [專家級防護] 拒絕發放任務，避免前端或 Worker 接到殘缺的空 Hash 任務發生連環爆
+            raise HTTPException(status_code=503, detail="server_data_sync_failed_please_retry")
 
     return TaskOut(
         task_id=int(task["id"]),

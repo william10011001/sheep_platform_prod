@@ -3420,7 +3420,10 @@ fee_side=0.0002, slippage=0.0, worst_case=True):
             # TP = Low_val * (1.0 - tp_pct)
             # SL = High_val * (1.0 + sl_pct)
             
-            is_ratio = (tp_pct > 0.5) # 簡單判斷
+            # [專家級修復] 嚴謹判斷 tp_pct 與 sl_pct 是否為乘數(Ratio)。
+            # 若為百分比 (例如 5% = 0.05，60% = 0.60)，數值通常小於 0.85。若為乘數 (例如 1.02 或 0.98)，則大於 0.85。
+            # 以 0.85 作為分水嶺，完美避開使用者設定 60% 停利(0.60)被誤判為乘數的災難性 Bug。
+            is_ratio = (tp_pct >= 0.85 or sl_pct >= 0.85)
             
             if is_ratio:
                 # 若傳入的是 1.02 (Long TP)，轉為 Short TP (0.98)
@@ -3553,8 +3556,7 @@ fee_side=0.0002, slippage=0.0, worst_case=True):
             high_val = highest_arr[base_idx] # OB Top
             low_val = lowest_arr[base_idx]   # OB Bottom
             
-            # 判斷參數類型（係數或百分比），與 Short 邏輯保持一致
-            is_ratio = (tp_pct > 0.5)
+            is_ratio = (tp_pct >= 0.85 or sl_pct >= 0.85)
             
             if is_ratio:
                 # 係數模式 (e.g. 1.02)
@@ -6911,7 +6913,8 @@ def apply_1m_microfill(
             high_val = float(highest_arr[base_idx])
             low_val = float(lowest_arr[base_idx])
 
-            is_ratio = (tp_pct > 0.5)
+            # [專家級修復] 統一在 1m 精準撮合中使用 0.85 閾值判斷 Ratio/Pct
+            is_ratio = (tp_pct >= 0.85 or sl_pct >= 0.85)
 
             if reverse_mode:
                 # 對齊 simulate_short_core_per_entry 的邏輯
