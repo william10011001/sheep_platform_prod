@@ -157,17 +157,7 @@ iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
   pointer-events: none !important;
 }}
 
-div[data-testid="stSidebarCollapsedControl"],
-        div[data-testid="collapsedControl"],
-        button[kind="headerNoPadding"] {{
-            opacity: 0 !important;
-            position: absolute !important;
-            width: 1px !important;
-            height: 1px !important;
-            pointer-events: none !important;
-        }}
-        
-        header[data-testid="stHeader"] {{
+header[data-testid="stHeader"] {{
             background: transparent !important;
             z-index: 99999 !important;
             pointer-events: none !important;
@@ -175,6 +165,13 @@ div[data-testid="stSidebarCollapsedControl"],
         
         header[data-testid="stHeader"] * {{
             pointer-events: auto !important;
+        }}
+        
+        div[data-testid="stSidebarCollapsedControl"],
+        div[data-testid="collapsedControl"] {{
+            z-index: 2147483647 !important;
+            pointer-events: auto !important;
+            opacity: 1 !important;
         }}
 
 @media (max-width: 720px) {{
@@ -426,10 +423,6 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 def _issue_api_token(user: Dict[str, Any], ttl_seconds: int = 86400, name: str = "worker") -> Dict[str, Any]:
-    """Issue an API token stored in DB (compatible with FastAPI Bearer auth).
-
-    NOTE: Raw token is only shown once; store it securely on the worker side.
-    """
     return db.create_api_token(int(user["id"]), ttl_seconds=int(ttl_seconds), name=str(name or "worker"))
 
 
@@ -439,7 +432,6 @@ _REMEMBER_TTL_DAYS = 90
 
 
 def _get_ws_headers() -> Dict[str, str]:
-    # Prefer the non-deprecated API.
     try:
         h = getattr(st, "context", None)
         if h is not None and getattr(st.context, "headers", None) is not None:
@@ -450,11 +442,8 @@ def _get_ws_headers() -> Dict[str, str]:
                 return {str(k): str(v) for k, v in hdrs.items()}
     except Exception:
         pass
-
-    # Backward compatibility (older Streamlit only).
     try:
-        from streamlit.web.server.websocket_headers import _get_websocket_headers  # type: ignore
-
+        from streamlit.web.server.websocket_headers import _get_websocket_headers
         h2 = _get_websocket_headers()
         if not h2:
             return {}
@@ -761,12 +750,6 @@ def _style() -> None:
           color: #ffffff;
         }
 
-        header[data-testid="stHeader"] {
-          background: transparent !important;
-          z-index: 2147483640 !important;
-          pointer-events: auto !important;
-        }
-
         footer { visibility: hidden !important; }
         #MainMenu { visibility: hidden !important; }
 
@@ -932,38 +915,6 @@ def _style() -> None:
         .pill-warn { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
         .pill-bad { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
         .pill-neutral { background: rgba(255, 255, 255, 0.1); color: #94a3b8; border: 1px solid rgba(255, 255, 255, 0.2); }
-
-        #custom-sys-menu-btn {
-            position: fixed !important;
-            top: 16px !important;
-            left: 16px !important;
-            width: 44px !important;
-            height: 44px !important;
-            background: linear-gradient(135deg, rgba(30,41,59,0.95) 0%, rgba(15,23,42,0.98) 100%) !important;
-            border-radius: 12px !important;
-            border: 1px solid rgba(255,255,255,0.15) !important;
-            z-index: 2147483647 !important;
-            cursor: pointer !important;
-            display: flex !important;
-            align-items: center !important;
-            justify-content: center !important;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.6) !important;
-            transition: all 0.2s ease !important;
-            pointer-events: auto !important;
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-        }
-        #custom-sys-menu-btn:hover {
-            background: linear-gradient(135deg, rgba(59,130,246,0.9) 0%, rgba(37,99,235,0.95) 100%) !important;
-            border-color: rgba(96,165,250,0.5) !important;
-            transform: translateY(-2px);
-            box-shadow: 0 8px 24px rgba(37,99,235,0.4) !important;
-        }
-        #custom-sys-menu-btn svg {
-            fill: #ffffff !important;
-            width: 22px !important;
-            height: 22px !important;
-        }
 
         /* --- [排行榜美化系統] --- */
         /* 1. 隱藏 Streamlit 原生 Radio 的醜陋圓點 */
@@ -3178,7 +3129,6 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
             if k in ("expired", "revoked", "error"): return "bad"
             return "neutral"
 
-        # [專家級 UI] 強化的進度儀表板
         st.markdown(
             f'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">'
             f'<span class="pill pill-{_pill_class(view_status)}" style="font-size:14px; padding:6px 12px;">狀態: {status_label}</span>'
@@ -3345,10 +3295,6 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
     else:
         keep_polling = bool(run_enabled)
 
-    # [專家級修復] 解除錯誤的縮排，確保 Server 模式下也能每秒精準觸發 UI 刷新
-    # - any_active=True：有人在跑 / 在隊列 -> 正常刷新
-    # - keep_polling=True：使用者點過「開始全部任務」(server) 或 run_enabled=True(worker)
-    #   即使暫時沒任務，也會持續刷新，才能無縫接新任務。
     if auto_refresh and (any_active or keep_polling):
         try:
             base_s = float(refresh_s)
@@ -3366,7 +3312,6 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
         except Exception:
             pass
 
-        # [專家級修復] 放置一個隱藏按鈕，透過 JS 觸發 Streamlit 原生 rerun，徹底消滅全頁面刷新的閃爍與效能問題
         if st.button("AutoRefreshHiddenBtn", key="hidden_refresh_btn", use_container_width=False):
             pass
 
@@ -3763,7 +3708,6 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
             html_rows.append(row_html)
 
         # 組合 Table，注意：必須使用 unsafe_allow_html=True
-        # [專家級修復] 徹底移除縮排，避免 Streamlit Markdown 引擎將其誤判為程式碼區塊 (Code Block)
         full_table = (
             '<div class="leaderboard-wrapper">\n'
             '<table class="lb-table" style="width:100%; border-spacing:0 8px; border-collapse:separate;">\n'

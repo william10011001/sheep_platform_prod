@@ -916,17 +916,15 @@ warnings.filterwarnings("ignore")
 
 # ----------------------------- UI 日誌與 GPU 調優輔助 ----------------------------- #
 class UiLogger:
-    """將執行過程輸出到面板（含相對時間）。"""
     def __init__(self, enabled: bool):
         self.enabled = enabled
         self._buf: List[str] = []
         self._box = st.empty() if enabled else None
         self._t0 = time.perf_counter()
+        self._last_render = 0.0
 
     def _normalize_msg(self, msg: str) -> str:
         m = str(msg)
-
-        # 統一用語（讓輸出更像一般應用程式日誌）
         m = m.replace("開始：初始化與檢查環境", "初始化：環境與輸入檢查")
         m = m.replace("Numba 路徑：", "Numba：")
         m = m.replace("CPU 路徑：", "CPU：")
@@ -936,32 +934,29 @@ class UiLogger:
         m = m.replace("Torch 編譯加速已啟用，嘗試使用 GPU 執行", "Torch：編譯已啟用")
         m = m.replace("Torch 編譯失敗，改用 Numba：", "Torch：編譯失敗，改用 Numba：")
         m = m.replace("批次門檻設定：", "批次設定：")
-
-        # 複雜策略：統一描述
         key = " (複雜策略/動態風控模式)，使用 CPU/Numba 逐筆模擬繞過 GPU"
         if key in m:
             m = m.replace(key, "：逐筆模擬（路徑相依），略過 GPU 批次")
-
         return m
 
-    def __call__(self, msg: str, is_error: bool = False):
+    def __call__(self, msg: str, is_error: bool = False, force_render: bool = False):
         if not self.enabled and not is_error:
             return
         
         msg = self._normalize_msg(msg)
-        dt = time.perf_counter() - self._t0
+        now = time.perf_counter()
+        dt = now - self._t0
         prefix = " [ERROR] " if is_error else f"[+{dt:7.3f}s] "
         line = f"{prefix}{msg}"
         self._buf.append(line)
         
-        # 錯誤訊息強制顯示，並使用不同顏色 (透過 syntax highlighting trick)
-        # 這裡繼續用 text 但加上顯眼的標記
-        # [專家級效能防護] 限制 UI Logger 緩衝區大小，避免海量輸出導致 Streamlit 前端渲染卡死
         if len(self._buf) > 80:
             self._buf = self._buf[-80:]
             
         if self._box:
-            self._box.code("\n".join(self._buf), language="diff" if is_error else "text")
+            if is_error or force_render or (now - self._last_render > 0.5):
+                self._box.code("\n".join(self._buf), language="diff" if is_error else "text")
+                self._last_render = now
 
 def setup_gpu_runtime_for_speed(device):
     """盡可能壓榨 NVIDIA CUDA 的推算效率。"""
@@ -1285,9 +1280,6 @@ def RSI(close: np.ndarray, period: int) -> np.ndarray:
 
     if NUMBA_OK:
         try:
-            # [專家級修復] 增加陣列空值防護，避免陣列為空時引發 IndexError 導致整個格點搜尋崩潰
-            # 使用長度與數據前後特徵作為快速指紋 (快於完全雜湊)
-            # 避免因 Streamlit 重新分配 Array 導致 ptr 變動而快取失效
             fingerprint = (len(close), float(close[0]) if len(close) > 0 else 0.0, float(close[-1]) if len(close) > 0 else 0.0, p)
             cached = _RSI_CACHE.get(fingerprint, None)
             if cached is not None:
@@ -1295,12 +1287,13 @@ def RSI(close: np.ndarray, period: int) -> np.ndarray:
 
             out = _rsi_wilder_nb(close, p)
 
-            if len(_RSI_CACHE) > 500:
+            if len(_RSI_CACHE) > 100:
                 _RSI_CACHE.clear()
             _RSI_CACHE[fingerprint] = out
             return out
         except Exception as rsi_e:
-            print(f"[CALC ERROR] RSI Numba 快取機制失效: {rsi_e}")
+            import sys
+            print(f"RSI Numba Cache Error: {rsi_e}", file=sys.stderr)
 
     # ----- fallback: 原生 Wilder（慢，但正確） -----
     close = close.astype(np.float64, copy=False)

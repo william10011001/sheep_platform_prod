@@ -629,10 +629,11 @@ class JobManager:
                 if current_t:
                     prog = _json_load(current_t.get("progress_json") or "{}")
                     prog["phase"] = "error"
-                    prog["last_error"] = f"系統執行異常: {str(e)}"
+                    prog["last_error"] = f"System Exception: {str(e)}"
                     prog["debug_traceback"] = err_trace
                     prog["error_ts"] = db.utc_now_iso()
                     
+                    # 使用多重嘗試寫入狀態
                     db.update_task_progress(task_id, prog)
                     db.update_task_status(task_id, "error")
                     
@@ -644,13 +645,10 @@ class JobManager:
                 else:
                     db.update_task_status(task_id, "error")
             except Exception as nested_err:
-                print(f"[CRITICAL] 錯誤處理器本身發生異常: {nested_err}\n{traceback.format_exc()}", file=sys.stderr)
+                print(f"[CRITICAL] Error Handler Failed: {nested_err}\n{traceback.format_exc()}", file=sys.stderr)
             finally:
                 with self._lock:
-                    if task_id in self._threads:
-                        self._threads.pop(task_id, None)
-                    if task_id in self._stop_flags:
-                        self._stop_flags.pop(task_id, None)
-
+                    self._threads.pop(task_id, None)
+                    self._stop_flags.pop(task_id, None)
 
 JOB_MANAGER = JobManager()
