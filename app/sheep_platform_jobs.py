@@ -265,30 +265,6 @@ class JobManager:
                             th.start()
                             alive += 1
                             started_any = True
-                        task_id, bt_module, _uid = item
-
-                        th = self._threads.get(task_id)
-                        if th is not None and th.is_alive():
-                            continue
-
-                        trow = db.get_task(int(task_id))
-                        # [專家級排程修正] 同時支援 assigned 與 queued 狀態，確保手動點擊與自動排程皆能啟動
-                        if not trow or str(trow.get("status")) not in ("assigned", "queued"):
-                            continue
-
-                        flag = threading.Event()
-                        th = threading.Thread(target=self._run_task, args=(int(task_id), bt_module, flag), daemon=True)
-                        # 確保 ID 轉換為 int 防止 Dict Key 類型混亂
-                        self._threads[int(task_id)] = th
-                        self._stop_flags[int(task_id)] = flag
-                        
-                        # [專家級修復] 絕對不能在這裡先 update status 為 running，
-                        # 否則 _run_task 裡的 db.claim_task_for_run(要求 assigned/queued) 會直接失敗導致任務秒死變成殭屍！
-                        # 這裡我們只將它加入記憶體鎖，真正的狀態變更交給 _run_task 內部去原子化執行
-                        th.start()
-                        
-                        alive += 1
-                        started_any = True
 
                 time.sleep(0.05 if started_any else 0.5)
             except Exception as e:

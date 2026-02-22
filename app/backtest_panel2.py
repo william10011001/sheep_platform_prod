@@ -1272,9 +1272,10 @@ def RSI(close: np.ndarray, period: int) -> np.ndarray:
 
     if NUMBA_OK:
         try:
+            # [專家級修復] 增加陣列空值防護，避免陣列為空時引發 IndexError 導致整個格點搜尋崩潰
             # 使用長度與數據前後特徵作為快速指紋 (快於完全雜湊)
             # 避免因 Streamlit 重新分配 Array 導致 ptr 變動而快取失效
-            fingerprint = (len(close), float(close[0]), float(close[-1]), p)
+            fingerprint = (len(close), float(close[0]) if len(close) > 0 else 0.0, float(close[-1]) if len(close) > 0 else 0.0, p)
             cached = _RSI_CACHE.get(fingerprint, None)
             if cached is not None:
                 return cached
@@ -2820,8 +2821,8 @@ def _simulate_long_core_py(o, h, l, c, entry_sig, tp_pct, sl_pct, max_hold, fee_
     n = len(c)
     perbar = np.zeros(n, dtype=np.float64)
 
-    # 最大筆數不會超過訊號數（最後一根不能進場）
-    max_trades = int(np.sum(entry_sig[:-1]))
+    # [專家級防護] 最大筆數不會超過訊號數（最後一根不能進場），增加長度判定避免 IndexError
+    max_trades = int(np.sum(entry_sig[:-1])) if len(entry_sig) > 1 else 0
     entry_idx_arr = np.full(max_trades, -1, dtype=np.int64)
     exit_idx_arr  = np.full(max_trades, -1, dtype=np.int64)
     entry_px_arr  = np.zeros(max_trades, dtype=np.float64)
@@ -3379,7 +3380,8 @@ fee_side=0.0002, slippage=0.0, worst_case=True):
     """
     n = len(c)
     perbar = np.zeros(n, dtype=np.float64)
-    max_trades = int(np.sum(entry_sig[:-1]))
+    # [專家級防護] 安全取得最大交易數，避免長度不足引發崩潰
+    max_trades = int(np.sum(entry_sig[:-1])) if len(entry_sig) > 1 else 0
     entry_idx_arr = np.full(max_trades, -1, dtype=np.int64)
     exit_idx_arr = np.full(max_trades, -1, dtype=np.int64)
     entry_px_arr = np.zeros(max_trades, dtype=np.float64)
@@ -3513,8 +3515,8 @@ fee_side=0.0002, slippage=0.0, worst_case=True):
     """
     n = len(c)
     perbar = np.zeros(n, dtype=np.float64)
-    # 預估最多交易數不超過 entry 訊號數
-    max_trades = int(np.sum(entry_sig[:-1]))
+    # [專家級防護] 預估最多交易數不超過 entry 訊號數，增加長度防護避免崩潰
+    max_trades = int(np.sum(entry_sig[:-1])) if len(entry_sig) > 1 else 0
     entry_idx_arr = np.full(max_trades, -1, dtype=np.int64)
     exit_idx_arr = np.full(max_trades, -1, dtype=np.int64)
     entry_px_arr = np.zeros(max_trades, dtype=np.float64)
@@ -3639,7 +3641,8 @@ def _simulate_short_core_py(o, h, l, c, entry_sig, tp_pct, sl_pct, max_hold, fee
     """純 Python 做空模擬版本"""
     n = len(c)
     perbar = np.zeros(n, dtype=np.float64)
-    max_trades = int(np.sum(entry_sig[:-1]))
+    # [專家級防護] 安全取得最大交易數，避免長度不足引發崩潰
+    max_trades = int(np.sum(entry_sig[:-1])) if len(entry_sig) > 1 else 0
     entry_idx_arr = np.full(max_trades, -1, dtype=np.int64)
     exit_idx_arr  = np.full(max_trades, -1, dtype=np.int64)
     entry_px_arr  = np.zeros(max_trades, dtype=np.float64)

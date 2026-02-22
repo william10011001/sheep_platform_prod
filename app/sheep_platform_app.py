@@ -4359,6 +4359,14 @@ def main() -> None:
 
     pages = ["新手教學", "控制台", "任務", "提交", "結算"] + (["管理"] if role == "admin" else [])
 
+    # [專家級修復] 利用 URL 查詢參數持久化當前頁面狀態，徹底解決頁面自動重整(location.reload)導致的閃退回首頁問題
+    try:
+        q_page = st.query_params.get("page", "")
+        if q_page in pages:
+            st.session_state["nav_page"] = q_page
+    except Exception:
+        pass
+
     if "nav_page_pending" in st.session_state:
         try:
             _pending = str(st.session_state.pop("nav_page_pending") or "").strip()
@@ -4366,9 +4374,17 @@ def main() -> None:
             _pending = ""
         if _pending and _pending in pages:
             st.session_state["nav_page"] = _pending
+            try:
+                st.query_params["page"] = _pending
+            except Exception:
+                pass
 
-    if "nav_page" not in st.session_state:
+    if "nav_page" not in st.session_state or st.session_state["nav_page"] not in pages:
         st.session_state["nav_page"] = pages[0]
+        try:
+            st.query_params["page"] = pages[0]
+        except Exception:
+            pass
 
     with st.sidebar:
         st.markdown(f"### {APP_TITLE}")
@@ -4382,6 +4398,10 @@ def main() -> None:
             btn_type = "primary" if is_active else "secondary"
             if st.button(p, key=f"nav_btn_{p}", type=btn_type, use_container_width=True):
                 st.session_state["nav_page"] = p
+                try:
+                    st.query_params["page"] = p
+                except Exception:
+                    pass
                 st.rerun()
 
         st.markdown('<div style="height: 10px"></div>', unsafe_allow_html=True)
