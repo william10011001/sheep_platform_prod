@@ -138,50 +138,34 @@ header[data-testid="stHeader"] {{
     z-index: 999998 !important;
 }}
 
-/* Sidebar toggle controls: support both new and legacy Streamlit selectors */
-button[data-testid="stExpandSidebarButton"],
-button[data-testid="stSidebarCollapseButton"],
-div[data-testid="collapsedControl"],
-div[data-testid="stSidebarCollapsedControl"] {{
-    position: fixed !important;
-    top: 10px !important;
-    left: 10px !important;
-    z-index: 1000000 !important;
-    pointer-events: auto !important;
-    display: flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-    opacity: 1 !important;
+/* Lock sidebar always expanded: eliminate the "expand button missing" state entirely */
+section[data-testid="stSidebar"] {{
+    transform: none !important;
+    margin-left: 0 !important;
+    left: 0 !important;
+    width: 320px !important;
+    min-width: 320px !important;
+    max-width: 320px !important;
     visibility: visible !important;
+    opacity: 1 !important;
+}}
+
+div[data-testid="stSidebar"] {{
     transform: none !important;
 }}
 
-/* Force a stable clickable box even if Streamlit's icon gets hidden by other CSS */
-button[data-testid="stExpandSidebarButton"],
 button[data-testid="stSidebarCollapseButton"] {{
-    width: 42px !important;
-    height: 42px !important;
-    min-width: 42px !important;
-    min-height: 42px !important;
-    padding: 0 !important;
-    background: rgba(10, 14, 20, 0.70) !important;
-    border: 1px solid rgba(255, 255, 255, 0.10) !important;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55) !important;
-    border-radius: 10px !important;
+    display: none !important;
 }}
 
-/* If Streamlit renders an SVG icon inside, make sure it has size */
-button[data-testid="stExpandSidebarButton"] svg,
-button[data-testid="stSidebarCollapseButton"] svg {{
-    width: 20px !important;
-    height: 20px !important;
-    min-width: 20px !important;
-    min-height: 20px !important;
+button[data-testid="stExpandSidebarButton"] {{
+    display: none !important;
 }}
 
-button[data-testid="stExpandSidebarButton"]:hover,
-button[data-testid="stSidebarCollapseButton"]:hover {{
-    border-color: rgba(59, 130, 246, 0.55) !important;
+/* Legacy selectors (older Streamlit) */
+div[data-testid="collapsedControl"],
+div[data-testid="stSidebarCollapsedControl"] {{
+    display: none !important;
 }}
 
 @media (max-width: 720px) {{
