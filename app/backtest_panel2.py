@@ -563,7 +563,7 @@ def _append_update_bitmart_csv(symbol: str,
 
     fetch_lock_path = Path(str(csv_path) + ".net.lock")
     try:
-        with FileLock(str(fetch_lock_path), timeout=120.0):
+        with FileLock(str(fetch_lock_path), timeout=1.0):
             client = BitMartRestClient()
 
             status = _csv_quick_status(symbol, step_min)
@@ -600,7 +600,7 @@ def _append_update_bitmart_csv(symbol: str,
 
     if fetched <= 0:
         try:
-            with FileLock(str(lock_path), timeout=30.0):
+            with FileLock(str(lock_path), timeout=3):
                 _write_meta(meta_path, {
                     "exchange": "bitmart",
                     "symbol": str(symbol).strip(),
@@ -616,7 +616,7 @@ def _append_update_bitmart_csv(symbol: str,
         return str(csv_path)
 
     try:
-        with FileLock(str(lock_path), timeout=60.0):
+        with FileLock(str(lock_path), timeout=3):
             last_line = _read_last_data_line(csv_path)
             last_now = None
             if last_line:
@@ -787,40 +787,26 @@ GENERIC_SIG_CACHE: Dict[str, List[np.ndarray]] = {}
 
 # --- Ultra-fast JSON dumps (prefer orjson if available) ---
 def _json_default(o):
-    import math
     if isinstance(o, (np.integer,)):
         return int(o)
     if isinstance(o, (np.floating,)):
-        val = float(o)
-        if math.isnan(val) or math.isinf(val):
-            return None
-        return val
+        return float(o)
     if isinstance(o, (np.ndarray,)):
         return o.tolist()
     if isinstance(o, (np.bool_, bool)):
         return bool(o)
-    if isinstance(o, set):
-        return list(o)
     try:
         import pandas as pd
-        if pd.isna(o):
-            return None
         if isinstance(o, (pd.Timestamp, pd.Timedelta)):
             return str(o)
         if isinstance(o, (pd.DataFrame, pd.Series)):
             return "Pandas_Object_Skipped"
     except Exception:
         pass
-    
-    # 最後防線：若遇到無法序列化的物件，將其安全字串化，同時保留追蹤資訊
     try:
-        fallback_str = str(o)
-        # 避免回傳過長的記憶體位址字串導致資料庫爆炸
-        if len(fallback_str) > 500:
-            return f"{type(o).__name__}_(Truncated)"
-        return fallback_str
-    except Exception as e:
-        return f"Unserializable_Object_Error_{type(e).__name__}"
+        return str(o)
+    except Exception:
+        return "Unserializable_Object"
 
 try:
     import orjson as _orjson
@@ -8921,12 +8907,12 @@ def app():
         resdf["_sort_dd"] = -resdf["max_drawdown_pct"].astype(float)
         resdf = resdf.sort_values(by=["_sort_cagr", "_sort_pf", "_sort_dd"], ascending=[False, False, False])
 
-        # 針對複雜策略執行 1m 精準驗證回補
+        # 只針對複雜策略做 Top-K 1m 驗證（快篩 + 精準回補）
         if (family in ["TEMA_RSI", "LaguerreRSI_TEMA"]) and bool(st.session_state.get("use_1m_fill", False)) and (st.session_state.get("microfill_ctx", None) is not None):
             verify_k = int(min(len(resdf), max(int(topN) * 10, 50)))
             verify_uids = list(resdf.index[:verify_k])
 
-            st.info(f"系統正在執行 {family} 策略 1m 週期資料驗證程序 (Top-{verify_k})...")
+            st.info(f"已偵測到複雜策略（{family}）：正在用 1m 精準撮合驗證 Top-{verify_k}，避免快速掃描過度樂觀…")
             _vp = st.progress(0.0)
 
             for ii, uid in enumerate(verify_uids):
@@ -8964,7 +8950,7 @@ def app():
                 _vp.progress((ii + 1) / float(verify_k))
 
             _vp.empty()
-            st.success(f"驗證完成：已更新 Top-{verify_k} 組合狀態。")
+            st.success(f"1m 驗證完成：Top-{verify_k} 已回補 verified 欄位，可直接用 verified 結果排序。")
 
         # 最終排序：verified 置頂，再依 CAGR/PF/DD 排
         resdf["_sort_verified"] = resdf["verified"].astype(int)

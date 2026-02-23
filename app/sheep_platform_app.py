@@ -15,7 +15,7 @@ import streamlit as st
 import traceback
 import sys
 
-# DataFrame 版本相容處理
+# --- 專家級版本相容修復：解決 dataframe_selector 遺失問題 ---
 def _get_orig_dataframe():
     # 嘗試取得 Streamlit 原始的 dataframe 渲染方法，避開遞迴
     if hasattr(st, "_sheep_orig_dataframe"):
@@ -85,8 +85,8 @@ _BRAND_WEBM_1 = os.environ.get("SHEEP_BRAND_WEBM_1", "static/羊LOGO影片(去�
 
 def _mask_username(username: str, nickname: str = None) -> str:
     """
-    隱私遮罩邏輯：
-    1. 若有設定 nickname，直接回傳 nickname。
+    專家級隱私遮罩邏輯 (V2)：
+    1. 若有設定 nickname，直接回傳 nickname (前端 CSS 會負責加上皇冠)。
     2. 遮罩邏輯：
        - 長度 <= 2: 顯示首字 + *
        - 長度 3~4: 首1 + ** + 尾1
@@ -146,7 +146,7 @@ iframe[data-sheep-brand="1"],
 iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
   position: fixed !important;
   top: 0 !important;
-  /* 將 Header 偏移 60px 避開側邊欄控制鈕區域 */
+  /* 教授級終極修正：將 Header 偏移 60px 避開側邊欄控制鈕區域 */
   left: 60px !important; 
   width: 300px !important;
   height: 84px !important;
@@ -2658,7 +2658,7 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
             conn.close()
             
         try:
-            # 明確指定參數避免關聯錯誤
+            # [專家級修復] 修正引數錯位問題：明確指定 cycle_id 與 min_tasks 避免資料庫關聯崩潰
             db.assign_tasks_for_user(int(user["id"]), cycle_id=int(cycle["id"]), min_tasks=min_tasks)
         except AttributeError as ae:
             st.error(f"系統核心函數遺失。")
@@ -2694,22 +2694,8 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
         if not tasks:
             st.info("無任務。")
         else:
-            html_cards = []
-            
-            def _get_status_color(s: str) -> str:
-                if s == "running": return "#10b981"
-                if s == "queued": return "#f59e0b"
-                if s == "completed": return "#3b82f6"
-                if s == "error": return "#ef4444"
-                return "#64748b"
-
-            def _sort_key(task_dict):
-                order = {"running": 0, "queued": 1, "assigned": 2, "completed": 3, "error": 4}
-                return (order.get(str(task_dict.get("status")), 9), -int(task_dict["id"]))
-
-            sorted_tasks = sorted(tasks, key=_sort_key)
-
-            for t in sorted_tasks:
+            rows = []
+            for t in tasks:
                 try:
                     prog = json.loads(t.get("progress_json") or "{}")
                 except Exception:
@@ -2721,152 +2707,48 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
 
                 best_score = prog.get("best_any_score")
                 passed = bool(prog.get("best_any_passed") or False)
+
                 eta_s = prog.get("eta_s")
                 speed_cps = prog.get("speed_cps")
                 phase = str(prog.get("phase") or "")
+                updated_at = str(prog.get("updated_at") or "")
+
                 status_raw = str(t.get("status") or "")
-                
                 status_cn = _label_task_status(status_raw)
-                color = _get_status_color(status_raw)
-                
-                # 安全數值轉換防護
-                try:
-                    safe_score = f"{float(best_score):.6f}" if best_score is not None else "-"
-                except (ValueError, TypeError):
-                    safe_score = "-"
+                phase_cn = _label_phase(phase)
 
-                try:
-                    safe_speed = f"{float(speed_cps):.1f} /s" if speed_cps is not None and float(speed_cps) > 0 else "-"
-                except (ValueError, TypeError):
-                    safe_speed = "-"
+                rows.append(
+                    {
+                        "任務ID": int(t["id"]),
+                        "策略池": str(t.get("pool_name") or ""),
+                        "交易對": str(t.get("symbol") or ""),
+                        "週期": f"{int(t.get('timeframe_min') or 0)}m",
+                        "策略族": str(t.get("family") or ""),
+                        "分割": f'{int(t.get("partition_idx") or 0) + 1}/{int(t.get("num_partitions") or 1)}',
+                        "狀態": status_cn,
+                        "階段": phase_cn,
+                        "進度(%)": round(float(pct), 2),
+                        "已跑組合": int(combos_done),
+                        "組合總量": int(combos_total),
+                        "最佳分數": None if best_score is None else round(float(best_score), 6),
+                        "達標": bool(passed),
+                        "速度(組合/秒)": None if speed_cps is None else round(float(speed_cps), 3),
+                        "預估剩餘(秒)": None if eta_s is None else round(float(eta_s), 1),
+                        "更新時間": updated_at,
+                        "__status_raw": status_raw,
+                    }
+                )
 
-                try:
-                    safe_eta = f"{float(eta_s):.0f}s" if eta_s is not None and float(eta_s) > 0 else "-"
-                except (ValueError, TypeError):
-                    safe_eta = "-"
+            df = pd.DataFrame(rows)
 
-                bar_width = min(100.0, max(0.0, pct))
-                is_pulsing = ""
-                
-                # 嚴格狀態機判斷，避免顯示衝突
-                if status_raw == "completed":
-                    phase_cn = "執行完畢"
-                    progress_display = f"{combos_done:,} / {combos_total:,}" if combos_total > 0 else "完成"
-                    score_str = safe_score
-                    speed_str = "-"
-                    eta_str = "-"
-                    bar_width = 100.0
-                    is_pulsing = ""
-                elif status_raw == "error":
-                    phase_cn = "發生異常"
-                    progress_display = "執行中斷"
-                    score_str = safe_score
-                    speed_str = "-"
-                    eta_str = "失敗"
-                    color = "#ef4444"
-                    is_pulsing = ""
-                elif status_raw == "queued":
-                    phase_cn = "等待資源排程"
-                    progress_display = "準備分配資源"
-                    score_str = "-"
-                    speed_str = "-"
-                    eta_str = "-"
-                    bar_width = 0.0
-                    is_pulsing = "animation: pulse 2s infinite;"
-                elif status_raw == "assigned":
-                    phase_cn = "尚未啟動"
-                    progress_display = "待命"
-                    score_str = "-"
-                    speed_str = "-"
-                    eta_str = "-"
-                    bar_width = 0.0
-                    is_pulsing = ""
-                else:
-                    # status_raw == "running"
-                    phase_cn = _label_phase(phase)
-                    if phase == "sync_data":
-                        progress_display = "同步歷史資料"
-                        score_str = "-"
-                        speed_str = "-"
-                        eta_str = "-"
-                        is_pulsing = "animation: pulse 1.5s infinite;"
-                    elif phase == "build_grid":
-                        progress_display = "產生參數網格"
-                        score_str = "-"
-                        speed_str = "-"
-                        eta_str = "-"
-                        is_pulsing = "animation: pulse 1.5s infinite;"
-                    elif combos_total == 0:
-                        progress_display = "初始化階段"
-                        score_str = "-"
-                        speed_str = "-"
-                        eta_str = "-"
-                        is_pulsing = "animation: pulse 1.5s infinite;"
-                    else:
-                        progress_display = f"{combos_done:,} / {combos_total:,}"
-                        score_str = safe_score if safe_score != "-" else "計算中..."
-                        speed_str = safe_speed
-                        eta_str = safe_eta
-                        is_pulsing = ""
+            order = {"running": 0, "assigned": 1, "queued": 2, "completed": 3, "expired": 4, "revoked": 5}
+            try:
+                df["_ord"] = df["__status_raw"].map(order).fillna(9)
+                df = df.sort_values(["_ord", "任務ID"], ascending=[True, False]).drop(columns=["_ord", "__status_raw"])
+            except Exception:
+                pass
 
-                passed_badge = '<span style="background:rgba(16,185,129,0.15);color:#34d399;padding:4px 8px;border-radius:6px;font-size:11px;font-weight:600;border:1px solid rgba(16,185,129,0.3);box-shadow:0 0 8px rgba(16,185,129,0.2);">已達標</span>' if passed else ''
-
-                pulse_anim_name = f"pulse_{t['id']}"
-                card_html = f"""<style>
-@{pulse_anim_name} {{
-  0% {{ opacity: 1; }}
-  50% {{ opacity: 0.6; box-shadow: 0 0 10px {color}40; }}
-  100% {{ opacity: 1; }}
-}}
-</style>
-<div style="background: linear-gradient(145deg, rgba(30, 41, 59, 0.7) 0%, rgba(15, 23, 42, 0.9) 100%); border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 20px; margin-bottom: 16px; position: relative; overflow: hidden; box-shadow: 0 8px 24px rgba(0,0,0,0.4); {is_pulsing.replace('pulse', pulse_anim_name)}">
-  <div style="position: absolute; left: 0; top: 0; bottom: 0; width: 5px; background: {color}; box-shadow: 2px 0 12px {color}80;"></div>
-  <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px;">
-    <div>
-      <div style="display: flex; align-items: center; gap: 12px;">
-        <span style="color: #ffffff; font-weight: 800; font-size: 18px; letter-spacing: 0.5px;">任務 {t['id']}</span>
-        <span style="background: rgba(255,255,255,0.06); color: #cbd5e1; padding: 4px 10px; border-radius: 8px; font-size: 12px; border: 1px solid rgba(255,255,255,0.1); font-weight: 600;">{t['symbol']} · {t['timeframe_min']}m</span>
-        {passed_badge}
-      </div>
-      <div style="color: #94a3b8; font-size: 13px; margin-top: 8px; display: flex; align-items: center; gap: 6px;">
-        <span style="color:#60a5fa; font-weight:600;">{t['family']}</span>
-        <span>|</span>
-        <span>{t['pool_name']}</span>
-        <span>|</span>
-        <span>分割 {int(t['partition_idx'])+1} / {t.get('num_partitions', 1)}</span>
-      </div>
-    </div>
-    <div style="text-align: right; background: rgba(0,0,0,0.2); padding: 8px 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.05);">
-      <div style="color: {color}; font-weight: 800; font-size: 15px; text-transform: uppercase; letter-spacing: 1px;">{status_cn}</div>
-      <div style="color: #94a3b8; font-size: 12px; margin-top: 4px; font-family: monospace;">{phase_cn}</div>
-    </div>
-  </div>
-  <div style="background: rgba(0,0,0,0.4); border-radius: 8px; height: 8px; width: 100%; margin-bottom: 16px; overflow: hidden; border: 1px solid rgba(255,255,255,0.05);">
-    <div style="background: linear-gradient(90deg, {color}80, {color}); height: 100%; width: {bar_width}%; transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1); box-shadow: 0 0 10px {color};"></div>
-  </div>
-  <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; text-align: left;">
-    <div style="background: rgba(255,255,255,0.02); padding: 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.04);">
-      <div style="color: #64748b; font-size: 11px; margin-bottom: 6px; text-transform: uppercase; font-weight: 600;">參數運算進度</div>
-      <div style="color: #f8fafc; font-size: 14px; font-family: monospace; font-weight: 600;">{progress_display}</div>
-    </div>
-    <div style="background: rgba(255,255,255,0.02); padding: 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.04);">
-      <div style="color: #64748b; font-size: 11px; margin-bottom: 6px; text-transform: uppercase; font-weight: 600;">目前最佳分數</div>
-      <div style="color: #10b981; font-size: 14px; font-weight: 700; font-family: monospace;">{score_str}</div>
-    </div>
-    <div style="background: rgba(255,255,255,0.02); padding: 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.04);">
-      <div style="color: #64748b; font-size: 11px; margin-bottom: 6px; text-transform: uppercase; font-weight: 600;">處理速度</div>
-      <div style="color: #e2e8f0; font-size: 14px; font-family: monospace;">{speed_str}</div>
-    </div>
-    <div style="background: rgba(255,255,255,0.02); padding: 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.04);">
-      <div style="color: #64748b; font-size: 11px; margin-bottom: 6px; text-transform: uppercase; font-weight: 600;">預估剩餘時間</div>
-      <div style="color: #fbbf24; font-size: 14px; font-family: monospace; font-weight: 600;">{eta_str}</div>
-    </div>
-  </div>
-</div>"""
-                html_cards.append(card_html)
-
-            final_cards_html = f'<div style="margin-top: 10px; width: 100%; display: flex; flex-direction: column; gap: 0px;">{"".join(html_cards)}</div>'
-            st.markdown(final_cards_html, unsafe_allow_html=True)
+            st.dataframe(df, use_container_width=True, hide_index=True)
 
         st.markdown(_section_title_html("全域進度", "顯示全站所有用戶的整體挖礦進度與分潤統計。可依策略篩選觀察。", level=3), unsafe_allow_html=True)
         # 呼叫此函式也被包裝在最外層的 try-except 中，確保不再出現裸奔錯誤
@@ -3012,6 +2894,7 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                         tid = int(t["id"])
                         st_raw = str(t.get("status") or "")
                         
+                        # [專家級修復] 擴大可排程狀態，包含 queued 與 意外死掉的 running
                         if st_raw not in ("assigned", "queued", "error", "running"):
                             continue
                         if job_mgr.is_running(tid):
@@ -3019,12 +2902,15 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                         if job_mgr.is_queued(int(user["id"]), tid):
                             continue
                             
+                        # 如果任務在 DB 是 running，但 job_mgr 判斷它根本沒在跑，這就是「殭屍任務」
+                        # 我們主動將其降級回 assigned 讓它能被重新領取
                         if st_raw == "running":
                             try:
                                 db.update_task_status(tid, "assigned")
                             except Exception:
                                 pass
                         elif st_raw == "error":
+                            # [專家級修復] 若之前發生錯誤卡在 error，重新排程時也應初始化狀態
                             try:
                                 db.update_task_status(tid, "assigned")
                             except Exception:
@@ -3033,10 +2919,10 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                         to_queue.append(tid)
                     
                     if to_queue:
-                        # 將任務加入排程列隊
+                        # 呼叫 job_mgr 實際將任務加入排程列隊，這行非常關鍵，否則任務無法啟動且會報錯
                         result = job_mgr.enqueue_many(int(user["id"]), to_queue, bt)
                         
-                        # 將任務狀態變更為 queued，並更新排隊進度
+                        # [專家級 UX 修復] 將任務狀態變更為 queued 的同時，立即注入詳細的排隊進度 JSON，打破點擊後毫無反應的死寂
                         for qid in to_queue:
                             db.update_task_status(qid, "queued")
                             db.update_task_progress(qid, {
@@ -3281,6 +3167,7 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
         }
 
         status_label = status_map.get(str(view_status), str(view_status) or "-")
+        phase_label = phase_map.get(str(phase), str(phase) or "-")
         passed_label = "是" if bool(best_any_passed) else "否"
 
         def _pill_class(kind: str) -> str:
@@ -3291,6 +3178,7 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
             if k in ("expired", "revoked", "error"): return "bad"
             return "neutral"
 
+        # [專家級 UI] 強化的進度儀表板
         st.markdown(
             f'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">'
             f'<span class="pill pill-{_pill_class(view_status)}" style="font-size:14px; padding:6px 12px;">狀態: {status_label}</span>'
@@ -3301,113 +3189,77 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
         
         phase_color = "#94a3b8"
         is_animating = False
-        display_phase_label = phase_map.get(str(phase), str(phase) or "-")
-        display_phase_msg = phase_msg if phase_msg else '準備就緒'
         
-        # 依據任務狀態覆蓋內部變數，確保呈現邏輯絕對一致
-        if view_status == "completed":
-            phase_color = "#3b82f6"
-            is_animating = False
-            display_phase_label = "執行完畢"
-            display_phase_msg = "所有參數組合已運算並儲存完成。"
-        elif view_status == "error":
-            phase_color = "#ef4444"
-            is_animating = False
-            display_phase_label = "發生異常"
-        elif view_status == "queued":
+        if str(phase) == "queued":
             phase_color = "#f59e0b"
             is_animating = True
-            display_phase_label = "等待資源排程"
-            display_phase_msg = "任務已進入排程列隊，正在等待伺服器分配運算資源..."
-        elif view_status == "assigned":
-            phase_color = "#94a3b8"
-            is_animating = False
-            display_phase_label = "尚未啟動"
-        else:
-            if str(phase) == "sync_data":
-                phase_color = "#0ea5e9"
-                is_animating = True
-            elif str(phase) == "build_grid":
-                phase_color = "#8b5cf6"
-                is_animating = True
-            elif str(phase) == "grid_search":
-                phase_color = "#10b981"
-                is_animating = True
+        elif str(phase) == "sync_data":
+            phase_color = "#0ea5e9"
+            is_animating = True
+        elif str(phase) == "build_grid":
+            phase_color = "#8b5cf6"
+            is_animating = True
+        elif str(phase) == "grid_search":
+            phase_color = "#10b981"
+            is_animating = True
+        elif str(phase) == "error":
+            phase_color = "#ef4444"
         
         anim_css = "animation: pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;" if is_animating else ""
         
-        html_content = f"""<div style="background: rgba(0,0,0,0.2); border: 1px solid {phase_color}40; border-left: 4px solid {phase_color}; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px;">
-<div style="display: flex; justify-content: space-between; align-items: center;">
-<div style="display: flex; align-items: center; gap: 10px;">
-<div style="width: 12px; height: 12px; border-radius: 50%; background: {phase_color}; {anim_css}"></div>
-<span style="color: {phase_color}; font-weight: 700; font-size: 16px;">目前作業：{display_phase_label}</span>
-</div>
-</div>
-<div style="margin-top: 8px; font-size: 14px; color: #cbd5e1; white-space: pre-wrap;">{html.escape(display_phase_msg)}</div>
-</div>"""
-        st.markdown(html_content, unsafe_allow_html=True)
+        st.markdown(
+            f"""
+            <div style="background: rgba(0,0,0,0.2); border: 1px solid {phase_color}40; border-left: 4px solid {phase_color}; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <span style="font-size: 20px; {anim_css}"></span>
+                        <span style="color: {phase_color}; font-weight: 700; font-size: 16px;">目前作業：{phase_label}</span>
+                    </div>
+                </div>
+                <div style="margin-top: 8px; font-size: 14px; color: #cbd5e1;">
+                    {phase_msg if phase_msg else '準備就緒'}
+                </div>
+            </div>
+            """, unsafe_allow_html=True
+        )
         
         top_b, top_c, top_d = st.columns([1.5, 1.5, 1.5])
         with top_b:
             prog_text = "-"
             sync = prog.get("sync")
             if int(combos_total) > 0:
-                prog_text = f"{int(combos_done):,} / {int(combos_total):,}"
+                prog_text = f"{int(combos_done)} / {int(combos_total)}"
             elif str(phase) == "sync_data" and isinstance(sync, dict):
                 items = sync.get("items")
                 cur = str(sync.get("current") or "")
                 if isinstance(items, dict) and cur in items:
-                    try:
-                        done_i = int(items[cur].get("done", 0))
-                        total_i = int(items[cur].get("total", 0))
-                        if total_i > 0:
-                            prog_text = f"{cur} {done_i}/{total_i}"
-                    except (ValueError, TypeError):
-                        pass
-            
-            if view_status == "completed" and combos_total > 0:
-                prog_text = f"{int(combos_total):,} / {int(combos_total):,}"
-
+                    done_i = int(items[cur].get("done", 0))
+                    total_i = int(items[cur].get("total", 0))
+                    if total_i > 0:
+                        prog_text = f"{cur} {done_i}/{total_i}"
             st.markdown(f'<div class="small-muted">運算進度</div><div class="kpi" style="font-size:22px; font-weight:800; color:#f8fafc;">{prog_text}</div>', unsafe_allow_html=True)
-        
         with top_c:
-            try:
-                elapsed_s = prog.get("elapsed_s")
-                es = "-" if elapsed_s is None else f"{float(elapsed_s):.1f} s"
-            except (ValueError, TypeError):
-                es = "-"
+            elapsed_s = prog.get("elapsed_s")
+            es = "-" if elapsed_s is None else f"{float(elapsed_s):.1f} s"
             st.markdown(f'<div class="small-muted">已耗時</div><div class="kpi" style="font-size:22px; font-weight:800; color:#f8fafc;">{es}</div>', unsafe_allow_html=True)
-        
         with top_d:
-            try:
-                sc_txt = "-" if best_any_score is None else f"{float(best_any_score):.6f}"
-            except (ValueError, TypeError):
-                sc_txt = "-"
-            st.markdown(f'<div class="small-muted">最高分紀錄</div><div class="kpi" style="font-size:22px; font-weight:800; color:#10b981;">{sc_txt}</div>', unsafe_allow_html=True)
+            sc_txt = "-" if best_any_score is None else str(round(float(best_any_score), 6))
+            st.markdown(f'<div class="small-muted">當前最高分</div><div class="kpi" style="font-size:22px; font-weight:800; color:#10b981;">{sc_txt}</div>', unsafe_allow_html=True)
 
-        if view_status == "running" and str(phase) == "grid_search":
-            try:
-                speed_cps = prog.get("speed_cps")
-                eta_s = prog.get("eta_s")
-                sp = "-" if speed_cps is None else f"{float(speed_cps):.0f} / s"
-                et = "-" if eta_s is None else f"{float(eta_s):.1f} s"
-            except (ValueError, TypeError):
-                sp = "-"
-                et = "-"
+        if str(phase) == "grid_search":
+            speed_cps = prog.get("speed_cps")
+            eta_s = prog.get("eta_s")
+            sp = "-" if speed_cps is None else f"{float(speed_cps):.0f} / s"
+            et = "-" if eta_s is None else f"{float(eta_s):.1f} s"
             st.markdown(f'<div style="background:rgba(255,255,255,0.03); padding:8px 16px; border-radius:6px; margin-top:12px; font-size:13px; color:#94a3b8; display:flex; justify-content:space-between; border: 1px solid rgba(255,255,255,0.05);">'
                         f'<span>算力速度: <span style="color:#60a5fa; font-weight:bold;">{sp}</span></span>'
                         f'<span>預估剩餘: <span style="color:#fbbf24; font-weight:bold;">{et}</span></span>'
                         f'</div>', unsafe_allow_html=True)
 
         if last_error:
-            st.markdown(
-                f"""<div style="background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); border-radius: 8px; padding: 12px; margin-top: 12px;">
-<div style="color: #ef4444; font-weight: bold; margin-bottom: 4px;">系統中斷報告</div>
-<div style="color: #fca5a5; font-size: 13px; white-space: pre-wrap;">{html.escape(last_error)}</div>
-</div>""", unsafe_allow_html=True
-            )
+            st.error(f"任務發生錯誤:\n\n{last_error}")
             if prog.get("debug_traceback"):
-                with st.expander("展開完整系統錯誤日誌"):
+                with st.expander("點擊展開詳細錯誤追蹤 (Traceback)"):
                     st.code(prog.get("debug_traceback"), language="python") 
 
         # Progress visualization
@@ -3514,7 +3366,7 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
         except Exception:
             pass
 
-        # 建立不可見的安全重整按鈕
+        # [專家級修復] 放置一個隱藏按鈕，透過 JS 觸發 Streamlit 原生 rerun，徹底消滅全頁面刷新的閃爍與效能問題
         if st.button("AutoRefreshHiddenBtn", key="hidden_refresh_btn", use_container_width=False):
             pass
 
@@ -3538,7 +3390,6 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                 targetBtn.style.height = '1px';
                 targetBtn.style.pointerEvents = 'none';
                 targetBtn.style.overflow = 'hidden';
-                targetBtn.style.zIndex = '-9999';
             }}
         }}
     }});
@@ -3549,16 +3400,10 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
 
     w.__sheep_autorefresh_timer = setTimeout(function() {{
       try {{
-        // 暫停更新條件：頁面不可見、用戶正在輸入、或用戶正在選取文字
         if (document.hidden) return;
         
         const activeEl = w.document.activeElement;
-        const isInputting = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT' || activeEl.isContentEditable);
-        const isSelectingText = w.getSelection && w.getSelection().toString().length > 0;
-        
-        if (isInputting || isSelectingText) {{
-            // 延後下一次檢查，不中斷用戶操作
-            w.__sheep_autorefresh_timer = setTimeout(arguments.callee, 2000);
+        if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT')) {{
             return;
         }}
         
@@ -3566,11 +3411,11 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
             targetBtn.click();
         }}
       }} catch (e) {{
-        console.warn('AutoRefresh execution error:', e);
+        console.warn('AutoRefresh error', e);
       }}
     }}, ms);
   }} catch (e) {{
-    console.warn('AutoRefresh initialization error:', e);
+    console.warn('AutoRefresh init error', e);
   }}
 }})();
 </script>
@@ -3733,21 +3578,30 @@ def _render_audit(audit: Dict[str, Any]) -> None:
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 def _page_leaderboard(user: Dict[str, Any]) -> None:
-    lb_header_html = f"""<div style="background: linear-gradient(135deg, rgba(255,215,0,0.1) 0%, rgba(255,140,0,0.05) 100%); border: 1px solid rgba(255, 215, 0, 0.3); border-radius: 12px; padding: 20px 24px; margin-bottom: 24px; box-shadow: 0 8px 32px rgba(255, 215, 0, 0.05); display: flex; justify-content: space-between; align-items: center;">
-<div style="display: flex; align-items: center; gap: 16px;">
-<div style="width: 48px; height: 48px; background: linear-gradient(135deg, #FFD700 0%, #FF8C00 100%); border-radius: 12px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 16px rgba(255, 215, 0, 0.4);">
-<span style="font-size: 24px; font-weight: bold; color: #fff;">1</span>
-</div>
-<div>
-<div style="display: flex; align-items: center;">
-<h2 style="margin: 0; padding: 0; font-size: 28px; font-weight: 900; background: linear-gradient(135deg, #FFD700 0%, #FFFFFF 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 1px;">排行榜</h2>
-{_help_icon_html('此區塊展示全平台數據統計與排名。分為算力貢獻、積分收益、單次最高分與累積掛機時長。排名前列者將獲得專屬自訂稱號與相關權限。')}
-</div>
-<div style="font-size: 13px; color: #94a3b8; margin-top: 4px;">展示頂尖貢獻者與數據紀錄。數據每分鐘更新一次。</div>
-</div>
-</div>
-</div>"""
-    st.markdown(lb_header_html, unsafe_allow_html=True)
+    st.markdown(
+        """
+        <div style="background: linear-gradient(135deg, rgba(255,215,0,0.1) 0%, rgba(255,140,0,0.05) 100%); 
+                    border: 1px solid rgba(255, 215, 0, 0.3); 
+                    border-radius: 12px; 
+                    padding: 20px 24px; 
+                    margin-bottom: 24px;
+                    box-shadow: 0 8px 32px rgba(255, 215, 0, 0.05);
+                    display: flex; justify-content: space-between; align-items: center;">
+            <div style="display: flex; align-items: center; gap: 16px;">
+                <div style="width: 48px; height: 48px; background: linear-gradient(135deg, #FFD700 0%, #FF8C00 100%); border-radius: 12px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 16px rgba(255, 215, 0, 0.4);">
+                    <span style="font-size: 24px; font-weight: bold; color: #fff;">1</span>
+                </div>
+                <div>
+                    <div style="display: flex; align-items: center;">
+                        <h2 style="margin: 0; padding: 0; font-size: 28px; font-weight: 900; background: linear-gradient(135deg, #FFD700 0%, #FFFFFF 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 1px;">排行榜</h2>
+                        """ + _help_icon_html("此區塊展示全平台數據統計與排名。分為算力貢獻、積分收益、單次最高分與累積掛機時長。排名前列者將獲得專屬自訂稱號與相關權限。") + """
+                    </div>
+                    <div style="font-size: 13px; color: #94a3b8; margin-top: 4px;">展示頂尖貢獻者與數據紀錄。數據每分鐘更新一次。</div>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True
+    )
 
     # 1. 徹底拋棄原生 Radio 紅點：注入頂級 Segmented Control CSS 模擬器
     st.markdown('''
@@ -3827,38 +3681,43 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
                     can_set_nickname = True
                 break
     
-    # 3. 稱號設定區塊
+    # 3. 尊榮暱稱設定區塊 (美化版)
     if can_set_nickname:
         st.markdown(
-            """<div class="nick-card">
-<div style="font-size:20px; font-weight:800; color:#FFD700; margin-bottom:12px; display:flex; align-items:center;">
-<span class="crown-icon"></span>特殊稱號權限已啟用
-</div>
-<div style="font-size:15px; color:#cbd5e1; line-height:1.6;">您的算力貢獻位居前列，系統已為您開放自訂稱號功能。</div>
-</div>""", unsafe_allow_html=True
+            """
+            <div class="nick-card">
+                <div style="font-size:20px; font-weight:800; color:#FFD700; margin-bottom:12px; display:flex; align-items:center;">
+                    <span class="crown-icon"></span>尊榮權限已解鎖
+                </div>
+                <div style="font-size:15px; color:#cbd5e1; line-height:1.6;">
+                    恭喜！您是本月算力貢獻前 5 名的頂尖強者。您現在可以設定專屬暱稱，讓全平台看見您的稱號。
+                </div>
+            </div>
+            """, unsafe_allow_html=True
         )
         col_n1, col_n2 = st.columns([3, 1])
         with col_n1:
-            new_nick = st.text_input("設定新稱號", value=user.get("nickname", ""), max_chars=10, label_visibility="collapsed", placeholder="在此輸入您的專屬稱號...")
+            # 增加一些 padding 和 placeholder
+            new_nick = st.text_input("設定新暱稱", value=user.get("nickname", ""), max_chars=10, label_visibility="collapsed", placeholder="在此輸入您的尊榮稱號...")
         with col_n2:
             if st.button("更新稱號", type="primary", use_container_width=True):
                 safe_nick = html.escape(new_nick.strip())
                 if safe_nick:
                     db.update_user_nickname(int(user["id"]), safe_nick)
-                    user["nickname"] = safe_nick
+                    user["nickname"] = safe_nick # Update session cache
                     db.write_audit_log(int(user["id"]), "update_nickname", {"nickname": safe_nick})
-                    st.toast("稱號已更新。")
+                    st.toast("稱號已閃亮更新！")
                     time.sleep(1)
                     st.rerun()
                 else:
                     st.warning("稱號不可為空")
     elif period_hours == 720:
-        st.info(f"月度算力榜前 5 名可解鎖自訂稱號功能。{my_rank_info}")
+        st.info(f" 提示：月度算力榜前 5 名即可解鎖自訂暱稱功能。{my_rank_info}")
 
-    # 4. 排行榜 HTML 渲染器
+    # 4. 排行榜 HTML 渲染器 (修復 HTML 外洩問題)
     def _render_html_table(rows: list, val_col: str, val_fmt: str, unit: str):
         if not rows:
-            st.markdown('<div class="panel" style="text-align:center; color:#64748b; padding:40px; font-size:14px;">此區間尚無數據。</div>', unsafe_allow_html=True)
+            st.markdown('<div class="panel" style="text-align:center; color:#64748b; padding:40px; font-size:14px;">此區間尚無數據，快來搶頭香！</div>', unsafe_allow_html=True)
             return
 
         html_rows = []
@@ -3893,7 +3752,7 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
             is_me = (r.get("username") == user["username"])
             bg_style = 'style="background: rgba(59, 130, 246, 0.15); border: 1px solid rgba(59, 130, 246, 0.4); box-shadow: 0 4px 12px rgba(0,0,0,0.2);"' if is_me else ""
             
-            # 去除 HTML 縮排，確保 Markdown 解析正常
+            # [專家級修復] 同樣去除行內 HTML 縮排，確保 Markdown 不會介入干擾
             row_html = (
                 f'<tr class="lb-row" {bg_style}>\n'
                 f'<td><div class="rank-badge {rank_class}">{rank}</div></td>\n'
@@ -3903,7 +3762,8 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
             )
             html_rows.append(row_html)
 
-        # 移除縮排，避免 Markdown 解析為程式碼區塊
+        # 組合 Table，注意：必須使用 unsafe_allow_html=True
+        # [專家級修復] 徹底移除縮排，避免 Streamlit Markdown 引擎將其誤判為程式碼區塊 (Code Block)
         full_table = (
             '<div class="leaderboard-wrapper">\n'
             '<table class="lb-table" style="width:100%; border-spacing:0 8px; border-collapse:separate;">\n'
@@ -4991,15 +4851,9 @@ def main() -> None:
         except Exception:
             pass
 
-        st.error(f"頁面渲染發生重大異常，系統已自動攔截並產生報告。")
-        st.info(f"錯誤參考編號：{err_id} | 發生時間：{ts_utc}")
-        st.markdown(
-            f"""<div style="background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); border-left: 4px solid #ef4444; border-radius: 8px; padding: 16px; margin-bottom: 16px;">
-<div style="color: #ef4444; font-weight: 800; margin-bottom: 8px; font-size: 16px;">異常類型</div>
-<div style="color: #fca5a5; font-size: 14px; font-family: monospace; white-space: pre-wrap;">{str(route_err)}</div>
-</div>""", unsafe_allow_html=True
-        )
-        with st.expander("展開完整系統錯誤追蹤紀錄 (Traceback)", expanded=True):
+        st.error(f"頁面渲染發生錯誤。")
+        st.info(f"錯誤參考編號：{err_id}")
+        with st.expander("錯誤追蹤紀錄 (Traceback)", expanded=True):
             st.code(tb, language="python")
     return
 

@@ -686,11 +686,13 @@ def claim_task(
     except Exception:
             dh = {"data_hash": "", "data_hash_ts": ""}
 
-    # 支援動態預熱與行情資料完整性驗證
+    # [專家級行情校驗護城河 V2]
+    # 支援 14 種組合自動發放時的行情檔案動態預熱
     if not str(dh.get("data_hash") or "").strip():
         print(f"[API] 偵測到新 Pool ({task.get('symbol')} {task.get('timeframe_min')}m)，啟動自動化預熱流程...")
         try:
-            # 1. 阻斷式同步：在發放前確保主週期就緒，加上 skip_1m=True 避免 Timeout
+            # 1. 阻斷式同步：在發放前確保主週期就緒
+            # [專家級修復] 加上 skip_1m=True，嚴禁 API 伺服器去同步 1m 資料引發 504 Timeout 卡死
             csv_main, _ = bt.ensure_bitmart_data(
                 symbol=str(task.get("symbol") or ""),
                 main_step_min=int(task.get("timeframe_min") or 0),
