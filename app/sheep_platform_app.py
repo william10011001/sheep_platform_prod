@@ -4700,63 +4700,193 @@ def _set_nav_page(target: str) -> None:
 def _sidebar_layout_v2(user: Dict[str, Any], role: str) -> str:
     pages = _nav_pages_for_role(role)
     _sync_nav_state(pages)
-
     current_page = str(st.session_state.get("nav_page") or pages[0])
 
-    # Centralized sidebar styling to avoid scattered CSS collisions
+    # Hide native Streamlit sidebar entirely (we do not rely on its expand/collapse controls).
     st.markdown(
-        """<style>
-        section[data-testid="stSidebar"] {
-            border-right: 1px solid rgba(255,255,255,0.06);
+        """
+        <style>
+        section[data-testid="stSidebar"],
+        div[data-testid="stSidebar"] {
+            display: none !important;
         }
-        section[data-testid="stSidebar"] .stButton > button {
-            border-radius: 10px !important;
-            min-height: 40px !important;
-        }
-        section[data-testid="stSidebar"] .stButton > button[kind="secondary"] {
-            border: 1px solid rgba(255,255,255,0.08) !important;
-            background: rgba(10,14,20,0.35) !important;
-        }
-        section[data-testid="stSidebar"] .stButton > button[kind="primary"] {
-            border: 1px solid rgba(59,130,246,0.45) !important;
-            background: rgba(59,130,246,0.20) !important;
-        }
-        .sidebar_meta {
-            margin-top: -6px;
-            margin-bottom: 10px;
-            opacity: 0.80;
-            font-size: 12px;
-        }
-        .sidebar_divider {
-            height: 1px;
-            background: rgba(255,255,255,0.08);
-            margin: 10px 0;
-        }
-        </style>""",
+        </style>
+        """,
         unsafe_allow_html=True,
     )
 
-    with st.sidebar:
-        st.markdown(f"### {APP_TITLE}")
-        st.markdown(
-            f'<div class="sidebar_meta">{html.escape(str(user.get("username") or ""))} · {html.escape(str(role or ""))}</div>',
-            unsafe_allow_html=True,
-        )
+    safe_app = html.escape(str(APP_TITLE))
+    safe_user = html.escape(str(user.get("username") or ""))
+    safe_role = html.escape(str(role or ""))
 
-        # Navigation buttons (stable keys; no default radio indicator)
-        for p in pages:
-            is_active = (p == current_page)
-            btn_type = "primary" if is_active else "secondary"
-            if st.button(p, key=f"nav_v2_{p}", type=btn_type, use_container_width=True):
-                _set_nav_page(p)
+    # Build links to drive navigation via URL query (stable, rerun-safe).
+    items = []
+    for p in pages:
+        qp = html.escape(p)
+        cls = "sheep_nav_item active" if p == current_page else "sheep_nav_item"
+        items.append(f'<a class="{cls}" href="?page={qp}">{html.escape(p)}</a>')
 
-        st.markdown('<div class="sidebar_divider"></div>', unsafe_allow_html=True)
+    nav_html = "\n".join(items)
 
-        if st.button("登出", key="logout_btn_v2", type="secondary", use_container_width=True):
-            _logout()
-            st.rerun()
+    drawer = f"""
+    <style>
+      :root {{
+        --sheep-drawer-w: 320px;
+        --sheep-z: 2147483000;
+      }}
 
-        _render_user_hud(user)
+      /* Toggle checkbox */
+      #sheepDrawerToggle {{
+        position: fixed;
+        left: -9999px;
+        top: -9999px;
+      }}
+
+      /* Floating button */
+      .sheepDrawerBtn {{
+        position: fixed;
+        top: 10px;
+        left: 10px;
+        z-index: var(--sheep-z);
+        width: 42px;
+        height: 42px;
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid rgba(255,255,255,0.10);
+        background: rgba(10,14,20,0.70);
+        color: rgba(255,255,255,0.92);
+        box-shadow: 0 8px 24px rgba(0,0,0,0.55);
+        cursor: pointer;
+        user-select: none;
+      }}
+      .sheepDrawerBtn:hover {{
+        border-color: rgba(59,130,246,0.55);
+      }}
+
+      /* Backdrop */
+      .sheepDrawerBackdrop {{
+        position: fixed;
+        inset: 0;
+        z-index: calc(var(--sheep-z) - 1);
+        background: rgba(0,0,0,0.35);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 140ms ease;
+      }}
+
+      /* Drawer panel */
+      .sheepDrawer {{
+        position: fixed;
+        top: 0;
+        left: 0;
+        height: 100vh;
+        width: var(--sheep-drawer-w);
+        z-index: var(--sheep-z);
+        transform: translateX(calc(-1 * var(--sheep-drawer-w)));
+        transition: transform 180ms ease;
+        background: rgba(8, 10, 14, 0.92);
+        border-right: 1px solid rgba(255,255,255,0.08);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        box-shadow: 16px 0 48px rgba(0,0,0,0.50);
+        padding: 14px 12px;
+      }}
+
+      #sheepDrawerToggle:checked ~ .sheepDrawer {{
+        transform: translateX(0);
+      }}
+      #sheepDrawerToggle:checked ~ .sheepDrawerBackdrop {{
+        opacity: 1;
+        pointer-events: auto;
+      }}
+
+      .sheepDrawerHeader {{
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        margin-bottom: 12px;
+      }}
+      .sheepDrawerTitle {{
+        font-size: 16px;
+        font-weight: 700;
+        color: rgba(255,255,255,0.92);
+      }}
+      .sheepDrawerMeta {{
+        font-size: 12px;
+        opacity: 0.78;
+        color: rgba(255,255,255,0.85);
+      }}
+
+      .sheepNav {{
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin-top: 10px;
+      }}
+      .sheep_nav_item {{
+        text-decoration: none;
+        border-radius: 10px;
+        padding: 10px 10px;
+        border: 1px solid rgba(255,255,255,0.08);
+        background: rgba(10,14,20,0.35);
+        color: rgba(255,255,255,0.90);
+        font-size: 13px;
+      }}
+      .sheep_nav_item:hover {{
+        border-color: rgba(59,130,246,0.35);
+      }}
+      .sheep_nav_item.active {{
+        border-color: rgba(59,130,246,0.55);
+        background: rgba(59,130,246,0.20);
+      }}
+
+      .sheepDivider {{
+        height: 1px;
+        background: rgba(255,255,255,0.10);
+        margin: 12px 0;
+      }}
+
+      .sheepLogout {{
+        text-decoration: none;
+        border-radius: 10px;
+        padding: 10px 10px;
+        border: 1px solid rgba(255,255,255,0.08);
+        background: rgba(10,14,20,0.35);
+        color: rgba(255,255,255,0.90);
+        font-size: 13px;
+        display: inline-block;
+      }}
+      .sheepLogout:hover {{
+        border-color: rgba(255,255,255,0.18);
+      }}
+    </style>
+
+    <input id="sheepDrawerToggle" type="checkbox" />
+    <label class="sheepDrawerBtn" for="sheepDrawerToggle">選單</label>
+    <label class="sheepDrawerBackdrop" for="sheepDrawerToggle"></label>
+
+    <aside class="sheepDrawer" aria-label="Navigation">
+      <div class="sheepDrawerHeader">
+        <div class="sheepDrawerTitle">{safe_app}</div>
+        <div class="sheepDrawerMeta">{safe_user} · {safe_role}</div>
+      </div>
+
+      <div class="sheepNav">
+        {nav_html}
+      </div>
+
+      <div class="sheepDivider"></div>
+
+      <a class="sheepLogout" href="?action=logout">登出</a>
+    </aside>
+    """
+
+    st.components.v1.html(drawer, height=0)
+
+    # Keep your existing HUD (it is independent from Streamlit sidebar).
+    _render_user_hud(user)
 
     return str(st.session_state.get("nav_page") or pages[0])
 
@@ -4772,6 +4902,21 @@ def main() -> None:
     _render_brand_header(animate=False, dim=False)
 
     _try_auto_login_from_cookie()
+
+    # URL action handling (used by the custom drawer)
+    try:
+        if str(st.query_params.get("action", "") or "").strip().lower() == "logout":
+            _logout()
+            try:
+                del st.query_params["action"]
+            except Exception:
+                try:
+                    st.query_params.clear()
+                except Exception:
+                    pass
+            st.rerun()
+    except Exception:
+        pass
 
     user = _session_user()
     job_mgr = JOB_MANAGER
