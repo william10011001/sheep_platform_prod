@@ -159,12 +159,20 @@ div[data-testid="stSidebarCollapsedControl"],
 div[data-testid="collapsedControl"] {{
     opacity: 0 !important;
     position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    overflow: hidden !important;
     z-index: -1 !important;
 }}
 
-section[data-testid="stSidebar"] button[kind="headerNoPadding"] {{
+section[data-testid="stSidebar"] button[kind="headerNoPadding"],
+section[data-testid="stSidebar"] button[aria-label="Close sidebar"],
+button[aria-label="Close sidebar"] {{
     opacity: 0 !important;
     position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    overflow: hidden !important;
     z-index: -1 !important;
 }}
 
@@ -1298,6 +1306,11 @@ def _style() -> None:
                 try {
                     const sidebar = doc.querySelector('section[data-testid="stSidebar"]');
                     if (!sidebar) return false;
+                    
+                    const expanded = sidebar.getAttribute('aria-expanded');
+                    if (expanded === 'true') return true;
+                    if (expanded === 'false') return false;
+
                     const transform = window.getComputedStyle(sidebar).getPropertyValue('transform');
                     const left = sidebar.getBoundingClientRect().left;
                     return (transform === 'matrix(1, 0, 0, 1, 0, 0)' || left >= 0);
@@ -1324,21 +1337,29 @@ def _style() -> None:
                             const isOpen = isSidebarOpen();
                             
                             if (isOpen) {
-                                const closeBtn = doc.querySelector('section[data-testid="stSidebar"] button[kind="headerNoPadding"]') || doc.querySelector('button[aria-label="Close sidebar"]');
+                                const closeBtn = doc.querySelector('section[data-testid="stSidebar"] button[kind="headerNoPadding"]') 
+                                              || doc.querySelector('section[data-testid="stSidebar"] button[aria-label="Close sidebar"]')
+                                              || doc.querySelector('button[aria-label="Close sidebar"]')
+                                              || doc.querySelector('section[data-testid="stSidebar"] [data-testid="baseButton-headerNoPadding"]');
                                 if (closeBtn) {
                                     closeBtn.click();
-                                    return;
+                                } else {
+                                    stSidebar.style.setProperty('transform', 'translateX(-100%)', 'important');
+                                    stSidebar.style.setProperty('min-width', '0', 'important');
+                                    stSidebar.setAttribute('aria-expanded', 'false');
                                 }
-                                stSidebar.style.setProperty('transform', 'translateX(-100%)', 'important');
-                                stSidebar.style.setProperty('min-width', '0', 'important');
                             } else {
-                                const openBtn = doc.querySelector('div[data-testid="collapsedControl"] button') || doc.querySelector('div[data-testid="stSidebarCollapsedControl"] button') || doc.querySelector('button[aria-label="Open sidebar"]') || doc.querySelector('button[aria-label="View sidebar"]');
+                                const openBtn = doc.querySelector('div[data-testid="collapsedControl"] button') 
+                                             || doc.querySelector('div[data-testid="stSidebarCollapsedControl"] button') 
+                                             || doc.querySelector('button[aria-label="Open sidebar"]') 
+                                             || doc.querySelector('button[aria-label="View sidebar"]');
                                 if (openBtn) {
                                     openBtn.click();
-                                    return;
+                                } else {
+                                    stSidebar.style.setProperty('transform', 'translateX(0)', 'important');
+                                    stSidebar.style.setProperty('min-width', '16rem', 'important');
+                                    stSidebar.setAttribute('aria-expanded', 'true');
                                 }
-                                stSidebar.style.setProperty('transform', 'translateX(0)', 'important');
-                                stSidebar.style.setProperty('min-width', '16rem', 'important');
                             }
                         });
                         doc.body.appendChild(btn);
