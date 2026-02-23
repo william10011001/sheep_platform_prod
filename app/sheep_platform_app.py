@@ -2727,38 +2727,89 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
                 status_raw = str(t.get("status") or "")
                 
                 status_cn = _label_task_status(status_raw)
-                phase_cn = _label_phase(phase)
                 color = _get_status_color(status_raw)
                 
-                bar_width = min(100.0, max(0.0, pct))
-                score_str = f"{float(best_score):.6f}" if best_score is not None else "計算中..."
-                speed_str = f"{float(speed_cps):.1f} /s" if speed_cps is not None and float(speed_cps) > 0 else "-"
-                eta_str = f"{float(eta_s):.0f}s" if eta_s is not None and float(eta_s) > 0 else "-"
-                
-                # 狀態特化顯示邏輯
-                if status_raw in ("assigned", "queued") or phase in ("idle", "queued"):
-                    progress_display = "等待分配資源"
-                    score_str = "-"
-                    bar_width = 0.0
-                    is_pulsing = "animation: pulse 2s infinite;" if status_raw == "queued" else ""
-                elif phase == "sync_data":
-                    progress_display = "歷史資料同步中"
-                    is_pulsing = "animation: pulse 1.5s infinite;"
-                elif combos_total == 0:
-                    progress_display = "初始化參數..."
-                    is_pulsing = "animation: pulse 1.5s infinite;"
-                else:
-                    progress_display = f"{combos_done:,} / {combos_total:,}"
-                    is_pulsing = ""
+                # 安全數值轉換防護
+                try:
+                    safe_score = f"{float(best_score):.6f}" if best_score is not None else "-"
+                except (ValueError, TypeError):
+                    safe_score = "-"
 
-                passed_badge = '<span style="background:rgba(16,185,129,0.15);color:#34d399;padding:4px 8px;border-radius:6px;font-size:11px;font-weight:600;border:1px solid rgba(16,185,129,0.3);box-shadow:0 0 8px rgba(16,185,129,0.2);">已達標</span>' if passed else ''
+                try:
+                    safe_speed = f"{float(speed_cps):.1f} /s" if speed_cps is not None and float(speed_cps) > 0 else "-"
+                except (ValueError, TypeError):
+                    safe_speed = "-"
+
+                try:
+                    safe_eta = f"{float(eta_s):.0f}s" if eta_s is not None and float(eta_s) > 0 else "-"
+                except (ValueError, TypeError):
+                    safe_eta = "-"
+
+                bar_width = min(100.0, max(0.0, pct))
+                is_pulsing = ""
                 
-                # 若發生錯誤，強行改變外觀
-                if status_raw == "error":
+                # 嚴格狀態機判斷，避免顯示衝突
+                if status_raw == "completed":
+                    phase_cn = "執行完畢"
+                    progress_display = f"{combos_done:,} / {combos_total:,}" if combos_total > 0 else "完成"
+                    score_str = safe_score
+                    speed_str = "-"
+                    eta_str = "-"
+                    bar_width = 100.0
+                    is_pulsing = ""
+                elif status_raw == "error":
+                    phase_cn = "發生異常"
+                    progress_display = "執行中斷"
+                    score_str = safe_score
+                    speed_str = "-"
+                    eta_str = "失敗"
                     color = "#ef4444"
                     is_pulsing = ""
-                    progress_display = "執行中斷"
-                    eta_str = "失敗"
+                elif status_raw == "queued":
+                    phase_cn = "等待資源排程"
+                    progress_display = "準備分配資源"
+                    score_str = "-"
+                    speed_str = "-"
+                    eta_str = "-"
+                    bar_width = 0.0
+                    is_pulsing = "animation: pulse 2s infinite;"
+                elif status_raw == "assigned":
+                    phase_cn = "尚未啟動"
+                    progress_display = "待命"
+                    score_str = "-"
+                    speed_str = "-"
+                    eta_str = "-"
+                    bar_width = 0.0
+                    is_pulsing = ""
+                else:
+                    # status_raw == "running"
+                    phase_cn = _label_phase(phase)
+                    if phase == "sync_data":
+                        progress_display = "同步歷史資料"
+                        score_str = "-"
+                        speed_str = "-"
+                        eta_str = "-"
+                        is_pulsing = "animation: pulse 1.5s infinite;"
+                    elif phase == "build_grid":
+                        progress_display = "產生參數網格"
+                        score_str = "-"
+                        speed_str = "-"
+                        eta_str = "-"
+                        is_pulsing = "animation: pulse 1.5s infinite;"
+                    elif combos_total == 0:
+                        progress_display = "初始化階段"
+                        score_str = "-"
+                        speed_str = "-"
+                        eta_str = "-"
+                        is_pulsing = "animation: pulse 1.5s infinite;"
+                    else:
+                        progress_display = f"{combos_done:,} / {combos_total:,}"
+                        score_str = safe_score if safe_score != "-" else "計算中..."
+                        speed_str = safe_speed
+                        eta_str = safe_eta
+                        is_pulsing = ""
+
+                passed_badge = '<span style="background:rgba(16,185,129,0.15);color:#34d399;padding:4px 8px;border-radius:6px;font-size:11px;font-weight:600;border:1px solid rgba(16,185,129,0.3);box-shadow:0 0 8px rgba(16,185,129,0.2);">已達標</span>' if passed else ''
 
                 card_html = f"""
                 <style>
@@ -3232,7 +3283,6 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
         }
 
         status_label = status_map.get(str(view_status), str(view_status) or "-")
-        phase_label = phase_map.get(str(phase), str(phase) or "-")
         passed_label = "是" if bool(best_any_passed) else "否"
 
         def _pill_class(kind: str) -> str:
@@ -3243,7 +3293,6 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
             if k in ("expired", "revoked", "error"): return "bad"
             return "neutral"
 
-        # [專家級 UI] 強化的進度儀表板
         st.markdown(
             f'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">'
             f'<span class="pill pill-{_pill_class(view_status)}" style="font-size:14px; padding:6px 12px;">狀態: {status_label}</span>'
@@ -3254,21 +3303,38 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
         
         phase_color = "#94a3b8"
         is_animating = False
+        display_phase_label = phase_map.get(str(phase), str(phase) or "-")
+        display_phase_msg = phase_msg if phase_msg else '準備就緒'
         
-        if str(phase) == "queued":
+        # 依據任務狀態覆蓋內部變數，確保呈現邏輯絕對一致
+        if view_status == "completed":
+            phase_color = "#3b82f6"
+            is_animating = False
+            display_phase_label = "執行完畢"
+            display_phase_msg = "所有參數組合已運算並儲存完成。"
+        elif view_status == "error":
+            phase_color = "#ef4444"
+            is_animating = False
+            display_phase_label = "發生異常"
+        elif view_status == "queued":
             phase_color = "#f59e0b"
             is_animating = True
-        elif str(phase) == "sync_data":
-            phase_color = "#0ea5e9"
-            is_animating = True
-        elif str(phase) == "build_grid":
-            phase_color = "#8b5cf6"
-            is_animating = True
-        elif str(phase) == "grid_search":
-            phase_color = "#10b981"
-            is_animating = True
-        elif str(phase) == "error":
-            phase_color = "#ef4444"
+            display_phase_label = "等待資源排程"
+            display_phase_msg = "任務已進入排程列隊，正在等待伺服器分配運算資源..."
+        elif view_status == "assigned":
+            phase_color = "#94a3b8"
+            is_animating = False
+            display_phase_label = "尚未啟動"
+        else:
+            if str(phase) == "sync_data":
+                phase_color = "#0ea5e9"
+                is_animating = True
+            elif str(phase) == "build_grid":
+                phase_color = "#8b5cf6"
+                is_animating = True
+            elif str(phase) == "grid_search":
+                phase_color = "#10b981"
+                is_animating = True
         
         anim_css = "animation: pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;" if is_animating else ""
         
@@ -3278,11 +3344,11 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <div style="display: flex; align-items: center; gap: 10px;">
                         <span style="font-size: 20px; {anim_css}"></span>
-                        <span style="color: {phase_color}; font-weight: 700; font-size: 16px;">目前作業：{phase_label}</span>
+                        <span style="color: {phase_color}; font-weight: 700; font-size: 16px;">目前作業：{display_phase_label}</span>
                     </div>
                 </div>
                 <div style="margin-top: 8px; font-size: 14px; color: #cbd5e1;">
-                    {phase_msg if phase_msg else '準備就緒'}
+                    {html.escape(display_phase_msg)}
                 </div>
             </div>
             """, unsafe_allow_html=True
@@ -3293,29 +3359,48 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
             prog_text = "-"
             sync = prog.get("sync")
             if int(combos_total) > 0:
-                prog_text = f"{int(combos_done)} / {int(combos_total)}"
+                prog_text = f"{int(combos_done):,} / {int(combos_total):,}"
             elif str(phase) == "sync_data" and isinstance(sync, dict):
                 items = sync.get("items")
                 cur = str(sync.get("current") or "")
                 if isinstance(items, dict) and cur in items:
-                    done_i = int(items[cur].get("done", 0))
-                    total_i = int(items[cur].get("total", 0))
-                    if total_i > 0:
-                        prog_text = f"{cur} {done_i}/{total_i}"
-            st.markdown(f'<div class="small-muted">運算進度</div><div class="kpi" style="font-size:22px; font-weight:800; color:#f8fafc;">{prog_text}</div>', unsafe_allow_html=True)
-        with top_c:
-            elapsed_s = prog.get("elapsed_s")
-            es = "-" if elapsed_s is None else f"{float(elapsed_s):.1f} s"
-            st.markdown(f'<div class="small-muted">已耗時</div><div class="kpi" style="font-size:22px; font-weight:800; color:#f8fafc;">{es}</div>', unsafe_allow_html=True)
-        with top_d:
-            sc_txt = "-" if best_any_score is None else str(round(float(best_any_score), 6))
-            st.markdown(f'<div class="small-muted">當前最高分</div><div class="kpi" style="font-size:22px; font-weight:800; color:#10b981;">{sc_txt}</div>', unsafe_allow_html=True)
+                    try:
+                        done_i = int(items[cur].get("done", 0))
+                        total_i = int(items[cur].get("total", 0))
+                        if total_i > 0:
+                            prog_text = f"{cur} {done_i}/{total_i}"
+                    except (ValueError, TypeError):
+                        pass
+            
+            if view_status == "completed" and combos_total > 0:
+                prog_text = f"{int(combos_total):,} / {int(combos_total):,}"
 
-        if str(phase) == "grid_search":
-            speed_cps = prog.get("speed_cps")
-            eta_s = prog.get("eta_s")
-            sp = "-" if speed_cps is None else f"{float(speed_cps):.0f} / s"
-            et = "-" if eta_s is None else f"{float(eta_s):.1f} s"
+            st.markdown(f'<div class="small-muted">運算進度</div><div class="kpi" style="font-size:22px; font-weight:800; color:#f8fafc;">{prog_text}</div>', unsafe_allow_html=True)
+        
+        with top_c:
+            try:
+                elapsed_s = prog.get("elapsed_s")
+                es = "-" if elapsed_s is None else f"{float(elapsed_s):.1f} s"
+            except (ValueError, TypeError):
+                es = "-"
+            st.markdown(f'<div class="small-muted">已耗時</div><div class="kpi" style="font-size:22px; font-weight:800; color:#f8fafc;">{es}</div>', unsafe_allow_html=True)
+        
+        with top_d:
+            try:
+                sc_txt = "-" if best_any_score is None else f"{float(best_any_score):.6f}"
+            except (ValueError, TypeError):
+                sc_txt = "-"
+            st.markdown(f'<div class="small-muted">最高分紀錄</div><div class="kpi" style="font-size:22px; font-weight:800; color:#10b981;">{sc_txt}</div>', unsafe_allow_html=True)
+
+        if view_status == "running" and str(phase) == "grid_search":
+            try:
+                speed_cps = prog.get("speed_cps")
+                eta_s = prog.get("eta_s")
+                sp = "-" if speed_cps is None else f"{float(speed_cps):.0f} / s"
+                et = "-" if eta_s is None else f"{float(eta_s):.1f} s"
+            except (ValueError, TypeError):
+                sp = "-"
+                et = "-"
             st.markdown(f'<div style="background:rgba(255,255,255,0.03); padding:8px 16px; border-radius:6px; margin-top:12px; font-size:13px; color:#94a3b8; display:flex; justify-content:space-between; border: 1px solid rgba(255,255,255,0.05);">'
                         f'<span>算力速度: <span style="color:#60a5fa; font-weight:bold;">{sp}</span></span>'
                         f'<span>預估剩餘: <span style="color:#fbbf24; font-weight:bold;">{et}</span></span>'
