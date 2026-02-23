@@ -85,12 +85,12 @@ _BRAND_WEBM_1 = os.environ.get("SHEEP_BRAND_WEBM_1", "static/羊LOGO影片(去�
 
 def _mask_username(username: str, nickname: str = None) -> str:
     """
-    專家級隱私遮罩邏輯 (V2)：
-    1. 若有設定 nickname，直接回傳 nickname (前端 CSS 會負責加上皇冠)。
-    2. 遮罩邏輯：
-       - 長度 <= 2: 顯示首字 + *
-       - 長度 3~4: 首1 + ** + 尾1
-       - 長度 >= 5: 首1 + *** + 尾2
+    Privacy mask logic (V2):
+    1. If nickname is set, return nickname.
+    2. Masking rules:
+       - Length <= 2: First char + *
+       - Length 3~4: First char + ** + Last char
+       - Length >= 5: First char + *** + Last 2 chars
     """
     if nickname and str(nickname).strip():
         return str(nickname).strip()
@@ -1406,8 +1406,7 @@ def _init_once() -> None:
         if row:
             conn = db._conn()
             try:
-                # [專家級修復] 若管理員帳號已存在，僅確保其權限為 admin 且未被停用，絕對不覆蓋其密碼
-                # 避免管理員自行修改密碼後，伺服器重啟又被洗掉的嚴重資安 Bug
+                # 確保管理員權限正常，避免覆蓋已修改之密碼
                 conn.execute(
                     "UPDATE users SET role = 'admin', disabled = 0 WHERE id = ?",
                     (int(row["id"]),),
