@@ -1306,14 +1306,8 @@ def _style() -> None:
                 try {
                     const sidebar = doc.querySelector('section[data-testid="stSidebar"]');
                     if (!sidebar) return false;
-                    
-                    const expanded = sidebar.getAttribute('aria-expanded');
-                    if (expanded === 'true') return true;
-                    if (expanded === 'false') return false;
-
-                    const transform = window.getComputedStyle(sidebar).getPropertyValue('transform');
                     const left = sidebar.getBoundingClientRect().left;
-                    return (transform === 'matrix(1, 0, 0, 1, 0, 0)' || left >= 0);
+                    return left >= 0;
                 } catch (e) {
                     return false;
                 }
@@ -1336,6 +1330,10 @@ def _style() -> None:
                             
                             const isOpen = isSidebarOpen();
                             
+                            stSidebar.style.removeProperty('transform');
+                            stSidebar.style.removeProperty('min-width');
+                            stSidebar.removeAttribute('aria-expanded');
+                            
                             if (isOpen) {
                                 const closeBtn = doc.querySelector('section[data-testid="stSidebar"] button[kind="headerNoPadding"]') 
                                               || doc.querySelector('section[data-testid="stSidebar"] button[aria-label="Close sidebar"]')
@@ -1346,7 +1344,6 @@ def _style() -> None:
                                 } else {
                                     stSidebar.style.setProperty('transform', 'translateX(-100%)', 'important');
                                     stSidebar.style.setProperty('min-width', '0', 'important');
-                                    stSidebar.setAttribute('aria-expanded', 'false');
                                 }
                             } else {
                                 const openBtn = doc.querySelector('div[data-testid="collapsedControl"] button') 
@@ -1358,7 +1355,6 @@ def _style() -> None:
                                 } else {
                                     stSidebar.style.setProperty('transform', 'translateX(0)', 'important');
                                     stSidebar.style.setProperty('min-width', '16rem', 'important');
-                                    stSidebar.setAttribute('aria-expanded', 'true');
                                 }
                             }
                         });
