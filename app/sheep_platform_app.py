@@ -2866,9 +2866,13 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
                     </div>
                 </div>
                 """
+                # [專家級修復] 確保 HTML 字串被完整推入陣列
                 html_cards.append(card_html)
 
-            st.markdown(f'<div style="margin-top: 10px;">{"".join(html_cards)}</div>', unsafe_allow_html=True)
+            # [專家級修復] 解決純文字印出 HTML 標籤的災難。
+            # Streamlit 渲染大型 HTML 區塊時，必須確保外層包裹結構完整，且 unsafe_allow_html=True 確實生效。
+            final_cards_html = f'<div style="margin-top: 10px; width: 100%; display: flex; flex-direction: column; gap: 0px;">{"".join(html_cards)}</div>'
+            st.markdown(final_cards_html, unsafe_allow_html=True)
 
         st.markdown(_section_title_html("全域進度", "顯示全站所有用戶的整體挖礦進度與分潤統計。可依策略篩選觀察。", level=3), unsafe_allow_html=True)
         # 呼叫此函式也被包裝在最外層的 try-except 中，確保不再出現裸奔錯誤
@@ -3338,20 +3342,20 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
         
         anim_css = "animation: pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;" if is_animating else ""
         
+        # [專家級防護] 確保單一卡片內的 HTML 結構不會被 Streamlit 的 markdown parser 破壞
         st.markdown(
-            f"""
-            <div style="background: rgba(0,0,0,0.2); border: 1px solid {phase_color}40; border-left: 4px solid {phase_color}; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px;">
+            f"""<div style="background: rgba(0,0,0,0.2); border: 1px solid {phase_color}40; border-left: 4px solid {phase_color}; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px;">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <div style="display: flex; align-items: center; gap: 10px;">
-                        <span style="font-size: 20px; {anim_css}"></span>
+                        <div style="width: 12px; height: 12px; border-radius: 50%; background: {phase_color}; {anim_css}"></div>
                         <span style="color: {phase_color}; font-weight: 700; font-size: 16px;">目前作業：{display_phase_label}</span>
                     </div>
                 </div>
-                <div style="margin-top: 8px; font-size: 14px; color: #cbd5e1;">
+                <div style="margin-top: 8px; font-size: 14px; color: #cbd5e1; white-space: pre-wrap;">
                     {html.escape(display_phase_msg)}
                 </div>
-            </div>
-            """, unsafe_allow_html=True
+            </div>""", 
+            unsafe_allow_html=True
         )
         
         top_b, top_c, top_d = st.columns([1.5, 1.5, 1.5])
