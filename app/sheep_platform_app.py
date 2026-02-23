@@ -3031,7 +3031,7 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                         tid = int(t["id"])
                         st_raw = str(t.get("status") or "")
                         
-                        # [專家級修復] 擴大可排程狀態，包含 queued 與 意外死掉的 running
+                        # 擴大可排程狀態，包含 queued 與意外中止的 running
                         if st_raw not in ("assigned", "queued", "error", "running"):
                             continue
                         if job_mgr.is_running(tid):
@@ -3039,15 +3039,14 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                         if job_mgr.is_queued(int(user["id"]), tid):
                             continue
                             
-                        # 如果任務在 DB 是 running，但 job_mgr 判斷它根本沒在跑，這就是「殭屍任務」
-                        # 我們主動將其降級回 assigned 讓它能被重新領取
+                        # 處理卡在 running 狀態但實際上未執行的任務，重置為 assigned
                         if st_raw == "running":
                             try:
                                 db.update_task_status(tid, "assigned")
                             except Exception:
                                 pass
                         elif st_raw == "error":
-                            # [專家級修復] 若之前發生錯誤卡在 error，重新排程時也應初始化狀態
+                            # 若之前發生錯誤，重新排程時初始化狀態
                             try:
                                 db.update_task_status(tid, "assigned")
                             except Exception:
@@ -3056,19 +3055,22 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                         to_queue.append(tid)
                     
                     if to_queue:
-                        # 呼叫 job_mgr 實際將任務加入排程列隊，這行非常關鍵，否則任務無法啟動且會報錯
+                        # 將任務加入排程列隊
                         result = job_mgr.enqueue_many(int(user["id"]), to_queue, bt)
                         
-                        # [專家級 UX 修復] 將任務狀態變更為 queued 的同時，立即注入詳細的排隊進度 JSON，打破點擊後毫無反應的死寂
+                        # 同步更新任務狀態與進度，確保介面即時反映排隊狀態
                         for qid in to_queue:
-                            db.update_task_status(qid, "queued")
-                            db.update_task_progress(qid, {
-                                "phase": "queued",
-                                "phase_msg": " 任務已進入排程列隊，正在等待伺服器分配運算資源...",
-                                "combos_done": 0,
-                                "combos_total": 0,
-                                "updated_at": _iso(_utc_now())
-                            })
+                            try:
+                                db.update_task_status(qid, "queued")
+                                db.update_task_progress(qid, {
+                                    "phase": "queued",
+                                    "phase_msg": "已進入排程列隊，正在等待運算資源分派...",
+                                    "combos_done": 0,
+                                    "combos_total": 0,
+                                    "updated_at": _iso(_utc_now())
+                                })
+                            except Exception:
+                                pass
                         
                         db.write_audit_log(
                             int(user["id"]),
@@ -3180,8 +3182,7 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # 無縫銜接模式：使用者只要點一次「開始全部任務」，之後每次刷新都會自動把新的 assigned 任務塞進隊列。
-    # 這樣就不會出現「跑完後還要再手動點一次」的尷尬 UX。
+    # 自動銜接模式：啟用後會自動將新的 assigned 任務排入隊列
     if exec_mode == "server":
         run_key = f"server_run_all_{int(user['id'])}"
         run_all = bool(st.session_state.get(run_key, False))
@@ -3200,6 +3201,18 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
             if to_queue2:
                 result2 = job_mgr.enqueue_many(int(user["id"]), to_queue2, bt)
                 if int(result2.get("queued") or 0) > 0:
+                    for qid in to_queue2:
+                        try:
+                            db.update_task_status(qid, "queued")
+                            db.update_task_progress(qid, {
+                                "phase": "queued",
+                                "phase_msg": "自動銜接：已排入列隊等待執行...",
+                                "combos_done": 0,
+                                "combos_total": 0,
+                                "updated_at": _iso(_utc_now())
+                            })
+                        except Exception:
+                            pass
                     db.write_audit_log(
                         int(user["id"]),
                         "task_auto_queue",

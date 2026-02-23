@@ -217,7 +217,8 @@ class JobManager:
         try:
             import backtest_panel2
             conn = db._conn()
-            rows = conn.execute("SELECT id, user_id FROM mining_tasks WHERE status IN ('assigned', 'queued') ORDER BY updated_at ASC LIMIT 100").fetchall()
+            # 擴大檢索範圍，避免任務過多時產生飢餓現象而無法排入隊列
+            rows = conn.execute("SELECT id, user_id FROM mining_tasks WHERE status IN ('assigned', 'queued') ORDER BY updated_at ASC LIMIT 5000").fetchall()
             conn.close()
             
             to_enqueue = {}
@@ -230,7 +231,22 @@ class JobManager:
                     to_enqueue[uid].append(tid)
             
             for uid, tids in to_enqueue.items():
-                self.enqueue_many(uid, tids, backtest_panel2)
+                res = self.enqueue_many(uid, tids, backtest_panel2)
+                # 確保任務進入隊列時，介面進度能被正確歸零
+                if int(res.get("queued") or 0) > 0:
+                    for tid in tids:
+                        if self.is_queued(uid, tid):
+                            try:
+                                db.update_task_status(tid, "queued")
+                                db.update_task_progress(tid, {
+                                    "phase": "queued",
+                                    "phase_msg": "系統回收：已重新進入排程列隊...",
+                                    "combos_done": 0,
+                                    "combos_total": 0,
+                                    "updated_at": db.utc_now_iso()
+                                })
+                            except Exception:
+                                pass
         except Exception:
             pass
 

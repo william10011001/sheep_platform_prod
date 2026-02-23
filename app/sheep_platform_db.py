@@ -635,40 +635,46 @@ def list_factor_pools(cycle_id: int) -> list:
         conn.close()
 
 def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, max_tasks: int = 6, preferred_family: str = "") -> None:
-    conn = _conn()
-    try:
-        if cycle_id <= 0:
-            cycle_row = conn.execute("SELECT id FROM mining_cycles WHERE status = 'active' ORDER BY id DESC LIMIT 1").fetchone()
-            if not cycle_row: return
-            cycle_id = cycle_row["id"]
-        
-        cur = conn.execute("SELECT COUNT(*) as c FROM mining_tasks WHERE user_id = ? AND status IN ('assigned', 'running', 'queued') AND cycle_id = ?", (user_id, cycle_id))
-        current_tasks = cur.fetchone()["c"]
-        
-        if current_tasks < min_tasks:
-            needed = min_tasks - current_tasks
-            pools_query = "SELECT id, num_partitions FROM factor_pools WHERE cycle_id = ? AND active = 1"
-            params = [cycle_id]
-            if preferred_family:
-                pools_query += " AND family = ?"
-                params.append(preferred_family)
-            
-            pools = conn.execute(pools_query, params).fetchall()
-            
-            # 若偏好的策略無效，退回尋找全部
-            if not pools and preferred_family:
-                pools = conn.execute("SELECT id, num_partitions FROM factor_pools WHERE cycle_id = ? AND active = 1", (cycle_id,)).fetchall()
+    import time
+    for attempt in range(5):
+        try:
+            conn = _conn()
+            try:
+                if cycle_id <= 0:
+                    cycle_row = conn.execute("SELECT id FROM mining_cycles WHERE status = 'active' ORDER BY id DESC LIMIT 1").fetchone()
+                    if not cycle_row: return
+                    cycle_id = cycle_row["id"]
                 
-            for _ in range(needed):
-                if pools:
-                    p = random.choice(pools)
-                    conn.execute("INSERT INTO mining_tasks (user_id, pool_id, cycle_id, partition_idx, num_partitions, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                                 (user_id, p["id"], cycle_id, random.randint(0, max(0, p["num_partitions"]-1)), p["num_partitions"], 'assigned', _now_iso()))
-            conn.commit()
-    except Exception as e:
-        print(f"[DB ERROR] assign_tasks_for_user: {e}")
-    finally:
-        conn.close()
+                cur = conn.execute("SELECT COUNT(*) as c FROM mining_tasks WHERE user_id = ? AND status IN ('assigned', 'running', 'queued') AND cycle_id = ?", (user_id, cycle_id))
+                current_tasks = cur.fetchone()["c"]
+                
+                if current_tasks < min_tasks:
+                    needed = min_tasks - current_tasks
+                    pools_query = "SELECT id, num_partitions FROM factor_pools WHERE cycle_id = ? AND active = 1"
+                    params = [cycle_id]
+                    if preferred_family:
+                        pools_query += " AND family = ?"
+                        params.append(preferred_family)
+                    
+                    pools = conn.execute(pools_query, params).fetchall()
+                    
+                    if not pools and preferred_family:
+                        pools = conn.execute("SELECT id, num_partitions FROM factor_pools WHERE cycle_id = ? AND active = 1", (cycle_id,)).fetchall()
+                        
+                    for _ in range(needed):
+                        if pools:
+                            import random
+                            p = random.choice(pools)
+                            conn.execute("INSERT INTO mining_tasks (user_id, pool_id, cycle_id, partition_idx, num_partitions, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                         (user_id, p["id"], cycle_id, random.randint(0, max(0, p["num_partitions"]-1)), p["num_partitions"], 'assigned', _now_iso()))
+                    conn.commit()
+                break
+            finally:
+                conn.close()
+        except Exception as e:
+            if attempt == 4:
+                print(f"[DB ERROR] assign_tasks_for_user: {e}")
+            time.sleep(0.05 * (2 ** attempt))
 def _safe_listdir(dir_path: str) -> List[str]:
     try:
         return [os.path.join(dir_path, x) for x in os.listdir(dir_path)]
@@ -1397,14 +1403,23 @@ def clear_candidates_for_task(task_id: int) -> None:
         conn.close()
 
 def insert_candidate(task_id: int, user_id: int, pool_id: int, params: dict, metrics: dict, score: float) -> int:
-    conn = _conn()
-    try:
-        cur = conn.execute("INSERT INTO candidates (task_id, user_id, pool_id, params_json, metrics_json, score, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                           (task_id, user_id, pool_id, json.dumps(params, ensure_ascii=False), json.dumps(metrics, ensure_ascii=False), score, _now_iso()))
-        conn.commit()
-        return cur.lastrowid
-    finally:
-        conn.close()
+    import time
+    for attempt in range(8):
+        try:
+            conn = _conn()
+            try:
+                cur = conn.execute("INSERT INTO candidates (task_id, user_id, pool_id, params_json, metrics_json, score, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                   (task_id, user_id, pool_id, json.dumps(params, ensure_ascii=False), json.dumps(metrics, ensure_ascii=False), score, _now_iso()))
+                conn.commit()
+                return cur.lastrowid
+            finally:
+                conn.close()
+        except Exception as e:
+            if attempt == 7:
+                print(f"[DB ERROR] insert_candidate 失敗: {e}")
+                raise e
+            time.sleep(0.1 * (1.5 ** attempt))
+    return 0
 
 def claim_task_for_run(task_id: int) -> bool:
     conn = _conn()
