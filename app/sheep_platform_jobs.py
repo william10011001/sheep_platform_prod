@@ -280,7 +280,7 @@ class JobManager:
                 import traceback
                 import sys
                 timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
-                print(f"\n[{timestamp}] [SCHEDULER ERROR] 迴圈異常: {e}\n{traceback.format_exc()}\n", file=sys.stderr)
+                print(f"\n[{timestamp}] [CRITICAL SCHEDULER ERROR] 排程器主迴圈遭遇未預期異常，嘗試恢復執行: {e}\n{traceback.format_exc()}\n", file=sys.stderr)
                 time.sleep(1.0)
 
     def _run_task(self, task_id: int, bt_module, stop_flag: threading.Event) -> None:
@@ -331,17 +331,35 @@ class JobManager:
             db.update_task_progress(task_id, progress)
 
             _SYNC_RE = re.compile(r"^\s*(\S+)\s+已寫入\s+(\d+)\s*/\s*(\d+)\s*$")
-            t0 = time.time()  # [專家級修復] 提前記錄起始時間，讓資料同步階段也能顯示已耗時
+            t0 = time.time()  # 記錄起始時間，讓同步階段也能計算耗時
+
+            last_sync_write_ts = 0.0
+            last_sync_frac = -1.0
+            last_sync_msg = ""
 
             def _progress_cb(frac: float, msg: str) -> None:
+                nonlocal last_sync_write_ts, last_sync_frac, last_sync_msg
                 if stop_flag.is_set():
                     return
-                progress["phase"] = "sync_data"
-                progress["phase_progress"] = float(frac)
-                progress["phase_msg"] = str(msg)
-                progress["elapsed_s"] = round(float(max(0.0, time.time() - t0)), 3) # [專家級修復] 即時更新耗時
 
-                m = _SYNC_RE.match(str(msg))
+                now = time.time()
+                f = float(frac)
+                mmsg = str(msg)
+
+                # 同步回呼很密，寫 DB 會把 SQLite 打到鎖死；節流：最短 0.35s 一次，或進度跳動 >= 2%，或訊息有變
+                if (now - last_sync_write_ts) < 0.35 and abs(f - last_sync_frac) < 0.02 and mmsg == last_sync_msg:
+                    return
+
+                last_sync_write_ts = now
+                last_sync_frac = f
+                last_sync_msg = mmsg
+
+                progress["phase"] = "sync_data"
+                progress["phase_progress"] = f
+                progress["phase_msg"] = mmsg
+                progress["elapsed_s"] = round(float(max(0.0, now - t0)), 3)
+
+                m = _SYNC_RE.match(mmsg)
                 if m:
                     label = str(m.group(1))
                     done_i = int(m.group(2))
@@ -370,13 +388,12 @@ class JobManager:
                     progress["sync"] = sync
 
                 progress["updated_at"] = db.utc_now_iso()
-                # [專家級容錯防護] K線同步回呼極為頻繁，若遇 SQLite 鎖死 (database is locked) 絕不能讓主執行緒崩潰
                 try:
                     db.update_task_progress(task_id, progress)
                 except Exception as db_err:
                     print(f"[WARN] K線同步進度寫入 DB 失敗 (可忽略): {db_err}")
 
-            # [專家級修正] 強制寫入狀態，確保 K 線下載期間前端不會停留在 "queued" 假死
+            # 強制寫入狀態，避免 K 線下載期間前端停留在 queued
             progress["phase"] = "sync_data"
             progress["phase_msg"] = f"準備向交易所拉取 {pool['symbol']} ({pool['timeframe_min']}m) 歷史 K 線資料..."
             try:

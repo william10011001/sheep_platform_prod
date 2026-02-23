@@ -15,7 +15,7 @@ import streamlit as st
 import traceback
 import sys
 
-# --- 專家級版本相容修復：解決 dataframe_selector 遺失問題 ---
+# DataFrame 版本相容處理
 def _get_orig_dataframe():
     # 嘗試取得 Streamlit 原始的 dataframe 渲染方法，避開遞迴
     if hasattr(st, "_sheep_orig_dataframe"):
@@ -146,32 +146,33 @@ iframe[data-sheep-brand="1"],
 iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
   position: fixed !important;
   top: 0 !important;
-  /* 教授級終極修正：將 Header 偏移 60px 避開側邊欄控制鈕區域 */
   left: 60px !important; 
   width: 300px !important;
   height: 84px !important;
   border: 0 !important;
-  /* 降低層級避免遮擋 React 交互層 */
   z-index: 500 !important;
   background: transparent !important;
   pointer-events: none !important;
 }}
 
 div[data-testid="stSidebarCollapsedControl"],
-        div[data-testid="collapsedControl"],
-        button[kind="headerNoPadding"] {{
-            opacity: 0 !important;
-            position: absolute !important;
-            width: 1px !important;
-            height: 1px !important;
-            pointer-events: none !important;
-        }}
-        
-        header[data-testid="stHeader"] {{
-            background: transparent !important;
-            z-index: 99999 !important;
-            pointer-events: none !important;
-        }}
+div[data-testid="collapsedControl"] {{
+    opacity: 0 !important;
+    position: absolute !important;
+    z-index: -1 !important;
+}}
+
+section[data-testid="stSidebar"] button[kind="headerNoPadding"] {{
+    opacity: 0 !important;
+    position: absolute !important;
+    z-index: -1 !important;
+}}
+
+header[data-testid="stHeader"] {{
+    background: transparent !important;
+    z-index: 99999 !important;
+    pointer-events: none !important;
+}}
         
         header[data-testid="stHeader"] * {{
             pointer-events: auto !important;
@@ -1084,8 +1085,8 @@ def _style() -> None:
             height: 22px !important;
         }
 
-        /* --- [排行榜美化系統] --- */
-        /* 1. 隱藏 Streamlit 原生 Radio 的醜陋圓點 */
+        /* 排行榜樣式設定 */
+        /* 隱藏原生 Radio 裝飾元素 */
         .lb-period-selector div[role="radiogroup"] > label > div:first-child {
             display: none !important;
         }
@@ -1323,7 +1324,7 @@ def _style() -> None:
                             const isOpen = isSidebarOpen();
                             
                             if (isOpen) {
-                                const closeBtn = doc.querySelector('section[data-testid="stSidebar"] button[kind="headerNoPadding"]');
+                                const closeBtn = doc.querySelector('section[data-testid="stSidebar"] button[kind="headerNoPadding"]') || doc.querySelector('button[aria-label="Close sidebar"]');
                                 if (closeBtn) {
                                     closeBtn.click();
                                     return;
@@ -1331,7 +1332,7 @@ def _style() -> None:
                                 stSidebar.style.setProperty('transform', 'translateX(-100%)', 'important');
                                 stSidebar.style.setProperty('min-width', '0', 'important');
                             } else {
-                                const openBtn = doc.querySelector('div[data-testid="collapsedControl"] button') || doc.querySelector('div[data-testid="stSidebarCollapsedControl"] button') || doc.querySelector('button[aria-label="Open sidebar"]');
+                                const openBtn = doc.querySelector('div[data-testid="collapsedControl"] button') || doc.querySelector('div[data-testid="stSidebarCollapsedControl"] button') || doc.querySelector('button[aria-label="Open sidebar"]') || doc.querySelector('button[aria-label="View sidebar"]');
                                 if (openBtn) {
                                     openBtn.click();
                                     return;
@@ -2604,7 +2605,7 @@ def _render_global_progress(cycle_id: int) -> None:
     st.markdown("<br>", unsafe_allow_html=True)
     
     # 將策略池概覽與分割分佈收納進 Expander，避免干擾主要視覺
-    with st.expander(" 展開查看詳細策略池狀態與分割分佈", expanded=False):
+    with st.expander("展開查看詳細策略池狀態與分割分佈", expanded=False):
         if pool_rows:
             st.dataframe(pd.DataFrame(pool_rows), use_container_width=True, hide_index=True)
             
@@ -3831,7 +3832,7 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
                 else:
                     st.warning("稱號不可為空")
     elif period_hours == 720:
-        st.info(f" 提示：月度算力榜前 5 名即可解鎖自訂暱稱功能。{my_rank_info}")
+        st.info(f"提示：月度算力榜前 5 名即可解鎖自訂暱稱功能。{my_rank_info}")
 
     # 4. 排行榜 HTML 渲染器 (修復 HTML 外洩問題)
     def _render_html_table(rows: list, val_col: str, val_fmt: str, unit: str):
@@ -3916,10 +3917,16 @@ def _page_submissions(user: Dict[str, Any]) -> None:
     try:
         subs = db.list_submissions(user_id=int(user["id"]), limit=300)
     except AttributeError as ae:
-        st.error(f" 系統錯誤：`list_submissions` 函數遺失。\n\n詳細錯誤：{ae}")
+        st.error("系統錯誤：`list_submissions` 函數遺失。")
+        with st.expander("詳細錯誤資訊", expanded=True):
+            import traceback
+            st.code(traceback.format_exc(), language="python")
         return
     except Exception as e:
-        st.error(f" 載入提交紀錄時發生錯誤：{str(e)}")
+        st.error("載入提交紀錄時發生錯誤。")
+        with st.expander("詳細錯誤資訊", expanded=True):
+            import traceback
+            st.code(traceback.format_exc(), language="python")
         import traceback
         st.code(traceback.format_exc(), language="text")
         return
@@ -4017,12 +4024,16 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
                 
             ov = db.list_task_overview(limit=500)
         except AttributeError as ae:
-            st.error(f"系統錯誤：管理核心函數遺失。\n\n詳細錯誤：{ae}")
+            st.error("系統錯誤：管理核心函數遺失。")
+            with st.expander("詳細錯誤資訊", expanded=True):
+                import traceback
+                st.code(traceback.format_exc(), language="python")
             ov = None
         except Exception as e:
-            st.error(f" 載入管理總覽時發生錯誤：{str(e)}")
-            import traceback
-            st.code(traceback.format_exc(), language="text")
+            st.error("載入管理總覽時發生錯誤。")
+            with st.expander("詳細錯誤資訊", expanded=True):
+                import traceback
+                st.code(traceback.format_exc(), language="python")
             ov = None
         if ov:
             rows = []
@@ -4177,10 +4188,10 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
                             st.success(f'已匯入 {int(result.get("applied") or 0)} 筆。')
                             st.rerun()
                     except Exception as imp_err:
-                        # [最大化錯誤顯示] 防護破損檔案造成的致命解析錯誤
-                        st.error(f"檔案解析或匯入過程發生致命錯誤：{imp_err}")
-                        import traceback
-                        st.code(traceback.format_exc(), language="python")
+                        st.error("檔案解析或匯入過程發生致命錯誤。")
+                        with st.expander("詳細錯誤資訊", expanded=True):
+                            import traceback
+                            st.code(traceback.format_exc(), language="python")
 
 
         if st.button("執行本週期最近一週"):
@@ -4968,14 +4979,14 @@ def main() -> None:
         tb = traceback.format_exc()
 
         try:
-            print(f"[ERROR] id={err_id} ts_utc={ts_utc} page={page} user={(user.get('username') if isinstance(user, dict) else '')}", flush=True)
+            print(f"[CRITICAL UI ERROR] id={err_id} ts_utc={ts_utc} page={page} user={(user.get('username') if isinstance(user, dict) else '')}", flush=True)
             print(tb, flush=True)
         except Exception:
             pass
 
-        st.error(f"頁面渲染發生錯誤。")
-        st.info(f"錯誤參考編號：{err_id}")
-        with st.expander("錯誤追蹤紀錄 (Traceback)", expanded=True):
+        st.error("系統頁面渲染發生異常，已記錄錯誤日誌。")
+        st.info(f"錯誤追蹤代碼：{err_id}")
+        with st.expander("展開查看詳細錯誤堆疊資訊 (Traceback)", expanded=True):
             st.code(tb, language="python")
     return
 
@@ -4984,5 +4995,6 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as fatal_e:
-        st.error("系統發生未預期的致命錯誤，請截圖回報開發者：")
+        st.error("系統運行階段發生未預期的致命錯誤，應用程式已中止執行。")
+        st.info("請將以下錯誤堆疊資訊提供給系統管理員進行修復：")
         st.code(traceback.format_exc(), language="python")

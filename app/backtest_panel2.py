@@ -8501,7 +8501,7 @@ def app():
         # 下載按鈕（都用 bytes，避免再讀大檔）
         if payload.get("full_csv_bytes") is not None:
             st.download_button(
-                " 下載完整結果（CSV，所有組合）",
+                "下載完整結果（CSV，所有組合）",
                 data=payload["full_csv_bytes"],
                 file_name=payload.get("full_csv_name", "grid_results_all.csv"),
                 mime="text/csv",
@@ -8509,7 +8509,7 @@ def app():
             )
         if payload.get("full_parquet_bytes") is not None:
             st.download_button(
-                " 下載完整結果（Parquet，所有組合）",
+                "下載完整結果（Parquet，所有組合）",
                 data=payload["full_parquet_bytes"],
                 file_name=payload.get("full_parquet_name", "grid_results_all.parquet"),
                 mime="application/octet-stream",
@@ -9086,7 +9086,7 @@ def app():
         }
 
         st.download_button(
-            " 下載完整結果（CSV，所有組合）",
+            "下載完整結果（CSV，所有組合）",
             data=full_csv_bytes if full_csv_bytes is not None else b"",
             file_name=os.path.basename(full_csv_path),
             mime="text/csv",
@@ -9199,7 +9199,7 @@ def app():
         st.session_state["last_run_payload"]["zip_file_name"] = zip_file_name
 
         st.download_button(
-            " 下載所選組合：交易明細 + 淨值曲線（ZIP）",
+            "下載所選組合：交易明細 + 淨值曲線（ZIP）",
             data=zip_bytes if zip_bytes is not None else b"",
             file_name=zip_file_name,
             mime="application/zip",

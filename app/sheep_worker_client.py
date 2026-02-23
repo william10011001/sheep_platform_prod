@@ -345,10 +345,27 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
         except Exception:
             return False
 
+    last_sync_push_ts = 0.0
+    last_sync_frac = -1.0
+    last_sync_msg = ""
+
     def _progress_cb(frac: float, msg: str) -> None:
+        nonlocal last_sync_push_ts, last_sync_frac, last_sync_msg
+        now = time.time()
+        f = float(frac)
+        mmsg = str(msg)
+
+        # 同步回呼很密；節流：最短 0.35s 一次，或進度跳動 >= 2%，或訊息有變
+        if (now - last_sync_push_ts) < 0.35 and abs(f - last_sync_frac) < 0.02 and mmsg == last_sync_msg:
+            return
+
+        last_sync_push_ts = now
+        last_sync_frac = f
+        last_sync_msg = mmsg
+
         progress["phase"] = "sync_data"
-        progress["phase_progress"] = float(frac)
-        progress["phase_msg"] = str(msg)
+        progress["phase_progress"] = f
+        progress["phase_msg"] = mmsg
         try:
             api.progress(task_id, lease_id, progress)
         except Exception:
