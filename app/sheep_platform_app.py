@@ -4650,8 +4650,152 @@ def _render_user_hud(user: Dict[str, Any]) -> None:
     )
     st.markdown(hud_html, unsafe_allow_html=True)
 
+def _drawer_init_state() -> None:
+    if "drawer_open" not in st.session_state:
+        st.session_state["drawer_open"] = False
 
+
+def _drawer_toggle(open_state: Optional[bool] = None) -> None:
+    _drawer_init_state()
+    if open_state is None:
+        st.session_state["drawer_open"] = not bool(st.session_state.get("drawer_open"))
+    else:
+        st.session_state["drawer_open"] = bool(open_state)
+    st.rerun()
+
+
+def _drawer_css() -> None:
+    st.markdown(
+        """
+        <style>
+        :root {
+          --sheep-drawer-w: 320px;
+          --sheep-z: 1000000;
+        }
+
+        /* floating toggle button */
+        .sheep_drawer_btn_wrap{
+          position: fixed;
+          top: 10px;
+          left: 10px;
+          z-index: var(--sheep-z);
+        }
+
+        /* drawer container */
+        .sheep_drawer_panel{
+          position: fixed;
+          top: 0;
+          left: 0;
+          height: 100vh;
+          width: var(--sheep-drawer-w);
+          z-index: var(--sheep-z);
+          background: rgba(8, 10, 14, 0.92);
+          border-right: 1px solid rgba(255,255,255,0.08);
+          backdrop-filter: blur(12px);
+          -webkit-backdrop-filter: blur(12px);
+          box-shadow: 16px 0 48px rgba(0,0,0,0.50);
+          transform: translateX(calc(-1 * var(--sheep-drawer-w)));
+          transition: transform 180ms ease;
+          padding: 14px 12px;
+        }
+        .sheep_drawer_panel.open{
+          transform: translateX(0);
+        }
+
+        .sheep_drawer_backdrop{
+          position: fixed;
+          inset: 0;
+          z-index: calc(var(--sheep-z) - 1);
+          background: rgba(0,0,0,0.35);
+        }
+
+        .sheep_drawer_title{
+          font-size: 16px;
+          font-weight: 700;
+          color: rgba(255,255,255,0.92);
+          margin-bottom: 6px;
+        }
+        .sheep_drawer_meta{
+          font-size: 12px;
+          opacity: 0.78;
+          color: rgba(255,255,255,0.85);
+          margin-bottom: 12px;
+        }
+
+        .sheep_drawer_nav .stButton > button{
+          width: 100%;
+          border-radius: 10px !important;
+          min-height: 40px !important;
+        }
+
+        .sheep_drawer_nav .stButton > button[kind="secondary"]{
+          border: 1px solid rgba(255,255,255,0.08) !important;
+          background: rgba(10,14,20,0.35) !important;
+        }
+        .sheep_drawer_nav .stButton > button[kind="primary"]{
+          border: 1px solid rgba(59,130,246,0.45) !important;
+          background: rgba(59,130,246,0.20) !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _drawer_layout(user: Dict[str, Any], role: str) -> str:
+    pages = _nav_pages_for_role(role)
+    _sync_nav_state(pages)
+    _drawer_init_state()
+    _drawer_css()
+
+    current_page = str(st.session_state.get("nav_page") or pages[0])
+
+    # Floating toggle button (Streamlit widget, not HTML)
+    with st.container():
+        st.markdown('<div class="sheep_drawer_btn_wrap">', unsafe_allow_html=True)
+        if st.button("選單", key="drawer_toggle_btn", type="secondary"):
+            _drawer_toggle()
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    drawer_open = bool(st.session_state.get("drawer_open"))
+
+    # Backdrop click-to-close (use a transparent full-width button)
+    if drawer_open:
+        st.markdown('<div class="sheep_drawer_backdrop">', unsafe_allow_html=True)
+        # a fullscreen invisible button layer is not feasible via Streamlit alone;
+        # provide a close button at top of drawer and allow toggle button to close.
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    panel_cls = "sheep_drawer_panel open" if drawer_open else "sheep_drawer_panel"
+    st.markdown(f'<div class="{panel_cls}">', unsafe_allow_html=True)
+    st.markdown(f'<div class="sheep_drawer_title">{html.escape(str(APP_TITLE))}</div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="sheep_drawer_meta">{html.escape(str(user.get("username") or ""))} · {html.escape(str(role or ""))}</div>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown('<div class="sheep_drawer_nav">', unsafe_allow_html=True)
+    for p in pages:
+        is_active = (p == current_page)
+        btn_type = "primary" if is_active else "secondary"
+        if st.button(p, key=f"drawer_nav_{p}", type=btn_type, use_container_width=True):
+            st.session_state["drawer_open"] = False
+            _set_nav_page(p)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<div style="height:12px"></div>', unsafe_allow_html=True)
+    if st.button("登出", key="drawer_logout_btn", type="secondary", use_container_width=True):
+        st.session_state["drawer_open"] = False
+        _logout()
+        st.rerun()
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    _render_user_hud(user)
+
+    return str(st.session_state.get("nav_page") or pages[0])
 def _nav_pages_for_role(role: str) -> List[str]:
+
     base = ["新手教學", "控制台", "排行榜", "任務", "提交", "結算"]
     if str(role or "").strip().lower() == "admin":
         return base + ["管理"]
@@ -5006,7 +5150,7 @@ def main() -> None:
 
     role = str(user.get("role") or "user")
 
-    page = _sidebar_layout_v2(user=user, role=role)
+    page = _drawer_layout(user=user, role=role)
 
     import traceback
     try:
