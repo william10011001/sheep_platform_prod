@@ -2694,8 +2694,22 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
         if not tasks:
             st.info("無任務。")
         else:
-            rows = []
-            for t in tasks:
+            html_cards = []
+            
+            def _get_status_color(s: str) -> str:
+                if s == "running": return "#10b981"
+                if s == "queued": return "#f59e0b"
+                if s == "completed": return "#3b82f6"
+                if s == "error": return "#ef4444"
+                return "#64748b"
+
+            def _sort_key(task_dict):
+                order = {"running": 0, "queued": 1, "assigned": 2, "completed": 3, "error": 4}
+                return (order.get(str(task_dict.get("status")), 9), -int(task_dict["id"]))
+
+            sorted_tasks = sorted(tasks, key=_sort_key)
+
+            for t in sorted_tasks:
                 try:
                     prog = json.loads(t.get("progress_json") or "{}")
                 except Exception:
@@ -2707,48 +2721,66 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
 
                 best_score = prog.get("best_any_score")
                 passed = bool(prog.get("best_any_passed") or False)
-
                 eta_s = prog.get("eta_s")
                 speed_cps = prog.get("speed_cps")
                 phase = str(prog.get("phase") or "")
-                updated_at = str(prog.get("updated_at") or "")
-
                 status_raw = str(t.get("status") or "")
+                
                 status_cn = _label_task_status(status_raw)
                 phase_cn = _label_phase(phase)
+                color = _get_status_color(status_raw)
+                
+                bar_width = min(100.0, max(0.0, pct))
+                score_str = f"{float(best_score):.6f}" if best_score is not None else "-"
+                speed_str = f"{float(speed_cps):.1f}/s" if speed_cps is not None else "-"
+                eta_str = f"{float(eta_s):.0f}s" if eta_s is not None else "-"
+                passed_badge = '<span style="background:rgba(16,185,129,0.2);color:#34d399;padding:2px 6px;border-radius:4px;font-size:11px;border:1px solid rgba(16,185,129,0.3);">已達標</span>' if passed else ''
+                
+                card_html = f"""
+                <div style="background: rgba(30, 41, 59, 0.5); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 16px; margin-bottom: 12px; position: relative; overflow: hidden;">
+                    <div style="position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: {color};"></div>
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
+                        <div>
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <span style="color: #f8fafc; font-weight: 700; font-size: 16px;">任務 {t['id']}</span>
+                                <span style="background: rgba(255,255,255,0.1); color: #cbd5e1; padding: 2px 8px; border-radius: 12px; font-size: 12px;">{t['symbol']} · {t['timeframe_min']}m</span>
+                                {passed_badge}
+                            </div>
+                            <div style="color: #94a3b8; font-size: 13px; margin-top: 4px;">{t['pool_name']} · {t['family']} · 分割 {int(t['partition_idx'])+1}/{t.get('num_partitions', 1)}</div>
+                        </div>
+                        <div style="text-align: right;">
+                            <div style="color: {color}; font-weight: 700; font-size: 14px;">{status_cn}</div>
+                            <div style="color: #64748b; font-size: 12px; margin-top: 2px;">{phase_cn}</div>
+                        </div>
+                    </div>
+                    
+                    <div style="background: rgba(0,0,0,0.3); border-radius: 6px; height: 6px; width: 100%; margin-bottom: 12px; overflow: hidden;">
+                        <div style="background: {color}; height: 100%; width: {bar_width}%; transition: width 0.3s ease;"></div>
+                    </div>
+                    
+                    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; text-align: center;">
+                        <div style="background: rgba(255,255,255,0.03); padding: 8px; border-radius: 8px;">
+                            <div style="color: #64748b; font-size: 11px; margin-bottom: 4px;">進度</div>
+                            <div style="color: #e2e8f0; font-size: 13px; font-family: monospace;">{combos_done} / {combos_total}</div>
+                        </div>
+                        <div style="background: rgba(255,255,255,0.03); padding: 8px; border-radius: 8px;">
+                            <div style="color: #64748b; font-size: 11px; margin-bottom: 4px;">最佳分數</div>
+                            <div style="color: #10b981; font-size: 13px; font-weight: 600; font-family: monospace;">{score_str}</div>
+                        </div>
+                        <div style="background: rgba(255,255,255,0.03); padding: 8px; border-radius: 8px;">
+                            <div style="color: #64748b; font-size: 11px; margin-bottom: 4px;">運算速度</div>
+                            <div style="color: #e2e8f0; font-size: 13px; font-family: monospace;">{speed_str}</div>
+                        </div>
+                        <div style="background: rgba(255,255,255,0.03); padding: 8px; border-radius: 8px;">
+                            <div style="color: #64748b; font-size: 11px; margin-bottom: 4px;">剩餘時間</div>
+                            <div style="color: #fbbf24; font-size: 13px; font-family: monospace;">{eta_str}</div>
+                        </div>
+                    </div>
+                </div>
+                """
+                html_cards.append(card_html)
 
-                rows.append(
-                    {
-                        "任務ID": int(t["id"]),
-                        "策略池": str(t.get("pool_name") or ""),
-                        "交易對": str(t.get("symbol") or ""),
-                        "週期": f"{int(t.get('timeframe_min') or 0)}m",
-                        "策略族": str(t.get("family") or ""),
-                        "分割": f'{int(t.get("partition_idx") or 0) + 1}/{int(t.get("num_partitions") or 1)}',
-                        "狀態": status_cn,
-                        "階段": phase_cn,
-                        "進度(%)": round(float(pct), 2),
-                        "已跑組合": int(combos_done),
-                        "組合總量": int(combos_total),
-                        "最佳分數": None if best_score is None else round(float(best_score), 6),
-                        "達標": bool(passed),
-                        "速度(組合/秒)": None if speed_cps is None else round(float(speed_cps), 3),
-                        "預估剩餘(秒)": None if eta_s is None else round(float(eta_s), 1),
-                        "更新時間": updated_at,
-                        "__status_raw": status_raw,
-                    }
-                )
-
-            df = pd.DataFrame(rows)
-
-            order = {"running": 0, "assigned": 1, "queued": 2, "completed": 3, "expired": 4, "revoked": 5}
-            try:
-                df["_ord"] = df["__status_raw"].map(order).fillna(9)
-                df = df.sort_values(["_ord", "任務ID"], ascending=[True, False]).drop(columns=["_ord", "__status_raw"])
-            except Exception:
-                pass
-
-            st.dataframe(df, use_container_width=True, hide_index=True)
+            st.markdown(f'<div style="margin-top: 10px;">{"".join(html_cards)}</div>', unsafe_allow_html=True)
 
         st.markdown(_section_title_html("全域進度", "顯示全站所有用戶的整體挖礦進度與分潤統計。可依策略篩選觀察。", level=3), unsafe_allow_html=True)
         # 呼叫此函式也被包裝在最外層的 try-except 中，確保不再出現裸奔錯誤
@@ -2894,7 +2926,6 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                         tid = int(t["id"])
                         st_raw = str(t.get("status") or "")
                         
-                        # [專家級修復] 擴大可排程狀態，包含 queued 與 意外死掉的 running
                         if st_raw not in ("assigned", "queued", "error", "running"):
                             continue
                         if job_mgr.is_running(tid):
@@ -2902,15 +2933,12 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                         if job_mgr.is_queued(int(user["id"]), tid):
                             continue
                             
-                        # 如果任務在 DB 是 running，但 job_mgr 判斷它根本沒在跑，這就是「殭屍任務」
-                        # 我們主動將其降級回 assigned 讓它能被重新領取
                         if st_raw == "running":
                             try:
                                 db.update_task_status(tid, "assigned")
                             except Exception:
                                 pass
                         elif st_raw == "error":
-                            # [專家級修復] 若之前發生錯誤卡在 error，重新排程時也應初始化狀態
                             try:
                                 db.update_task_status(tid, "assigned")
                             except Exception:
@@ -3257,9 +3285,16 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                         f'</div>', unsafe_allow_html=True)
 
         if last_error:
-            st.error(f"任務發生錯誤:\n\n{last_error}")
+            st.markdown(
+                f"""
+                <div style="background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); border-radius: 8px; padding: 12px; margin-top: 12px;">
+                    <div style="color: #ef4444; font-weight: bold; margin-bottom: 4px;">系統中斷報告</div>
+                    <div style="color: #fca5a5; font-size: 13px; white-space: pre-wrap;">{html.escape(last_error)}</div>
+                </div>
+                """, unsafe_allow_html=True
+            )
             if prog.get("debug_traceback"):
-                with st.expander("點擊展開詳細錯誤追蹤 (Traceback)"):
+                with st.expander("展開完整系統錯誤日誌"):
                     st.code(prog.get("debug_traceback"), language="python") 
 
         # Progress visualization

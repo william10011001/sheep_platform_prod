@@ -145,20 +145,34 @@ class JobManager:
     def stop_all_for_user(self, user_id: int) -> None:
         user_id = int(user_id)
         running_ids: List[int] = []
+        queued_ids: List[int] = []
         with self._lock:
             for tid, th in self._threads.items():
                 if th.is_alive():
                     running_ids.append(int(tid))
+            
+            if user_id in self._queued_set_by_user:
+                queued_ids = list(self._queued_set_by_user[user_id])
+            
+            self._queue_by_user.pop(user_id, None)
+            self._queued_set_by_user.pop(user_id, None)
+            self._rr_users = deque([u for u in self._rr_users if int(u) != user_id])
 
         for tid in running_ids:
             t = db.get_task(int(tid))
             if t and int(t.get("user_id") or 0) == user_id:
                 self.stop(int(tid))
 
-        with self._lock:
-            self._queue_by_user.pop(user_id, None)
-            self._queued_set_by_user.pop(user_id, None)
-            self._rr_users = deque([u for u in self._rr_users if int(u) != user_id])
+        if queued_ids:
+            try:
+                conn = db._conn()
+                placeholders = ",".join("?" for _ in queued_ids)
+                conn.execute(f"UPDATE mining_tasks SET status = 'assigned' WHERE id IN ({placeholders}) AND status = 'queued'", queued_ids)
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                import sys
+                print(f"[SYSTEM ERROR] 清除任務隊列狀態失敗: {e}", file=sys.stderr)
 
     def start(self, task_id: int, bt_module) -> bool:
         task_id = int(task_id)

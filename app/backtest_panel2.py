@@ -563,7 +563,7 @@ def _append_update_bitmart_csv(symbol: str,
 
     fetch_lock_path = Path(str(csv_path) + ".net.lock")
     try:
-        with FileLock(str(fetch_lock_path), timeout=1.0):
+        with FileLock(str(fetch_lock_path), timeout=120.0):
             client = BitMartRestClient()
 
             status = _csv_quick_status(symbol, step_min)
@@ -600,7 +600,7 @@ def _append_update_bitmart_csv(symbol: str,
 
     if fetched <= 0:
         try:
-            with FileLock(str(lock_path), timeout=3):
+            with FileLock(str(lock_path), timeout=30.0):
                 _write_meta(meta_path, {
                     "exchange": "bitmart",
                     "symbol": str(symbol).strip(),
@@ -616,7 +616,7 @@ def _append_update_bitmart_csv(symbol: str,
         return str(csv_path)
 
     try:
-        with FileLock(str(lock_path), timeout=3):
+        with FileLock(str(lock_path), timeout=60.0):
             last_line = _read_last_data_line(csv_path)
             last_now = None
             if last_line:
