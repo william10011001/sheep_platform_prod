@@ -787,26 +787,40 @@ GENERIC_SIG_CACHE: Dict[str, List[np.ndarray]] = {}
 
 # --- Ultra-fast JSON dumps (prefer orjson if available) ---
 def _json_default(o):
+    import math
     if isinstance(o, (np.integer,)):
         return int(o)
     if isinstance(o, (np.floating,)):
-        return float(o)
+        val = float(o)
+        if math.isnan(val) or math.isinf(val):
+            return None
+        return val
     if isinstance(o, (np.ndarray,)):
         return o.tolist()
     if isinstance(o, (np.bool_, bool)):
         return bool(o)
+    if isinstance(o, set):
+        return list(o)
     try:
         import pandas as pd
+        if pd.isna(o):
+            return None
         if isinstance(o, (pd.Timestamp, pd.Timedelta)):
             return str(o)
         if isinstance(o, (pd.DataFrame, pd.Series)):
             return "Pandas_Object_Skipped"
     except Exception:
         pass
+    
+    # 最後防線：若遇到無法序列化的物件，將其安全字串化，同時保留追蹤資訊
     try:
-        return str(o)
-    except Exception:
-        return "Unserializable_Object"
+        fallback_str = str(o)
+        # 避免回傳過長的記憶體位址字串導致資料庫爆炸
+        if len(fallback_str) > 500:
+            return f"{type(o).__name__}_(Truncated)"
+        return fallback_str
+    except Exception as e:
+        return f"Unserializable_Object_Error_{type(e).__name__}"
 
 try:
     import orjson as _orjson

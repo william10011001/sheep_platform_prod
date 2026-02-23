@@ -294,8 +294,22 @@ class JobManager:
                 import traceback
                 import sys
                 timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
-                print(f"\n[{timestamp}] [SCHEDULER ERROR] 迴圈異常: {e}\n{traceback.format_exc()}\n", file=sys.stderr)
-                time.sleep(1.0)
+                err_trace = traceback.format_exc()
+                print(f"\n{'='*70}\n[{timestamp}] [CRITICAL SCHEDULER ERROR] 核心調度迴圈發生異常\n類型: {type(e).__name__}\n訊息: {e}\n{err_trace}\n{'='*70}\n", file=sys.stderr)
+                
+                # 紀錄到資料庫的 audit_logs 確保管理員能在 UI 查閱
+                try:
+                    conn_err = db._conn()
+                    conn_err.execute(
+                        "INSERT INTO audit_logs (user_id, action, payload_json, created_at) VALUES (NULL, ?, ?, ?)",
+                        ("scheduler_loop_crash", json.dumps({"error": str(e), "traceback": err_trace}), db.utc_now_iso())
+                    )
+                    conn_err.commit()
+                    conn_err.close()
+                except Exception as log_e:
+                    print(f"[FATAL] 無法將調度器錯誤寫入資料庫: {log_e}", file=sys.stderr)
+                    
+                time.sleep(2.0)
 
     def _run_task(self, task_id: int, bt_module, stop_flag: threading.Event) -> None:
         task_id = int(task_id)

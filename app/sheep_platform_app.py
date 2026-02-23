@@ -2731,49 +2731,86 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
                 color = _get_status_color(status_raw)
                 
                 bar_width = min(100.0, max(0.0, pct))
-                score_str = f"{float(best_score):.6f}" if best_score is not None else "-"
-                speed_str = f"{float(speed_cps):.1f}/s" if speed_cps is not None else "-"
-                eta_str = f"{float(eta_s):.0f}s" if eta_s is not None else "-"
-                passed_badge = '<span style="background:rgba(16,185,129,0.2);color:#34d399;padding:2px 6px;border-radius:4px;font-size:11px;border:1px solid rgba(16,185,129,0.3);">已達標</span>' if passed else ''
+                score_str = f"{float(best_score):.6f}" if best_score is not None else "計算中..."
+                speed_str = f"{float(speed_cps):.1f} /s" if speed_cps is not None and float(speed_cps) > 0 else "-"
+                eta_str = f"{float(eta_s):.0f}s" if eta_s is not None and float(eta_s) > 0 else "-"
                 
+                # 狀態特化顯示邏輯
+                if status_raw in ("assigned", "queued") or phase in ("idle", "queued"):
+                    progress_display = "等待分配資源"
+                    score_str = "-"
+                    bar_width = 0.0
+                    is_pulsing = "animation: pulse 2s infinite;" if status_raw == "queued" else ""
+                elif phase == "sync_data":
+                    progress_display = "歷史資料同步中"
+                    is_pulsing = "animation: pulse 1.5s infinite;"
+                elif combos_total == 0:
+                    progress_display = "初始化參數..."
+                    is_pulsing = "animation: pulse 1.5s infinite;"
+                else:
+                    progress_display = f"{combos_done:,} / {combos_total:,}"
+                    is_pulsing = ""
+
+                passed_badge = '<span style="background:rgba(16,185,129,0.15);color:#34d399;padding:4px 8px;border-radius:6px;font-size:11px;font-weight:600;border:1px solid rgba(16,185,129,0.3);box-shadow:0 0 8px rgba(16,185,129,0.2);">已達標</span>' if passed else ''
+                
+                # 若發生錯誤，強行改變外觀
+                if status_raw == "error":
+                    color = "#ef4444"
+                    is_pulsing = ""
+                    progress_display = "執行中斷"
+                    eta_str = "失敗"
+
                 card_html = f"""
-                <div style="background: rgba(30, 41, 59, 0.5); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 16px; margin-bottom: 12px; position: relative; overflow: hidden;">
-                    <div style="position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: {color};"></div>
-                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
+                <style>
+                @keyframes pulse {{
+                    0% {{ opacity: 1; }}
+                    50% {{ opacity: 0.6; box-shadow: 0 0 10px {color}40; }}
+                    100% {{ opacity: 1; }}
+                }}
+                </style>
+                <div style="background: linear-gradient(145deg, rgba(30, 41, 59, 0.7) 0%, rgba(15, 23, 42, 0.9) 100%); border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 20px; margin-bottom: 16px; position: relative; overflow: hidden; box-shadow: 0 8px 24px rgba(0,0,0,0.4); {is_pulsing}">
+                    <div style="position: absolute; left: 0; top: 0; bottom: 0; width: 5px; background: {color}; box-shadow: 2px 0 12px {color}80;"></div>
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px;">
                         <div>
-                            <div style="display: flex; align-items: center; gap: 10px;">
-                                <span style="color: #f8fafc; font-weight: 700; font-size: 16px;">任務 {t['id']}</span>
-                                <span style="background: rgba(255,255,255,0.1); color: #cbd5e1; padding: 2px 8px; border-radius: 12px; font-size: 12px;">{t['symbol']} · {t['timeframe_min']}m</span>
+                            <div style="display: flex; align-items: center; gap: 12px;">
+                                <span style="color: #ffffff; font-weight: 800; font-size: 18px; letter-spacing: 0.5px;">任務 {t['id']}</span>
+                                <span style="background: rgba(255,255,255,0.06); color: #cbd5e1; padding: 4px 10px; border-radius: 8px; font-size: 12px; border: 1px solid rgba(255,255,255,0.1); font-weight: 600;">{t['symbol']} · {t['timeframe_min']}m</span>
                                 {passed_badge}
                             </div>
-                            <div style="color: #94a3b8; font-size: 13px; margin-top: 4px;">{t['pool_name']} · {t['family']} · 分割 {int(t['partition_idx'])+1}/{t.get('num_partitions', 1)}</div>
+                            <div style="color: #94a3b8; font-size: 13px; margin-top: 8px; display: flex; align-items: center; gap: 6px;">
+                                <span style="color:#60a5fa; font-weight:600;">{t['family']}</span>
+                                <span>|</span>
+                                <span>{t['pool_name']}</span>
+                                <span>|</span>
+                                <span>分割 {int(t['partition_idx'])+1} / {t.get('num_partitions', 1)}</span>
+                            </div>
                         </div>
-                        <div style="text-align: right;">
-                            <div style="color: {color}; font-weight: 700; font-size: 14px;">{status_cn}</div>
-                            <div style="color: #64748b; font-size: 12px; margin-top: 2px;">{phase_cn}</div>
+                        <div style="text-align: right; background: rgba(0,0,0,0.2); padding: 8px 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.05);">
+                            <div style="color: {color}; font-weight: 800; font-size: 15px; text-transform: uppercase; letter-spacing: 1px;">{status_cn}</div>
+                            <div style="color: #94a3b8; font-size: 12px; margin-top: 4px; font-family: monospace;">{phase_cn}</div>
                         </div>
                     </div>
                     
-                    <div style="background: rgba(0,0,0,0.3); border-radius: 6px; height: 6px; width: 100%; margin-bottom: 12px; overflow: hidden;">
-                        <div style="background: {color}; height: 100%; width: {bar_width}%; transition: width 0.3s ease;"></div>
+                    <div style="background: rgba(0,0,0,0.4); border-radius: 8px; height: 8px; width: 100%; margin-bottom: 16px; overflow: hidden; border: 1px solid rgba(255,255,255,0.05);">
+                        <div style="background: linear-gradient(90deg, {color}80, {color}); height: 100%; width: {bar_width}%; transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1); box-shadow: 0 0 10px {color};"></div>
                     </div>
                     
-                    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; text-align: center;">
-                        <div style="background: rgba(255,255,255,0.03); padding: 8px; border-radius: 8px;">
-                            <div style="color: #64748b; font-size: 11px; margin-bottom: 4px;">進度</div>
-                            <div style="color: #e2e8f0; font-size: 13px; font-family: monospace;">{combos_done} / {combos_total}</div>
+                    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; text-align: left;">
+                        <div style="background: rgba(255,255,255,0.02); padding: 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.04);">
+                            <div style="color: #64748b; font-size: 11px; margin-bottom: 6px; text-transform: uppercase; font-weight: 600;">參數運算進度</div>
+                            <div style="color: #f8fafc; font-size: 14px; font-family: 'JetBrains Mono', monospace; font-weight: 600;">{progress_display}</div>
                         </div>
-                        <div style="background: rgba(255,255,255,0.03); padding: 8px; border-radius: 8px;">
-                            <div style="color: #64748b; font-size: 11px; margin-bottom: 4px;">最佳分數</div>
-                            <div style="color: #10b981; font-size: 13px; font-weight: 600; font-family: monospace;">{score_str}</div>
+                        <div style="background: rgba(255,255,255,0.02); padding: 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.04);">
+                            <div style="color: #64748b; font-size: 11px; margin-bottom: 6px; text-transform: uppercase; font-weight: 600;">目前最佳分數</div>
+                            <div style="color: #10b981; font-size: 14px; font-weight: 700; font-family: 'JetBrains Mono', monospace;">{score_str}</div>
                         </div>
-                        <div style="background: rgba(255,255,255,0.03); padding: 8px; border-radius: 8px;">
-                            <div style="color: #64748b; font-size: 11px; margin-bottom: 4px;">運算速度</div>
-                            <div style="color: #e2e8f0; font-size: 13px; font-family: monospace;">{speed_str}</div>
+                        <div style="background: rgba(255,255,255,0.02); padding: 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.04);">
+                            <div style="color: #64748b; font-size: 11px; margin-bottom: 6px; text-transform: uppercase; font-weight: 600;">處理速度</div>
+                            <div style="color: #e2e8f0; font-size: 14px; font-family: 'JetBrains Mono', monospace;">{speed_str}</div>
                         </div>
-                        <div style="background: rgba(255,255,255,0.03); padding: 8px; border-radius: 8px;">
-                            <div style="color: #64748b; font-size: 11px; margin-bottom: 4px;">剩餘時間</div>
-                            <div style="color: #fbbf24; font-size: 13px; font-family: monospace;">{eta_str}</div>
+                        <div style="background: rgba(255,255,255,0.02); padding: 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.04);">
+                            <div style="color: #64748b; font-size: 11px; margin-bottom: 6px; text-transform: uppercase; font-weight: 600;">預估剩餘時間</div>
+                            <div style="color: #fbbf24; font-size: 14px; font-family: 'JetBrains Mono', monospace; font-weight: 600;">{eta_str}</div>
                         </div>
                     </div>
                 </div>
@@ -3401,7 +3438,7 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
         except Exception:
             pass
 
-        # [專家級修復] 放置一個隱藏按鈕，透過 JS 觸發 Streamlit 原生 rerun，徹底消滅全頁面刷新的閃爍與效能問題
+        # 建立不可見的安全重整按鈕
         if st.button("AutoRefreshHiddenBtn", key="hidden_refresh_btn", use_container_width=False):
             pass
 
@@ -3425,6 +3462,7 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                 targetBtn.style.height = '1px';
                 targetBtn.style.pointerEvents = 'none';
                 targetBtn.style.overflow = 'hidden';
+                targetBtn.style.zIndex = '-9999';
             }}
         }}
     }});
@@ -3435,10 +3473,16 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
 
     w.__sheep_autorefresh_timer = setTimeout(function() {{
       try {{
+        // 暫停更新條件：頁面不可見、用戶正在輸入、或用戶正在選取文字
         if (document.hidden) return;
         
         const activeEl = w.document.activeElement;
-        if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT')) {{
+        const isInputting = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT' || activeEl.isContentEditable);
+        const isSelectingText = w.getSelection && w.getSelection().toString().length > 0;
+        
+        if (isInputting || isSelectingText) {{
+            // 延後下一次檢查，不中斷用戶操作
+            w.__sheep_autorefresh_timer = setTimeout(arguments.callee, 2000);
             return;
         }}
         
@@ -3446,11 +3490,11 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
             targetBtn.click();
         }}
       }} catch (e) {{
-        console.warn('AutoRefresh error', e);
+        console.warn('AutoRefresh execution error:', e);
       }}
     }}, ms);
   }} catch (e) {{
-    console.warn('AutoRefresh init error', e);
+    console.warn('AutoRefresh initialization error:', e);
   }}
 }})();
 </script>
@@ -4884,9 +4928,17 @@ def main() -> None:
         except Exception:
             pass
 
-        st.error(f"頁面渲染發生錯誤。")
-        st.info(f"錯誤參考編號：{err_id}")
-        with st.expander("錯誤追蹤紀錄 (Traceback)", expanded=True):
+        st.error(f"頁面渲染發生重大異常，系統已自動攔截並產生報告。")
+        st.info(f"錯誤參考編號：{err_id} | 發生時間：{ts_utc}")
+        st.markdown(
+            f"""
+            <div style="background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); border-left: 4px solid #ef4444; border-radius: 8px; padding: 16px; margin-bottom: 16px;">
+                <div style="color: #ef4444; font-weight: 800; margin-bottom: 8px; font-size: 16px;">異常類型</div>
+                <div style="color: #fca5a5; font-size: 14px; font-family: monospace; white-space: pre-wrap;">{str(route_err)}</div>
+            </div>
+            """, unsafe_allow_html=True
+        )
+        with st.expander("展開完整系統錯誤追蹤紀錄 (Traceback)", expanded=True):
             st.code(tb, language="python")
     return
 
