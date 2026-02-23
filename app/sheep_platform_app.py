@@ -15,7 +15,7 @@ import streamlit as st
 import traceback
 import sys
 
-# --- 專家級版本相容修復：解決 dataframe_selector 遺失問題 ---
+# DataFrame 版本相容處理
 def _get_orig_dataframe():
     # 嘗試取得 Streamlit 原始的 dataframe 渲染方法，避開遞迴
     if hasattr(st, "_sheep_orig_dataframe"):
@@ -85,8 +85,8 @@ _BRAND_WEBM_1 = os.environ.get("SHEEP_BRAND_WEBM_1", "static/羊LOGO影片(去�
 
 def _mask_username(username: str, nickname: str = None) -> str:
     """
-    專家級隱私遮罩邏輯 (V2)：
-    1. 若有設定 nickname，直接回傳 nickname (前端 CSS 會負責加上皇冠)。
+    隱私遮罩邏輯：
+    1. 若有設定 nickname，直接回傳 nickname。
     2. 遮罩邏輯：
        - 長度 <= 2: 顯示首字 + *
        - 長度 3~4: 首1 + ** + 尾1
@@ -146,7 +146,7 @@ iframe[data-sheep-brand="1"],
 iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
   position: fixed !important;
   top: 0 !important;
-  /* 教授級終極修正：將 Header 偏移 60px 避開側邊欄控制鈕區域 */
+  /* 將 Header 偏移 60px 避開側邊欄控制鈕區域 */
   left: 60px !important; 
   width: 300px !important;
   height: 84px !important;
@@ -2658,7 +2658,7 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
             conn.close()
             
         try:
-            # [專家級修復] 修正引數錯位問題：明確指定 cycle_id 與 min_tasks 避免資料庫關聯崩潰
+            # 明確指定參數避免關聯錯誤
             db.assign_tasks_for_user(int(user["id"]), cycle_id=int(cycle["id"]), min_tasks=min_tasks)
         except AttributeError as ae:
             st.error(f"系統核心函數遺失。")
@@ -3716,43 +3716,42 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
                     can_set_nickname = True
                 break
     
-    # 3. 尊榮暱稱設定區塊 (美化版)
+    # 3. 稱號設定區塊
     if can_set_nickname:
         st.markdown(
             """
             <div class="nick-card">
                 <div style="font-size:20px; font-weight:800; color:#FFD700; margin-bottom:12px; display:flex; align-items:center;">
-                    <span class="crown-icon"></span>尊榮權限已解鎖
+                    <span class="crown-icon"></span>特殊稱號權限已啟用
                 </div>
                 <div style="font-size:15px; color:#cbd5e1; line-height:1.6;">
-                    恭喜！您是本月算力貢獻前 5 名的頂尖強者。您現在可以設定專屬暱稱，讓全平台看見您的稱號。
+                    您的算力貢獻位居前列，系統已為您開放自訂稱號功能。
                 </div>
             </div>
             """, unsafe_allow_html=True
         )
         col_n1, col_n2 = st.columns([3, 1])
         with col_n1:
-            # 增加一些 padding 和 placeholder
-            new_nick = st.text_input("設定新暱稱", value=user.get("nickname", ""), max_chars=10, label_visibility="collapsed", placeholder="在此輸入您的尊榮稱號...")
+            new_nick = st.text_input("設定新稱號", value=user.get("nickname", ""), max_chars=10, label_visibility="collapsed", placeholder="在此輸入您的專屬稱號...")
         with col_n2:
             if st.button("更新稱號", type="primary", use_container_width=True):
                 safe_nick = html.escape(new_nick.strip())
                 if safe_nick:
                     db.update_user_nickname(int(user["id"]), safe_nick)
-                    user["nickname"] = safe_nick # Update session cache
+                    user["nickname"] = safe_nick
                     db.write_audit_log(int(user["id"]), "update_nickname", {"nickname": safe_nick})
-                    st.toast("稱號已閃亮更新！")
+                    st.toast("稱號已更新。")
                     time.sleep(1)
                     st.rerun()
                 else:
                     st.warning("稱號不可為空")
     elif period_hours == 720:
-        st.info(f" 提示：月度算力榜前 5 名即可解鎖自訂暱稱功能。{my_rank_info}")
+        st.info(f"月度算力榜前 5 名可解鎖自訂稱號功能。{my_rank_info}")
 
-    # 4. 排行榜 HTML 渲染器 (修復 HTML 外洩問題)
+    # 4. 排行榜 HTML 渲染器
     def _render_html_table(rows: list, val_col: str, val_fmt: str, unit: str):
         if not rows:
-            st.markdown('<div class="panel" style="text-align:center; color:#64748b; padding:40px; font-size:14px;">此區間尚無數據，快來搶頭香！</div>', unsafe_allow_html=True)
+            st.markdown('<div class="panel" style="text-align:center; color:#64748b; padding:40px; font-size:14px;">此區間尚無數據。</div>', unsafe_allow_html=True)
             return
 
         html_rows = []
@@ -3787,7 +3786,7 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
             is_me = (r.get("username") == user["username"])
             bg_style = 'style="background: rgba(59, 130, 246, 0.15); border: 1px solid rgba(59, 130, 246, 0.4); box-shadow: 0 4px 12px rgba(0,0,0,0.2);"' if is_me else ""
             
-            # [專家級修復] 同樣去除行內 HTML 縮排，確保 Markdown 不會介入干擾
+            # 去除 HTML 縮排，確保 Markdown 解析正常
             row_html = (
                 f'<tr class="lb-row" {bg_style}>\n'
                 f'<td><div class="rank-badge {rank_class}">{rank}</div></td>\n'
@@ -3797,8 +3796,7 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
             )
             html_rows.append(row_html)
 
-        # 組合 Table，注意：必須使用 unsafe_allow_html=True
-        # [專家級修復] 徹底移除縮排，避免 Streamlit Markdown 引擎將其誤判為程式碼區塊 (Code Block)
+        # 移除縮排，避免 Markdown 解析為程式碼區塊
         full_table = (
             '<div class="leaderboard-wrapper">\n'
             '<table class="lb-table" style="width:100%; border-spacing:0 8px; border-collapse:separate;">\n'
