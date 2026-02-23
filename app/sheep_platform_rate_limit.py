@@ -19,7 +19,8 @@ class RateLimiter:
         self._ttl_s = float(max(60.0, ttl_s))
         self._lock = threading.Lock()
         self._buckets: Dict[str, _Bucket] = {}
-        self._last_cleanup = 0.0
+        # 使用 monotonic time 避免系統時間校正造成 token bucket 計算錯誤
+        self._last_cleanup = time.monotonic()
 
     def configure(self, rate_per_minute: float, burst: float) -> None:
         with self._lock:
@@ -50,7 +51,7 @@ class RateLimiter:
         if self._rate_per_minute <= 0:
             return True, None
 
-        now = time.time()
+        now = time.monotonic()
         with self._lock:
             self._cleanup(now)
 

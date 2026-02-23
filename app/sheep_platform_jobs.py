@@ -405,11 +405,18 @@ class JobManager:
             progress["phase_msg"] = "正在展開格點參數組合..."
             db.update_task_progress(task_id, progress)
 
-            combos = bt_module.grid_combinations_from_ui(family, grid_spec)
-            
-            # [防護機制] 檢查展開後的組合是否為空，避免除以零或無盡迴圈
+            # [參數驗證] 確保 grid_spec 為有效字典
+            if not isinstance(grid_spec, dict):
+                grid_spec = {}
+                
+            try:
+                combos = bt_module.grid_combinations_from_ui(family, grid_spec)
+            except Exception as grid_err:
+                raise ValueError(f"格點生成失敗: {str(grid_err)}。請檢查策略池參數設定。")
+
+            # [防護機制] 檢查展開後的組合是否為空
             if not combos:
-                raise ValueError(f"格點參數展開失敗或為空，請檢查策略池 ({pool['name']}) 的參數設定範圍。")
+                raise ValueError(f"格點參數展開為空 (Count=0)，請檢查策略池 ({pool.get('name', 'Unknown')}) 的參數範圍設定是否合理。")
             
             # [深度防御] 確保所有參與種子計算的數值皆非 None 且型別正確
             safe_cycle_id = int(task.get("cycle_id") if task.get("cycle_id") is not None else 0)
@@ -618,11 +625,15 @@ class JobManager:
             import gc
             gc.collect()
 
-        except Exception as e:
+        except BaseException as e:
+            # [系統級防護] 捕捉 BaseException (含 SystemExit, KeyboardInterrupt) 確保狀態重置
             import traceback, sys
             err_trace = traceback.format_exc()
             
-            print(f"\n{'='*60}\n[TASK ERROR] Task ID: {task_id}\n{err_trace}\n{'='*60}", file=sys.stderr)
+            # 格式化錯誤訊息，移除可能包含的敏感路徑
+            safe_err_msg = str(e).replace(os.getcwd(), ".")
+            
+            print(f"\n{'='*60}\n[SYSTEM EXCEPTION] Task ID: {task_id}\nType: {type(e).__name__}\nError: {safe_err_msg}\n{err_trace}\n{'='*60}", file=sys.stderr)
             
             try:
                 current_t = db.get_task(task_id)

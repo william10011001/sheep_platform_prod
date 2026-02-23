@@ -654,24 +654,143 @@ def _style() -> None:
         """
         <style>
         :root {
-          --bg: #05070a;
-          --card: rgba(20, 24, 32, 0.6);
-          --card-hover: rgba(28, 34, 46, 0.8);
-          --border: rgba(255, 255, 255, 0.08);
-          --border-hover: rgba(120, 180, 255, 0.3);
-          --text: #e2e8f0;
-          --muted: #8492a6;
-          --accent: #3b82f6;
-          --accent-glow: rgba(59, 130, 246, 0.4);
-          --shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+          --bg: #0a0c10;
+          --card: #161b22;
+          --card-border: #30363d;
+          --text-primary: #c9d1d9;
+          --text-secondary: #8b949e;
+          --accent: #1f6feb;
+          --accent-hover: #388bfd;
+          --success: #238636;
+          --danger: #da3633;
+          --warning: #d29922;
         }
 
         .stApp {
-          background: radial-gradient(circle at 15% 0%, rgba(30, 58, 138, 0.15) 0%, transparent 40%),
-                      radial-gradient(circle at 85% 100%, rgba(15, 118, 110, 0.1) 0%, transparent 40%),
-                      var(--bg);
-          color: var(--text);
+          background-color: var(--bg);
+          color: var(--text-primary);
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
         }
+
+        /* 隱藏預設元素 */
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
+        header[data-testid="stHeader"] {background: transparent !important;}
+
+        /* 輸入框美化 */
+        div[data-testid="stTextInput"] input,
+        div[data-testid="stNumberInput"] input, 
+        div[data-testid="stPassword"] input,
+        div[data-testid="stTextArea"] textarea,
+        div[data-baseweb="select"] > div {
+            background-color: #0d1117 !important;
+            border: 1px solid var(--card-border) !important;
+            color: var(--text-primary) !important;
+            border-radius: 6px !important;
+        }
+        
+        div[data-testid="stTextInput"] input:focus,
+        div[data-testid="stNumberInput"] input:focus,
+        div[data-testid="stPassword"] input:focus, 
+        div[data-testid="stTextArea"] textarea:focus {
+            border-color: var(--accent) !important;
+            box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.3) !important;
+        }
+
+        /* 按鈕美化 */
+        button[kind="primary"] {
+            background-color: var(--success) !important;
+            border: 1px solid rgba(240, 246, 252, 0.1) !important;
+            color: #ffffff !important;
+            font-weight: 600 !important;
+            transition: all 0.2s ease !important;
+        }
+        button[kind="primary"]:hover {
+            background-color: #2ea043 !important;
+            border-color: #8b949e !important;
+        }
+        
+        button[kind="secondary"] {
+            background-color: var(--card) !important;
+            border: 1px solid var(--card-border) !important;
+            color: var(--text-primary) !important;
+        }
+        button[kind="secondary"]:hover {
+            background-color: #30363d !important;
+            border-color: #8b949e !important;
+        }
+
+        /* 卡片容器 */
+        .panel {
+            background-color: var(--card);
+            border: 1px solid var(--card-border);
+            border-radius: 6px;
+            padding: 24px;
+            margin-bottom: 24px;
+        }
+
+        /* 側邊欄 */
+        section[data-testid="stSidebar"] {
+            background-color: #0d1117;
+            border-right: 1px solid var(--card-border);
+        }
+
+        /* 度量指標 */
+        .metric {
+            background-color: var(--card);
+            border: 1px solid var(--card-border);
+            padding: 16px;
+            border-radius: 6px;
+            text-align: center;
+        }
+        .metric .k {
+            font-size: 12px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 4px;
+        }
+        .metric .v {
+            font-size: 24px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        /* 狀態標籤 */
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            padding: 2px 10px;
+            border-radius: 2em;
+            font-size: 12px;
+            font-weight: 500;
+            line-height: 18px;
+            border: 1px solid transparent;
+        }
+        .pill-ok { background-color: rgba(35, 134, 54, 0.15); color: #3fb950; border-color: rgba(35, 134, 54, 0.4); }
+        .pill-warn { background-color: rgba(187, 128, 9, 0.15); color: #d29922; border-color: rgba(187, 128, 9, 0.4); }
+        .pill-bad { background-color: rgba(218, 54, 51, 0.15); color: #f85149; border-color: rgba(218, 54, 51, 0.4); }
+        .pill-info { background-color: rgba(31, 111, 235, 0.15); color: #58a6ff; border-color: rgba(31, 111, 235, 0.4); }
+        .pill-neutral { background-color: rgba(110, 118, 129, 0.15); color: #8b949e; border-color: rgba(110, 118, 129, 0.4); }
+
+        /* 排行榜表格優化 */
+        .lb-table { width: 100%; border-collapse: collapse; }
+        .lb-row { border-bottom: 1px solid var(--card-border); transition: background-color 0.2s; }
+        .lb-row:hover { background-color: #1c2128; }
+        .lb-cell { padding: 12px 16px; color: var(--text-primary); font-size: 14px; }
+        .rank-badge {
+            display: inline-block; width: 24px; height: 24px;
+            line-height: 24px; text-align: center;
+            border-radius: 50%; font-size: 12px; font-weight: bold;
+            background-color: #30363d; color: #8b949e;
+        }
+        .rank-1 { background-color: #d29922; color: #0d1117; }
+        .rank-2 { background-color: #8b949e; color: #0d1117; }
+        .rank-3 { background-color: #9e6a03; color: #ffffff; }
+
+        /* 標題樣式 */
+        h1, h2, h3 { color: var(--text-primary); font-weight: 600; letter-spacing: -0.5px; }
+        .small-muted { font-size: 12px; color: var(--text-secondary); }
 
         html, body, [class*="css"]  {
           font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
@@ -4275,19 +4394,22 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
         cycle_id = int(cycle["id"])
         pools = db.list_factor_pools(cycle_id=cycle_id)
         pool_map = {int(p["id"]): p for p in pools}
-        with st.expander("Pool 救援 / 匯入", expanded=(not bool(pools))):
+        with st.expander("策略池復原與匯入", expanded=(not bool(pools))):
             try:
-                st.caption(f"目前資料庫：{db._db_path()} · active_cycle_id={int(cycle_id)}")
+                st.caption(f"資料庫路徑：{db._db_path()} | 當前週期 ID：{int(cycle_id)}")
             except Exception:
                 pass
 
-            if st.button("從本地掃描找回 Pool", key="pool_recover"):
+            if st.button("掃描本地資料庫並復原策略池", key="pool_recover"):
                 try:
                     rep = db.recover_factor_pools_from_local(cycle_id=int(cycle_id))
-                    if int(rep.get("imported") or 0) > 0:
-                        st.success(f"已匯入 {int(rep.get('imported') or 0)} 個 Pool（重複略過 {int(rep.get('skipped_duplicates') or 0)}）")
+                    imported_count = int(rep.get("imported") or 0)
+                    skipped_count = int(rep.get("skipped_duplicates") or 0)
+                    
+                    if imported_count > 0:
+                        st.success(f"成功復原 {imported_count} 個策略池 (已略過重複項目: {skipped_count})")
                     else:
-                        st.warning("沒有找到可匯入的 Pool（或全部都已存在）。")
+                        st.info("未掃描到可復原的策略池，或所有項目已存在。")
                     st.json(rep)
                     st.rerun()
                 except Exception as e:

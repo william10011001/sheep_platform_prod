@@ -4292,9 +4292,17 @@ reverse_mode: bool = False) -> Dict:
          )
 
         else:
-            # Fallback to empty if no Numba (Or implement Python version if needed)
-             (perbar, equity,
-             e_idx, x_idx, e_px, x_px, tr_ret, bars_held, reasons) = (np.zeros_like(c), np.ones_like(c), [], [], [], [], [], [], [])
+            # Fallback: 使用空 Numpy Array 以維持型別一致性
+            empty_f64 = np.array([], dtype=np.float64)
+            empty_i64 = np.array([], dtype=np.int64)
+            empty_i32 = np.array([], dtype=np.int32)
+            empty_i8 = np.array([], dtype=np.int8)
+            (perbar, equity,
+             e_idx, x_idx, e_px, x_px, tr_ret, bars_held, reasons) = (
+                 np.zeros_like(c, dtype=np.float64), 
+                 np.ones_like(c, dtype=np.float64), 
+                 empty_i64, empty_i64, empty_f64, empty_f64, empty_f64, empty_i32, empty_i8
+            )
 
     elif family == "TEMA_RSI" and zone_arrays is not None:
          # 策略模式：TEMA_RSI
@@ -4315,9 +4323,17 @@ reverse_mode: bool = False) -> Dict:
          )
 
         else:
-             # Fallback: 補齊回傳數量
+             # Fallback: 使用空 Numpy Array 以維持型別一致性
+             empty_f64 = np.array([], dtype=np.float64)
+             empty_i64 = np.array([], dtype=np.int64)
+             empty_i32 = np.array([], dtype=np.int32)
+             empty_i8 = np.array([], dtype=np.int8)
              (perbar, equity,
-             e_idx, x_idx, e_px, x_px, tr_ret, bars_held, reasons, entry_reasons_arr) = (np.zeros_like(c), np.ones_like(c), [], [], [], [], [], [], [], [])
+             e_idx, x_idx, e_px, x_px, tr_ret, bars_held, reasons, entry_reasons_arr) = (
+                 np.zeros_like(c, dtype=np.float64), 
+                 np.ones_like(c, dtype=np.float64), 
+                 empty_i64, empty_i64, empty_f64, empty_f64, empty_f64, empty_i32, empty_i8, empty_i8
+            )
 
     else:
         # 一般模式：使用固定 TP/SL 模擬
@@ -4612,17 +4628,31 @@ reverse_mode: bool = False) -> Dict:
     so = sortino_ratio(bar_returns, bpy)
     cal = calmar_ratio(cagr, maxdd_pct)
 
-    trade_returns = tr_ret
+    # [型別安全修正] 強制轉換為 Numpy Array (float64)，避免 List 與 Int 比較導致 TypeError
+    trade_returns = np.asanyarray(tr_ret, dtype=np.float64)
+    bars_held_arr = np.asanyarray(bars_held, dtype=np.float64)
+    
+    # 向量化統計計算
     wins = trade_returns[trade_returns > 0]
     losses = trade_returns[trade_returns <= 0]
-    win_rate = (len(wins) / len(trade_returns) * 100.0) if len(trade_returns) > 0 else 0.0
-    avg_win = wins.mean() if wins.size else 0.0
-    avg_loss = losses.mean() if losses.size else 0.0
-    payoff = (avg_win / abs(avg_loss)) if avg_loss != 0 else np.nan
-    pf = (wins.sum() / abs(losses.sum())) if losses.size else np.nan
-    expectancy = trade_returns.mean() if trade_returns.size else 0.0
-    avg_hold = np.mean(bars_held) if bars_held.size else 0.0
-    time_in_mkt = (np.sum(bars_held) / len(df) * 100.0) if len(df) > 0 else 0.0
+    
+    # 安全除法與統計
+    n_trades = len(trade_returns)
+    win_rate = (len(wins) / n_trades * 100.0) if n_trades > 0 else 0.0
+    
+    avg_win = np.mean(wins) if wins.size > 0 else 0.0
+    avg_loss = np.mean(losses) if losses.size > 0 else 0.0
+    
+    # 避免 avg_loss 為 0 導致無限大
+    abs_avg_loss = abs(avg_loss)
+    payoff = (avg_win / abs_avg_loss) if abs_avg_loss > 1e-12 else 0.0
+    
+    sum_loss = abs(np.sum(losses))
+    pf = (np.sum(wins) / sum_loss) if sum_loss > 1e-12 else 0.0
+    
+    expectancy = np.mean(trade_returns) if n_trades > 0 else 0.0
+    avg_hold = np.mean(bars_held_arr) if bars_held_arr.size > 0 else 0.0
+    time_in_mkt = (np.sum(bars_held_arr) / len(df) * 100.0) if len(df) > 0 else 0.0
 
     # 修正：序列化前過濾掉 _ts，避免 json.dumps 失敗，並增強 NumPy Scalar 判斷
     safe_params = {k: v for k, v in family_params.items() if not k.startswith("_")}
