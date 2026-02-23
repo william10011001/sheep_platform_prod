@@ -4722,28 +4722,40 @@ def _sidebar_layout_v2(user: Dict[str, Any], role: str) -> str:
     # Build links to drive navigation via URL query (stable, rerun-safe).
     items = []
     for p in pages:
-        qp = html.escape(p)
         cls = "sheep_nav_item active" if p == current_page else "sheep_nav_item"
-        items.append(f'<a class="{cls}" href="?page={qp}">{html.escape(p)}</a>')
+        items.append(
+            f'<button type="button" class="{cls}" data-page="{html.escape(p)}">{html.escape(p)}</button>'
+        )
 
     nav_html = "\n".join(items)
 
+    # Full-screen overlay iframe for the custom drawer.
+    # The iframe styles itself to fixed full-screen via window.frameElement.
     drawer = f"""
     <style>
+      html, body {{
+        margin: 0;
+        padding: 0;
+        background: transparent;
+        width: 100%;
+        height: 100%;
+        pointer-events: none; /* default: click-through */
+        overflow: hidden;
+      }}
+
       :root {{
         --sheep-drawer-w: 320px;
         --sheep-z: 2147483000;
       }}
 
-      /* Toggle checkbox */
       #sheepDrawerToggle {{
         position: fixed;
         left: -9999px;
         top: -9999px;
       }}
 
-      /* Floating button */
       .sheepDrawerBtn {{
+        pointer-events: auto; /* clickable */
         position: fixed;
         top: 10px;
         left: 10px;
@@ -4765,19 +4777,18 @@ def _sidebar_layout_v2(user: Dict[str, Any], role: str) -> str:
         border-color: rgba(59,130,246,0.55);
       }}
 
-      /* Backdrop */
       .sheepDrawerBackdrop {{
+        pointer-events: auto;
         position: fixed;
         inset: 0;
         z-index: calc(var(--sheep-z) - 1);
         background: rgba(0,0,0,0.35);
         opacity: 0;
-        pointer-events: none;
         transition: opacity 140ms ease;
       }}
 
-      /* Drawer panel */
       .sheepDrawer {{
+        pointer-events: auto;
         position: fixed;
         top: 0;
         left: 0;
@@ -4799,7 +4810,6 @@ def _sidebar_layout_v2(user: Dict[str, Any], role: str) -> str:
       }}
       #sheepDrawerToggle:checked ~ .sheepDrawerBackdrop {{
         opacity: 1;
-        pointer-events: auto;
       }}
 
       .sheepDrawerHeader {{
@@ -4826,13 +4836,14 @@ def _sidebar_layout_v2(user: Dict[str, Any], role: str) -> str:
         margin-top: 10px;
       }}
       .sheep_nav_item {{
-        text-decoration: none;
+        text-align: left;
         border-radius: 10px;
         padding: 10px 10px;
         border: 1px solid rgba(255,255,255,0.08);
         background: rgba(10,14,20,0.35);
         color: rgba(255,255,255,0.90);
         font-size: 13px;
+        cursor: pointer;
       }}
       .sheep_nav_item:hover {{
         border-color: rgba(59,130,246,0.35);
@@ -4849,19 +4860,39 @@ def _sidebar_layout_v2(user: Dict[str, Any], role: str) -> str:
       }}
 
       .sheepLogout {{
-        text-decoration: none;
+        text-align: left;
         border-radius: 10px;
         padding: 10px 10px;
         border: 1px solid rgba(255,255,255,0.08);
         background: rgba(10,14,20,0.35);
         color: rgba(255,255,255,0.90);
         font-size: 13px;
+        cursor: pointer;
         display: inline-block;
       }}
       .sheepLogout:hover {{
         border-color: rgba(255,255,255,0.18);
       }}
     </style>
+
+    <script>
+      (function() {{
+        try {{
+          var fe = window.frameElement;
+          if (fe) {{
+            fe.style.position = "fixed";
+            fe.style.top = "0";
+            fe.style.left = "0";
+            fe.style.width = "100vw";
+            fe.style.height = "100vh";
+            fe.style.border = "0";
+            fe.style.zIndex = String({2147483000});
+            fe.style.background = "transparent";
+            fe.style.pointerEvents = "none"; /* click-through except our elements */
+          }}
+        }} catch (e) {{}}
+      }})();
+    </script>
 
     <input id="sheepDrawerToggle" type="checkbox" />
     <label class="sheepDrawerBtn" for="sheepDrawerToggle">選單</label>
@@ -4879,11 +4910,54 @@ def _sidebar_layout_v2(user: Dict[str, Any], role: str) -> str:
 
       <div class="sheepDivider"></div>
 
-      <a class="sheepLogout" href="?action=logout">登出</a>
+      <button class="sheepLogout" type="button" data-action="logout">登出</button>
     </aside>
+
+    <script>
+      (function() {{
+        function closeDrawer() {{
+          var t = document.getElementById("sheepDrawerToggle");
+          if (t) t.checked = false;
+        }}
+
+        function go(qs) {{
+          try {{
+            if (window.top) {{
+              window.top.location.search = qs;
+            }} else {{
+              window.location.search = qs;
+            }}
+          }} catch (e) {{
+            window.location.search = qs;
+          }}
+        }}
+
+        document.addEventListener("click", function(ev) {{
+          var t = ev.target;
+          if (!t) return;
+
+          if (t.classList && t.classList.contains("sheep_nav_item")) {{
+            var page = t.getAttribute("data-page") || "";
+            closeDrawer();
+            if (page) go("?page=" + encodeURIComponent(page));
+            ev.preventDefault();
+            ev.stopPropagation();
+            return;
+          }}
+
+          if (t.getAttribute && t.getAttribute("data-action") === "logout") {{
+            closeDrawer();
+            go("?action=logout");
+            ev.preventDefault();
+            ev.stopPropagation();
+            return;
+          }}
+        }});
+      }})();
+    </script>
     """
 
-    st.components.v1.html(drawer, height=0)
+    st.components.v1.html(drawer, height=1)
 
     # Keep your existing HUD (it is independent from Streamlit sidebar).
     _render_user_hud(user)
@@ -4906,7 +4980,7 @@ def main() -> None:
     # URL action handling (used by the custom drawer)
     try:
         if str(st.query_params.get("action", "") or "").strip().lower() == "logout":
-            _logout()
+            _logout()   
             try:
                 del st.query_params["action"]
             except Exception:
