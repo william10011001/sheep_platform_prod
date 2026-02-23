@@ -9,10 +9,14 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
+import logging
 from pydantic import BaseModel
 
 import sheep_platform_db as db
 import backtest_panel2 as bt
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logger = logging.getLogger("api")
 from sheep_platform_rate_limit import RateLimiter
 from sheep_platform_version import semver_gte
 
@@ -521,11 +525,9 @@ def issue_token(req: Request, body: TokenRequest):
     if not user:
         raise HTTPException(status_code=401, detail="bad_credentials")
 
-    # [專家除錯] 修正遺失的方法調用，並套用強化的 Bytes/String 驗證護城河
     from sheep_platform_security import verify_password
     is_valid = False
     try:
-        # 強制將資料庫雜湊值正規化（使用更安全的字串轉換）
         raw_hash = user["password_hash"]
         if isinstance(raw_hash, str):
             import ast
@@ -543,8 +545,7 @@ def issue_token(req: Request, body: TokenRequest):
             hash_bin = raw_hash.encode("utf-8") if isinstance(raw_hash, str) else raw_hash
             is_valid = verify_password(pw_bin, hash_bin)
         except Exception as verify_err:
-            import traceback
-            print(f"[API Security Error] 密碼驗證引擎崩潰 (User: {body.username}): {verify_err}\n{traceback.format_exc()}")
+            logger.error(f"Authentication failed for user {body.username}: {verify_err}", exc_info=True)
             is_valid = False
 
     if not is_valid:
@@ -686,13 +687,9 @@ def claim_task(
     except Exception:
             dh = {"data_hash": "", "data_hash_ts": ""}
 
-    # [專家級行情校驗護城河 V2]
-    # 支援 14 種組合自動發放時的行情檔案動態預熱
     if not str(dh.get("data_hash") or "").strip():
-        print(f"[API] 偵測到新 Pool ({task.get('symbol')} {task.get('timeframe_min')}m)，啟動自動化預熱流程...")
+        logger.info(f"Initialize data sync for pool: {task.get('symbol')} {task.get('timeframe_min')}m")
         try:
-            # 1. 阻斷式同步：在發放前確保主週期就緒
-            # [專家級修復] 加上 skip_1m=True，嚴禁 API 伺服器去同步 1m 資料引發 504 Timeout 卡死
             csv_main, _ = bt.ensure_bitmart_data(
                 symbol=str(task.get("symbol") or ""),
                 main_step_min=int(task.get("timeframe_min") or 0),
@@ -720,9 +717,7 @@ def claim_task(
             else:
                 raise RuntimeError(f"行情檔案遺失：預期路徑 {csv_main} 不存在。")
         except Exception as hash_err:
-            import traceback
-            error_detail = f"Server Hash Sync Failed: {str(hash_err)}\n{traceback.format_exc()}"
-            print(f"\n[DATA INTEGRITY ERROR]\n{error_detail}")
+            logger.error(f"Data synchronization process failed: {hash_err}", exc_info=True)
             prog = dict(progress)
             prog.update({"phase": "error", "last_error": "SERVER_DATA_NOT_READY", "detail": str(hash_err)})
             db.update_task_progress(int(task["id"]), prog)
@@ -894,7 +889,6 @@ def finish_task(
         worst_case = bool(risk_spec.get("worst_case", True))
         reverse_mode = bool(risk_spec.get("reverse_mode", False))
 
-        # [專家級修復] 伺服器端複驗時嚴禁同步 1m 資料，避免佔用資源
         csv_main, _ = bt.ensure_bitmart_data(
             symbol=symbol,
             main_step_min=int(tf_min),

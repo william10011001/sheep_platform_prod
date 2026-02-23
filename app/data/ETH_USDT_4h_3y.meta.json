@@ -1,0 +1,11 @@
+{
+  "exchange": "bitmart",
+  "symbol": "ETH_USDT",
+  "step_min": 240,
+  "years": 1,
+  "start_ts_sec": 1740340800,
+  "end_ts_sec": 1771862400,
+  "last_sync_utc": "2026-02-23T20:21:43.082188+00:00",
+  "rows_written": 2190,
+  "csv": "data\\ETH_USDT_4h_3y.csv"
+}

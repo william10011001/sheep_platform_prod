@@ -7,7 +7,7 @@ import math
 import html
 import base64
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 import plotly.express as px
@@ -36,19 +36,26 @@ def _dataframe_compat(data=None, **kwargs):
     # 取得原始 dataframe 方法
     orig = _get_orig_dataframe()
     
-    # 處理舊版參數與新版 UI 寬度適配
-    if "width" in kwargs and str(kwargs["width"]) == "stretch":
-        kwargs.pop("width")
-        kwargs["use_container_width"] = True
-        
+    # 攔截並轉換即將廢棄的 use_container_width 參數為新版 width 參數
+    if "use_container_width" in kwargs:
+        val = kwargs.pop("use_container_width")
+        if val is True:
+            kwargs["width"] = "stretch"
+        elif val is False:
+            kwargs["width"] = "content"
+            
     # 移除新舊版本衝突的參數
     pop_args = ["hide_index"] # 如果版本太舊不支援此參數，先移除
     
     try:
-        # 第一次嘗試執行
+        # 第一次嘗試執行 (新版 Streamlit)
         return orig(data, **kwargs)
     except (TypeError, Exception):
-        # 如果報錯（通常是參數不支持），移除爭議參數後再試一次
+        # 如果報錯（通常是舊版 Streamlit 不支援 width='stretch'），回退到舊版參數
+        if "width" in kwargs:
+            w_val = kwargs.pop("width")
+            if w_val == "stretch":
+                kwargs["use_container_width"] = True
         for arg in pop_args:
             kwargs.pop(arg, None)
         try:
@@ -706,27 +713,32 @@ def _style() -> None:
             box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.3) !important;
         }
 
-        /* 按鈕美化 */
+        /* 按鈕美化 (極簡黑灰風格) */
+        button[kind="secondary"] {
+            background-color: #000000 !important;
+            border: 1px solid #333333 !important;
+            color: #94a3b8 !important;
+            font-weight: 600 !important;
+            transition: all 0.2s ease !important;
+            box-shadow: none !important;
+        }
+        button[kind="secondary"]:hover {
+            background-color: rgba(128, 128, 128, 0.1) !important;
+            border-color: #555555 !important;
+            color: #e2e8f0 !important;
+        }
+        
         button[kind="primary"] {
-            background-color: var(--success) !important;
-            border: 1px solid rgba(240, 246, 252, 0.1) !important;
+            background-color: rgba(128, 128, 128, 0.2) !important;
+            border: 1px solid #666666 !important;
             color: #ffffff !important;
             font-weight: 600 !important;
             transition: all 0.2s ease !important;
+            box-shadow: none !important;
         }
         button[kind="primary"]:hover {
-            background-color: #2ea043 !important;
-            border-color: #8b949e !important;
-        }
-        
-        button[kind="secondary"] {
-            background-color: var(--card) !important;
-            border: 1px solid var(--card-border) !important;
-            color: var(--text-primary) !important;
-        }
-        button[kind="secondary"]:hover {
-            background-color: #30363d !important;
-            border-color: #8b949e !important;
+            background-color: rgba(128, 128, 128, 0.3) !important;
+            border-color: #888888 !important;
         }
 
         /* 卡片容器 */
@@ -913,26 +925,31 @@ def _style() -> None:
             padding-top: 90px !important;
         }
 
+        .stButton > button[kind="secondary"], .stDownloadButton > button[kind="secondary"] {
+          background: #000000 !important;
+          border: 1px solid #333333 !important;
+          color: #94a3b8 !important;
+          font-weight: 600 !important;
+          letter-spacing: 0.5px !important;
+          box-shadow: none !important;
+        }
+        .stButton > button[kind="secondary"]:hover, .stDownloadButton > button[kind="secondary"]:hover {
+          background: rgba(128, 128, 128, 0.1) !important;
+          border-color: #555555 !important;
+          color: #e2e8f0 !important;
+        }
+
         .stButton > button[kind="primary"], .stDownloadButton > button[kind="primary"] {
-          background: linear-gradient(to right, #2563eb, #3b82f6) !important;
-          border: none !important;
+          background: rgba(128, 128, 128, 0.2) !important;
+          border: 1px solid #666666 !important;
           color: #ffffff !important;
           font-weight: 600 !important;
           letter-spacing: 0.5px !important;
+          box-shadow: none !important;
         }
         .stButton > button[kind="primary"]:hover, .stDownloadButton > button[kind="primary"]:hover {
-          background: linear-gradient(to right, #1d4ed8, #2563eb) !important;
-          box-shadow: 0 4px 12px var(--accent-glow) !important;
-        }
-
-        .stButton > button[kind="secondary"], .stDownloadButton > button[kind="secondary"] {
-          background: rgba(255, 255, 255, 0.05) !important;
-          border: 1px solid var(--border) !important;
-          color: #e2e8f0 !important;
-        }
-        .stButton > button[kind="secondary"]:hover, .stDownloadButton > button[kind="secondary"]:hover {
-          background: rgba(255, 255, 255, 0.1) !important;
-          border-color: rgba(255, 255, 255, 0.2) !important;
+          background: rgba(128, 128, 128, 0.3) !important;
+          border-color: #888888 !important;
         }
 
         .stButton > button, .stDownloadButton > button {
@@ -1246,10 +1263,10 @@ def _style() -> None:
         .lb-period-selector div[role="radiogroup"] {
             display: flex !important;
             flex-direction: row !important;
-            background: rgba(15, 23, 42, 0.6) !important;
-            padding: 6px !important;
+            background: transparent !important;
+            padding: 0px !important;
             border-radius: 12px !important;
-            border: 1px solid rgba(255, 255, 255, 0.1) !important;
+            border: none !important;
             gap: 8px !important;
             width: fit-content !important;
             margin-bottom: 20px !important;
@@ -1258,8 +1275,8 @@ def _style() -> None:
             margin-right: 0px !important;
             padding: 8px 24px !important;
             border-radius: 8px !important;
-            border: 1px solid transparent !important;
-            background: transparent !important;
+            border: 1px solid #333333 !important;
+            background: #000000 !important;
             transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
             color: #94a3b8 !important;
             font-weight: 600 !important;
@@ -1272,15 +1289,16 @@ def _style() -> None:
         }
         /* 選中狀態的高亮 */
         .lb-period-selector div[role="radiogroup"] label:has(input:checked) {
-            background: #3b82f6 !important;
+            background: rgba(128, 128, 128, 0.2) !important;
             color: #ffffff !important;
-            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4) !important;
-            border: 1px solid rgba(255, 255, 255, 0.1) !important;
-            transform: translateY(-1px) !important;
+            box-shadow: none !important;
+            border: 1px solid #666666 !important;
+            transform: none !important;
         }
         /* Hover 效果 */
         .lb-period-selector div[role="radiogroup"] label:hover:not(:has(input:checked)) {
-            background: rgba(255, 255, 255, 0.05) !important;
+            background: rgba(128, 128, 128, 0.1) !important;
+            border-color: #555555 !important;
             color: #e2e8f0 !important;
         }
         /* 隱藏原生 input */
@@ -1290,6 +1308,42 @@ def _style() -> None:
         /* 隱藏 Streamlit 原生 Radio 裝飾 div */
         .lb-period-selector div[role="radiogroup"] label > div:first-child {
             display: none !important;
+        }
+
+        /* 專業全域載入動畫設定 */
+        @keyframes task-pulse {
+            0% { transform: scale(0.95); opacity: 0.5; box-shadow: 0 0 0 0 rgba(var(--color-rgb), 0.7); }
+            50% { transform: scale(1.05); opacity: 1; box-shadow: 0 0 0 4px rgba(var(--color-rgb), 0); }
+            100% { transform: scale(0.95); opacity: 0.5; box-shadow: 0 0 0 0 rgba(var(--color-rgb), 0); }
+        }
+        
+        .stSpinner > div > div {
+            border-color: #3b82f6 transparent #3b82f6 transparent !important;
+            animation: spin 1s linear infinite !important;
+        }
+        
+        /* 新手教學按鈕專屬樣式 (微橘色+毛玻璃漸層) */
+        .tutorial-glass-btn {
+            background: linear-gradient(135deg, rgba(251, 146, 60, 0.15) 0%, rgba(234, 88, 12, 0.05) 100%) !important;
+            backdrop-filter: blur(12px) !important;
+            -webkit-backdrop-filter: blur(12px) !important;
+            border: 1px solid rgba(251, 146, 60, 0.3) !important;
+            color: #fed7aa !important;
+            box-shadow: 0 4px 16px rgba(251, 146, 60, 0.05) !important;
+            transition: all 0.3s ease !important;
+        }
+        .tutorial-glass-btn:hover {
+            background: linear-gradient(135deg, rgba(251, 146, 60, 0.25) 0%, rgba(234, 88, 12, 0.1) 100%) !important;
+            border-color: rgba(251, 146, 60, 0.5) !important;
+            color: #ffffff !important;
+            box-shadow: 0 6px 20px rgba(251, 146, 60, 0.15) !important;
+            transform: translateY(-1px);
+        }
+        .tutorial-glass-btn[kind="primary"] {
+            background: linear-gradient(135deg, rgba(251, 146, 60, 0.35) 0%, rgba(234, 88, 12, 0.15) 100%) !important;
+            border: 1px solid rgba(251, 146, 60, 0.6) !important;
+            color: #ffffff !important;
+            box-shadow: 0 4px 20px rgba(251, 146, 60, 0.25) !important;
         }
         </style>
         """,
@@ -1364,11 +1418,25 @@ def _style() -> None:
                 } catch (err) {}
             }
 
-            const observer = new MutationObserver(() => { injectMenuButton(); });
+            function styleTutorialBtn() {
+                try {
+                    const btns = doc.querySelectorAll('div[data-testid="stSidebar"] button p');
+                    btns.forEach(p => {
+                        if (p.textContent && p.textContent.trim() === '新手教學') {
+                            const btn = p.closest('button');
+                            if (btn && !btn.classList.contains('tutorial-glass-btn')) {
+                                btn.classList.add('tutorial-glass-btn');
+                            }
+                        }
+                    });
+                } catch (err) {}
+            }
+
+            const observer = new MutationObserver(() => { injectMenuButton(); styleTutorialBtn(); });
             if (doc.body) {
                 observer.observe(doc.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
             }
-            setInterval(injectMenuButton, 800);
+            setInterval(() => { injectMenuButton(); styleTutorialBtn(); }, 800);
             
             if (doc.defaultView) {
                 doc.defaultView.addEventListener('resize', injectMenuButton);
@@ -2256,6 +2324,18 @@ def _render_kpi(title: str, value: Any, sub: str = "", help_text: str = "") -> s
     return f'<div class="metric"><div class="k">{k}</div><div class="v">{v}</div><div class="small-muted">{sub_html}</div></div>'
 
 
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_active_cycle() -> Optional[Dict[str, Any]]:
+    return db.get_active_cycle()
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_get_setting(key: str, default_val: Any = None) -> Any:
+    conn = db._conn()
+    try:
+        return db.get_setting(conn, key, default_val)
+    finally:
+        conn.close()
+
 @st.cache_data(ttl=20, show_spinner=False)
 def _cached_global_progress_snapshot(cycle_id: int) -> Dict[str, Any]:
     return db.get_global_progress_snapshot(int(cycle_id))
@@ -2773,11 +2853,12 @@ def _page_tutorial(user: Optional[Dict[str, Any]] = None) -> None:
 
 def _page_dashboard(user: Dict[str, Any]) -> None:
     try:
-        cycle = db.get_active_cycle()
+        cycle = _cached_active_cycle()
         if not cycle or "id" not in cycle:
             st.warning("週期尚未初始化，系統正在嘗試建立新週期。")
             db.ensure_cycle_rollover()
-            cycle = db.get_active_cycle()
+            _cached_active_cycle.clear()
+            cycle = _cached_active_cycle()
             if not cycle:
                 st.error("週期建立失敗，請通知系統管理員檢查資料庫權限。")
                 return
@@ -2786,16 +2867,16 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
 
         st.markdown(_section_title_html("控制台", "查看你的任務、策略與結算概況。此頁也提供全域挖礦進度與策略池狀態。", level=3), unsafe_allow_html=True)
 
-        # Ensure tasks quota
-        conn = db._conn()
-        try:
-            min_tasks = int(db.get_setting(conn, "min_tasks_per_user", 2))
-        finally:
-            conn.close()
+        # Ensure tasks quota (使用快取)
+        min_tasks = int(_cached_get_setting("min_tasks_per_user", 2))
             
         try:
-            # 修正引數對齊問題：明確指定 cycle_id 與 min_tasks 避免資料庫關聯錯誤
-            db.assign_tasks_for_user(int(user["id"]), cycle_id=int(cycle["id"]), min_tasks=min_tasks)
+            # 節流任務分配，避免每次畫面重新整理都狂刷資料庫 (15秒冷卻)
+            _dash_assign_key = f"dash_assign_{user['id']}"
+            _now = time.time()
+            if _now - st.session_state.get(_dash_assign_key, 0) > 15:
+                db.assign_tasks_for_user(int(user["id"]), cycle_id=int(cycle["id"]), min_tasks=min_tasks)
+                st.session_state[_dash_assign_key] = _now
         except AttributeError as ae:
             st.error(f"系統核心函數遺失。")
             with st.expander("詳細錯誤資訊", expanded=True):
@@ -2902,24 +2983,20 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
         return
 
 def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
-    cycle = db.get_active_cycle()
+    cycle = _cached_active_cycle()
     if not cycle:
         st.error("週期未初始化。")
         return
 
-    conn = db._conn()
-    try:
-        min_tasks = int(db.get_setting(conn, "min_tasks_per_user", 2))
-        max_tasks = int(db.get_setting(conn, "max_tasks_per_user", 6))
-        max_concurrent_jobs = int(db.get_setting(conn, "max_concurrent_jobs", 2))
-        min_trades = int(db.get_setting(conn, "min_trades", 40))
-        min_total_return_pct = float(db.get_setting(conn, "min_total_return_pct", 15.0))
-        max_drawdown_pct = float(db.get_setting(conn, "max_drawdown_pct", 25.0))
-        min_sharpe = float(db.get_setting(conn, "min_sharpe", 0.6))
-        exec_mode = str(db.get_setting(conn, "execution_mode", "server") or "server").strip().lower()
-        api_url = str(db.get_setting(conn, "worker_api_url", "http://127.0.0.1:8001") or "http://127.0.0.1:8001").strip()
-    finally:
-        conn.close()
+    min_tasks = int(_cached_get_setting("min_tasks_per_user", 2))
+    max_tasks = int(_cached_get_setting("max_tasks_per_user", 6))
+    max_concurrent_jobs = int(_cached_get_setting("max_concurrent_jobs", 2))
+    min_trades = int(_cached_get_setting("min_trades", 40))
+    min_total_return_pct = float(_cached_get_setting("min_total_return_pct", 15.0))
+    max_drawdown_pct = float(_cached_get_setting("max_drawdown_pct", 25.0))
+    min_sharpe = float(_cached_get_setting("min_sharpe", 0.6))
+    exec_mode = str(_cached_get_setting("execution_mode", "server") or "server").strip().lower()
+    api_url = str(_cached_get_setting("worker_api_url", "http://127.0.0.1:8001") or "http://127.0.0.1:8001").strip()
 
     if exec_mode not in ("server", "worker"):
         exec_mode = "server"
@@ -2932,22 +3009,29 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
     sel_family = st.selectbox("策略", options=fam_opts, index=0, key=f"task_family_{int(cycle['id'])}")
 
     allowed_pool_ids: List[int] = []
+    _task_assign_key = f"task_assign_{user['id']}_{sel_family}"
+    _now = time.time()
+    
     if sel_family != "全部策略":
         allowed_pool_ids = [int(p.get("id") or 0) for p in pools_meta if str(p.get("family") or "").strip() == sel_family and int(p.get("id") or 0) > 0]
-        # 切換策略時釋回未開始的已分配任務，避免卡住新策略分配
-        try:
-            db.release_assigned_tasks_for_user_not_in_pools(int(user["id"]), int(cycle["id"]), allowed_pool_ids)
-        except Exception:
-            pass
-        db.assign_tasks_for_user(
-            int(user["id"]),
-            cycle_id=int(cycle["id"]),
-            min_tasks=int(min_tasks),
-            max_tasks=int(max_tasks),
-            preferred_family=str(sel_family),
-        )
+        # 節流任務分配，避免每次畫面重新整理都狂刷資料庫 (15秒冷卻)
+        if _now - st.session_state.get(_task_assign_key, 0) > 15:
+            try:
+                db.release_assigned_tasks_for_user_not_in_pools(int(user["id"]), int(cycle["id"]), allowed_pool_ids)
+            except Exception:
+                pass
+            db.assign_tasks_for_user(
+                int(user["id"]),
+                cycle_id=int(cycle["id"]),
+                min_tasks=int(min_tasks),
+                max_tasks=int(max_tasks),
+                preferred_family=str(sel_family),
+            )
+            st.session_state[_task_assign_key] = _now
     else:
-        db.assign_tasks_for_user(int(user["id"]), cycle_id=int(cycle["id"]), min_tasks=int(min_tasks), max_tasks=int(max_tasks))
+        if _now - st.session_state.get(_task_assign_key, 0) > 15:
+            db.assign_tasks_for_user(int(user["id"]), cycle_id=int(cycle["id"]), min_tasks=int(min_tasks), max_tasks=int(max_tasks))
+            st.session_state[_task_assign_key] = _now
 
     tasks = db.list_tasks_for_user(int(user["id"]), cycle_id=int(cycle["id"]))
     if sel_family != "全部策略" and allowed_pool_ids:
@@ -3022,7 +3106,7 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
         with col_a:
             if not run_all:
                 # [UI 強化] 使用 primary 顏色突顯開始按鈕
-                if st.button("開始全部任務", key="start_all", type="primary"):
+                if st.button("開始挖礦", key="start_all", type="primary"):
                     st.session_state[run_key] = True
                     run_all = True
                     to_queue: List[int] = []
@@ -3063,7 +3147,7 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                                 db.update_task_status(qid, "queued")
                                 db.update_task_progress(qid, {
                                     "phase": "queued",
-                                    "phase_msg": "已進入排程列隊，正在等待運算資源分派...",
+                                    "phase_msg": "調度器：已寫入佇列等待運算資源分配...",
                                     "combos_done": 0,
                                     "combos_total": 0,
                                     "updated_at": _iso(_utc_now())
@@ -3083,7 +3167,7 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                     time.sleep(0.5)
                     st.rerun()
             else:
-                if st.button("停止全部任務", key="stop_all"):
+                if st.button("中斷全域運算配置", key="stop_all"):
                     st.session_state[run_key] = False
                     run_all = False
                     job_mgr.stop_all_for_user(int(user["id"]))
@@ -3102,17 +3186,17 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
 
         with col_a:
             if not bool(run_enabled):
-                if st.button("開始全部任務", key="worker_enable"):
+                if st.button("啟動客戶端節點分配", key="worker_enable", type="primary"):
                     db.set_user_run_enabled(int(user["id"]), True)
                     st.rerun()
             else:
-                if st.button("停止全部任務", key="worker_disable"):
+                if st.button("暫停客戶端節點分配", key="worker_disable"):
                     db.set_user_run_enabled(int(user["id"]), False)
                     st.rerun()
 
         with col_b:
             st.markdown(
-                f'<div class="small-muted">狀態：{"執行中" if run_enabled else "待命"}</div>',
+                f'<div class="small-muted">節點狀態：{"存取授權中" if run_enabled else "連線靜置"}</div>',
                 unsafe_allow_html=True,
             )
             st.markdown('<div class="small-muted">Worker API：' + api_url + '</div>', unsafe_allow_html=True)
@@ -3205,7 +3289,7 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                             db.update_task_status(qid, "queued")
                             db.update_task_progress(qid, {
                                 "phase": "queued",
-                                "phase_msg": "自動銜接：已排入列隊等待執行...",
+                                "phase_msg": "持續性部署：程序已掛載至等待序列...",
                                 "combos_done": 0,
                                 "combos_total": 0,
                                 "updated_at": _iso(_utc_now())
@@ -3231,6 +3315,315 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
         gap = float(cur) - float(thr)
         return f"{gap:.4f}" if gap > 0 else "0"
 
+    st.markdown('''
+        <style>
+        /* 任務檢視選單按鈕美化樣式 */
+        div[data-testid="stRadio"] > label { display: none !important; }
+        div[data-testid="stRadio"] div[role="radiogroup"] {
+            display: flex !important;
+            flex-direction: column !important;
+            gap: 8px !important;
+            background: transparent !important;
+            margin-left: 50px !important;
+            width: calc(100% - 50px) !important;
+        }
+        div[data-testid="stRadio"] div[role="radiogroup"] label {
+            background: #000000 !important;
+            border: 1px solid #333333 !important;
+            border-radius: 10px !important;
+            padding: 16px 20px !important;
+            margin: 0 !important;
+            cursor: pointer !important;
+            transition: all 0.2s ease !important;
+            width: 100% !important;
+        }
+        div[data-testid="stRadio"] div[role="radiogroup"] label:hover {
+            background: rgba(128, 128, 128, 0.1) !important;
+        }
+        div[data-testid="stRadio"] div[role="radiogroup"] label:has(input:checked) {
+            background: rgba(128, 128, 128, 0.2) !important;
+            border-color: #666666 !important;
+        }
+        div[data-testid="stRadio"] div[role="radiogroup"] label div[data-testid="stMarkdownContainer"] p {
+            color: #94a3b8 !important;
+            font-weight: 600 !important;
+            font-size: 16px !important;
+            margin: 0 !important;
+            text-align: center !important;
+        }
+        div[data-testid="stRadio"] div[role="radiogroup"] label:has(input:checked) div[data-testid="stMarkdownContainer"] p {
+            color: #ffffff !important;
+        }
+        div[data-testid="stRadio"] div[role="radiogroup"] label > div:first-child {
+            display: none !important;
+        }
+        </style>
+    ''', unsafe_allow_html=True)
+
+    content_col, space_col, menu_col = st.columns([3.5, 0.3, 1.2])
+    with menu_col:
+        st.markdown('<div style="font-size:18px; font-weight:700; color:#f8fafc; margin-bottom:16px; text-align:center;">任務檢視</div>', unsafe_allow_html=True)
+        view_mode = st.radio("選擇檢視", ["執行中的任務", "歷史紀錄", "候選與審核"], label_visibility="collapsed", key="task_view_mode_radio")
+
+    live_tasks = db.list_tasks_for_user(int(user["id"]), cycle_id=int(cycle["id"]))
+    if sel_family != "全部策略" and allowed_pool_ids:
+        live_tasks = [t for t in live_tasks if int(t.get("pool_id") or 0) in set(allowed_pool_ids)]
+
+    def _sort_task_priority(task_item: Dict[str, Any]) -> tuple:
+        st_val = str(task_item.get("status") or "")
+        priority = {"running": 0, "queued": 1, "assigned": 2, "error": 3, "expired": 4, "revoked": 5, "completed": 6}
+        return (priority.get(st_val, 9), -int(task_item.get("id") or 0))
+
+    live_tasks = sorted(live_tasks, key=_sort_task_priority)
+    active_tasks = []
+    history_tasks = []
+
+    for t in live_tasks:
+        st_raw = str(t.get("status") or "")
+        _tid = int(t["id"])
+        view_status = st_raw
+        if exec_mode == "server":
+            if job_mgr.is_running(_tid):
+                view_status = "running"
+            elif job_mgr.is_queued(int(user["id"]), _tid) and st_raw == "assigned":
+                view_status = "queued"
+
+        if view_status in ("running", "queued", "assigned"):
+            active_tasks.append((t, view_status))
+        else:
+            history_tasks.append((t, view_status))
+
+    any_active_local = len(active_tasks) > 0
+    completed_tasks = [t for t in history_tasks if t[1] == "completed"]
+
+    def _render_single_task(task_obj: Dict[str, Any], v_status: str, is_active: bool):
+        t_id = int(task_obj["id"])
+        try:
+            prog = json.loads(task_obj.get("progress_json") or "{}")
+        except Exception:
+            prog = {}
+
+        combos_total = int(prog.get("combos_total") or 0)
+        combos_done = int(prog.get("combos_done") or 0)
+        best_any_score = prog.get("best_any_score")
+        best_any_metrics = prog.get("best_any_metrics") or {}
+        best_any_params = prog.get("best_any_params") or {}
+        best_any_passed = bool(prog.get("best_any_passed") or False)
+
+        phase = str(prog.get("phase") or "")
+        phase_progress = prog.get("phase_progress")
+        phase_msg = str(prog.get("phase_msg") or "")
+        last_error = str(prog.get("last_error") or "").strip()
+
+        ret_pct, dd_pct, sharpe, trades_count = None, None, None, None
+        if best_any_metrics:
+            try:
+                ret_pct = float(best_any_metrics.get("total_return_pct", 0))
+                dd_pct = float(best_any_metrics.get("max_drawdown_pct", 0))
+                sharpe = float(best_any_metrics.get("sharpe", 0))
+                trades_count = int(best_any_metrics.get("trades", 0))
+            except Exception:
+                pass
+
+        st.markdown('<div class="panel" style="margin-bottom: 16px;">', unsafe_allow_html=True)
+        
+        status_map = {
+            "assigned": "配置完畢",
+            "queued": "排程等待",
+            "running": "演算執行",
+            "completed": "程序完成",
+            "expired": "許可逾期",
+            "revoked": "權限撤銷",
+            "error": "程序異常"
+        }
+        phase_map = {
+            "idle": "待命",
+            "sync_data": "同步資料",
+            "build_grid": "準備參數",
+            "grid_search": "計算中",
+            "stopped": "已停止",
+            "error": "發生錯誤",
+        }
+        status_label = status_map.get(v_status, v_status.upper())
+        phase_label = phase_map.get(phase, phase.upper())
+        passed_label = "條件符合" if best_any_passed else "未達閾值"
+
+        def _pill_cls(kind: str) -> str:
+            if kind in ("completed",): return "neutral"
+            if kind in ("running",): return "neutral"
+            if kind in ("queued", "assigned"): return "warn"
+            if kind in ("expired", "revoked", "error"): return "bad"
+            return "neutral"
+
+        st.markdown(f'<div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:12px;">'
+                    f'<div>'
+                    f'<div style="font-size:18px; font-weight:800; color:#f8fafc; margin-bottom:4px;">編號{t_id}</div>'
+                    f'</div>'
+                    f'<div style="display:flex; gap:8px; flex-direction:column; align-items:flex-end;">'
+                    f'<span class="pill pill-{_pill_cls(v_status)}">狀態: {status_label}</span>'
+                    f'<span class="pill pill-{"ok" if best_any_passed else "neutral"}">檢驗: {passed_label}</span>'
+                    f'</div>'
+                    f'</div>', unsafe_allow_html=True)
+
+        hb = task_obj.get("last_heartbeat")
+        if hb:
+            try:
+                age_s = max(0.0, (_utc_now() - _parse_iso(str(hb))).total_seconds())
+                st.markdown(f'<div class="small-muted" style="margin-top:-8px; margin-bottom:12px;">節點延遲: {age_s:.1f}s</div>', unsafe_allow_html=True)
+            except Exception:
+                pass
+
+        phase_color = "#94a3b8"
+        is_anim = False
+        
+        if phase == "queued":
+            phase_color = "#f59e0b"
+            is_anim = True
+        elif phase == "sync_data":
+            phase_color = "#94a3b8"
+            is_anim = True
+        elif phase == "build_grid":
+            phase_color = "#94a3b8"
+            is_anim = True
+        elif phase == "grid_search":
+            phase_color = "#10b981"
+            is_anim = True
+        elif phase == "error" or v_status == "error":
+            phase_color = "#ef4444"
+
+        if is_anim:
+            icon_html = f'<div style="width: 14px; height: 14px; border: 2px solid {phase_color}30; border-top: 2px solid {phase_color}; border-radius: 50%; animation: custom-spin 0.8s linear infinite;"></div>'
+        else:
+            icon_html = f'<div style="width: 8px; height: 8px; border-radius: 50%; background-color: {phase_color};"></div>'
+        
+        st.markdown(
+            f"""
+            <style>
+            @keyframes custom-spin {{
+                0% {{ transform: rotate(0deg); }}
+                100% {{ transform: rotate(360deg); }}
+            }}
+            </style>
+            <div style="background: rgba(15,23,42,0.4); border: 1px solid {phase_color}40; border-left: 3px solid {phase_color}; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    {icon_html}
+                    <span style="color: {phase_color}; font-weight: 700; font-size: 14px; letter-spacing:0.5px;">程序階段：{phase_label}</span>
+                </div>
+                <div style="margin-top: 6px; font-size: 13px; color: #94a3b8;">
+                    {phase_msg if phase_msg else '資源整備中...'}
+                </div>
+            </div>
+            """, unsafe_allow_html=True
+        )
+        
+
+        top_b, top_c, top_d = st.columns([1.5, 1.5, 1.5])
+        with top_b:
+            prog_text = "-"
+            sync = prog.get("sync")
+            if combos_total > 0:
+                prog_text = f"{int(combos_done)} / {int(combos_total)}"
+            elif phase == "sync_data" and isinstance(sync, dict):
+                items = sync.get("items")
+                cur = str(sync.get("current") or "")
+                if isinstance(items, dict) and cur in items:
+                    done_i = int(items[cur].get("done", 0))
+                    total_i = int(items[cur].get("total", 0))
+                    if total_i > 0:
+                        prog_text = f"{cur} {done_i}/{total_i}"
+            st.markdown(f'<div class="small-muted">運算進度</div><div style="font-size:20px; font-weight:700; color:#f8fafc; font-family:monospace;">{prog_text}</div>', unsafe_allow_html=True)
+        with top_c:
+            elapsed_s = prog.get("elapsed_s")
+            es = "-" if elapsed_s is None else f"{float(elapsed_s):.1f}s"
+            st.markdown(f'<div class="small-muted">花費時間</div><div style="font-size:20px; font-weight:700; color:#f8fafc; font-family:monospace;">{es}</div>', unsafe_allow_html=True)
+        with top_d:
+            sc_txt = "-" if best_any_score is None else f"{float(best_any_score):.6f}"
+            st.markdown(f'<div class="small-muted">目前最高分</div><div style="font-size:20px; font-weight:700; color:#10b981; font-family:monospace;">{sc_txt}</div>', unsafe_allow_html=True)
+
+        if phase == "grid_search":
+            speed_cps = prog.get("speed_cps")
+            eta_s = prog.get("eta_s")
+            sp = "-" if speed_cps is None else f"{float(speed_cps):.0f} iter/s"
+            et = "-" if eta_s is None else f"{float(eta_s):.1f}s"
+            st.markdown(f'<div style="background:rgba(255,255,255,0.02); padding:6px 12px; border-radius:6px; margin-top:8px; font-size:12px; color:#94a3b8; display:flex; justify-content:space-between; border: 1px solid rgba(255,255,255,0.05);">'
+                        f'<span>運算速度: <span style="color:#60a5fa; font-family:monospace;">{sp}</span></span>'
+                        f'<span>預估剩餘時間: <span style="color:#fbbf24; font-family:monospace;">{et}</span></span>'
+                        f'</div>', unsafe_allow_html=True)
+
+        if last_error:
+            st.error(f"核心防護觸發：\n\n{last_error}")
+            if prog.get("debug_traceback"):
+                with st.expander("展開記憶體傾印 (Traceback)"):
+                    st.code(prog.get("debug_traceback"), language="python") 
+
+        sync = prog.get("sync")
+        if combos_total > 0:
+            st.progress(min(1.0, float(combos_done) / float(combos_total)))
+        elif phase == "sync_data":
+            items = sync.get("items") if isinstance(sync, dict) else None
+            if isinstance(items, dict) and items:
+                order = []
+                if "1m" in items: order.append("1m")
+                cur = str(sync.get("current") or "") if isinstance(sync, dict) else ""
+                if cur and cur in items and cur not in order: order.append(cur)
+                for k in sorted(items.keys()):
+                    if k not in order: order.append(k)
+                for k in order:
+                    try:
+                        d = int(items[k].get("done") or 0)
+                        tot = int(items[k].get("total") or 0)
+                    except Exception:
+                        d, tot = 0, 0
+                    if tot > 0:
+                        st.markdown(f'<div class="small-muted">資料處理 {k}：{d}/{tot}</div>', unsafe_allow_html=True)
+                        st.progress(min(1.0, float(d) / float(tot)))
+        elif isinstance(phase_progress, (int, float)):
+            st.progress(float(phase_progress))
+
+        grid_a, grid_b = st.columns([1.3, 1.0])
+        with grid_a:
+            rows = [
+                {"項目": "交易次數", "當前數值": "-" if trades_count is None else int(trades_count), "下限要求": int(min_trades), "偏差值": _fmt_gap_min(float(trades_count) if trades_count is not None else None, float(min_trades))},
+                {"項目": "預期報酬", "當前數值": "-" if ret_pct is None else round(float(ret_pct), 4), "下限要求": float(min_total_return_pct), "偏差值": _fmt_gap_min(ret_pct, float(min_total_return_pct))},
+                {"項目": "最大回撤", "當前數值": "-" if dd_pct is None else round(float(dd_pct), 4), "上限要求": float(max_drawdown_pct), "偏差值": _fmt_gap_max(dd_pct, float(max_drawdown_pct))},
+                {"項目": "夏普值", "當前數值": "-" if sharpe is None else round(float(sharpe), 4), "下限要求": float(min_sharpe), "偏差值": _fmt_gap_min(sharpe, float(min_sharpe))}
+            ]
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+        with grid_b:
+            if exec_mode == "server":
+                col_btn1, col_btn2 = st.columns([1, 1])
+                with col_btn1:
+                    if v_status == "assigned":
+                        if st.button("配置資源", key=f"start_now_{t_id}", use_container_width=True):
+                            ok = job_mgr.start(t_id, bt)
+                            if not ok:
+                                job_mgr.enqueue_many(int(user["id"]), [t_id], bt)
+                            st.rerun()
+                    elif v_status == "queued":
+                        st.markdown('<div style="text-align:center; padding:8px; border:1px solid #334155; border-radius:6px; color:#cbd5e1; font-size:14px;">序列佇列中</div>', unsafe_allow_html=True)
+                    elif v_status == "running":
+                        st.markdown('<div style="text-align:center; padding:8px; border:1px solid #10b981; border-radius:6px; color:#34d399; font-size:14px;">模組執行中</div>', unsafe_allow_html=True)
+                with col_btn2:
+                    if v_status == "assigned":
+                        if st.button("加入叢集", key=f"queue_{t_id}", use_container_width=True):
+                            job_mgr.enqueue_many(int(user["id"]), [t_id], bt)
+                            st.rerun()
+                    if v_status == "running":
+                        if st.button("釋放資源", key=f"stop_{t_id}", use_container_width=True):
+                            job_mgr.stop(t_id)
+                            st.rerun()
+                st.markdown(f'<div style="text-align:right; font-size:12px; color:#64748b; margin-top:8px;">節點並行上限: {int(max_concurrent_jobs)}</div>', unsafe_allow_html=True)
+            else:
+                st.caption("客戶端運算節點模式，接受排程分配。")
+
+        if best_any_params:
+            with st.expander("最佳參數", expanded=False):
+                st.json(best_any_params)
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    # 準備定時更新的 Fragment 裝飾器
     fragment_decorator = getattr(st, "fragment", None)
     if fragment_decorator:
         try:
@@ -3243,277 +3636,39 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
         def fragment_decorator(func): return func
 
     @fragment_decorator
-    def _render_tasks_live():
-        live_tasks = db.list_tasks_for_user(int(user["id"]), cycle_id=int(cycle["id"]))
-        if sel_family != "全部策略" and allowed_pool_ids:
-            live_tasks = [t for t in live_tasks if int(t.get("pool_id") or 0) in set(allowed_pool_ids)]
-
-        def _sort_task_priority(task_item: Dict[str, Any]) -> tuple:
-            st_val = str(task_item.get("status") or "")
-            priority = {"running": 0, "queued": 1, "assigned": 2, "error": 3, "expired": 4, "revoked": 5, "completed": 6}
-            return (priority.get(st_val, 9), -int(task_item.get("id") or 0))
-
-        live_tasks = sorted(live_tasks, key=_sort_task_priority)
-
-        any_active_local = False
-
-        for t in live_tasks:
-            try:
-                prog = json.loads(t.get("progress_json") or "{}")
-            except Exception:
-                prog = {}
-
-        tid = int(t["id"])
-        status = str(t.get("status") or "")
-        running = bool(job_mgr.is_running(tid)) if exec_mode == "server" else (status == "running")
-        queued = bool(job_mgr.is_queued(int(user["id"]), tid)) if exec_mode == "server" else False
-
-        view_status = status
-        if exec_mode == "server":
-            if running:
-                view_status = "running"
-            elif queued and status == "assigned":
-                view_status = "queued"
-
-        combos_total = int(prog.get("combos_total") or 0)
-        combos_done = int(prog.get("combos_done") or 0)
-
-        best_any_score = prog.get("best_any_score")
-        best_any_metrics = prog.get("best_any_metrics") or {}
-        best_any_params = prog.get("best_any_params") or {}
-        best_any_passed = bool(prog.get("best_any_passed") or False)
-
-        phase = str(prog.get("phase") or "")
-        phase_progress = prog.get("phase_progress")
-        phase_msg = str(prog.get("phase_msg") or "")
-        last_error = str(prog.get("last_error") or "").strip()
-
-        if view_status in ("running", "queued"):
-            any_active_local = True
-
-        ret_pct = None
-        dd_pct = None
-        sharpe = None
-        trades = None
-        try:
-            if best_any_metrics:
-                ret_pct = float(best_any_metrics.get("total_return_pct"))
-                dd_pct = float(best_any_metrics.get("max_drawdown_pct"))
-                sharpe = float(best_any_metrics.get("sharpe"))
-                trades = int(best_any_metrics.get("trades"))
-        except Exception:
-            ret_pct = None
-            dd_pct = None
-            sharpe = None
-            trades = None
-
-        st.markdown('<div class="panel">', unsafe_allow_html=True)
-        st.markdown(f"#### 任務 {t['id']}")
-        st.markdown(
-            f'<div class="small-muted">{t["pool_name"]} · {t["symbol"]} · {t["timeframe_min"]}m · {t["family"]} · 分割 {int(t["partition_idx"])+1}/{int(t.get("num_partitions") or 1)}</div>',
-            unsafe_allow_html=True,
-        )
-
-        hb = t.get("last_heartbeat")
-        if hb:
-            try:
-                age_s = max(0.0, (_utc_now() - _parse_iso(str(hb))).total_seconds())
-                st.markdown(f'<div class="small-muted">最後回報 {age_s:.0f}s</div>', unsafe_allow_html=True)
-            except Exception:
-                pass
-
-        status_map = {
-            "assigned": "待執行",
-            "queued": "隊列中",
-            "running": "執行中",
-            "completed": "已完成",
-            "expired": "已過期",
-            "revoked": "已撤銷",
-        }
-        phase_map = {
-            "idle": "待命",
-            "sync_data": "資料同步",
-            "build_grid": "建立參數",
-            "grid_search": "參數搜尋",
-            "stopped": "已停止",
-            "error": "錯誤",
-        }
-
-        status_label = status_map.get(str(view_status), str(view_status) or "-")
-        phase_label = phase_map.get(str(phase), str(phase) or "-")
-        passed_label = "是" if bool(best_any_passed) else "否"
-
-        def _pill_class(kind: str) -> str:
-            k = str(kind or "")
-            if k in ("completed",): return "ok"
-            if k in ("running",): return "info"
-            if k in ("queued", "assigned"): return "warn"
-            if k in ("expired", "revoked", "error"): return "bad"
-            return "neutral"
-
-        # 進階進度儀表板介面
-        st.markdown(
-            f'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">'
-            f'<span class="pill pill-{_pill_class(view_status)}" style="font-size:14px; padding:6px 12px;">狀態: {status_label}</span>'
-            f'<span class="pill pill-{"ok" if bool(best_any_passed) else "neutral"}" style="font-size:14px; padding:6px 12px;">達標: {passed_label}</span>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-        
-        phase_color = "#94a3b8"
-        is_animating = False
-        
-        if str(phase) == "queued":
-            phase_color = "#f59e0b"
-            is_animating = True
-        elif str(phase) == "sync_data":
-            phase_color = "#0ea5e9"
-            is_animating = True
-        elif str(phase) == "build_grid":
-            phase_color = "#8b5cf6"
-            is_animating = True
-        elif str(phase) == "grid_search":
-            phase_color = "#10b981"
-            is_animating = True
-        elif str(phase) == "error":
-            phase_color = "#ef4444"
-        
-        anim_css = "animation: pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;" if is_animating else ""
-        
-        st.markdown(
-            f"""
-            <div style="background: rgba(0,0,0,0.2); border: 1px solid {phase_color}40; border-left: 4px solid {phase_color}; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px;">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <div style="display: flex; align-items: center; gap: 10px;">
-                        <span style="font-size: 20px; {anim_css}"></span>
-                        <span style="color: {phase_color}; font-weight: 700; font-size: 16px;">目前作業：{phase_label}</span>
-                    </div>
-                </div>
-                <div style="margin-top: 8px; font-size: 14px; color: #cbd5e1;">
-                    {phase_msg if phase_msg else '準備就緒'}
-                </div>
+    def _render_active_tasks_live():
+        if active_tasks:
+            for t_obj, v_stat in active_tasks:
+                _render_single_task(t_obj, v_stat, True)
+        else:
+            st.markdown("""
+            <div style="text-align:center; padding: 40px 20px; background: rgba(255,255,255,0.02); border-radius: 12px; border: 1px dashed rgba(255,255,255,0.05);">
+                <div style="color: #94a3b8; font-size: 14px; font-weight: 600;">系統目前未偵測到執行中的任務</div>
+                <div style="color: #64748b; font-size: 12px; margin-top: 4px;">請於上方控制面板分配運算資源或啟動全域佇列</div>
             </div>
-            """, unsafe_allow_html=True
-        )
+            """, unsafe_allow_html=True)
+
+    if view_mode == "執行中的任務":
+        with content_col:
+            _render_active_tasks_live()
+        any_active = any_active_local
+    else:
+        with content_col:
+            if view_mode == "歷史紀錄":
+                if history_tasks:
+                    for t_obj, v_stat in history_tasks:
+                        _render_single_task(t_obj, v_stat, False)
+                else:
+                    st.markdown("""
+                    <div style="text-align:center; padding: 40px 20px; background: rgba(255,255,255,0.02); border-radius: 12px; border: 1px dashed rgba(255,255,255,0.05);">
+                        <div style="color: #64748b; font-size: 14px;">暫無終端執行紀錄</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+            elif view_mode == "候選與審核":
+                _render_all_candidates_and_audit(user, completed_tasks)
         
-        top_b, top_c, top_d = st.columns([1.5, 1.5, 1.5])
-        with top_b:
-            prog_text = "-"
-            sync = prog.get("sync")
-            if int(combos_total) > 0:
-                prog_text = f"{int(combos_done)} / {int(combos_total)}"
-            elif str(phase) == "sync_data" and isinstance(sync, dict):
-                items = sync.get("items")
-                cur = str(sync.get("current") or "")
-                if isinstance(items, dict) and cur in items:
-                    done_i = int(items[cur].get("done", 0))
-                    total_i = int(items[cur].get("total", 0))
-                    if total_i > 0:
-                        prog_text = f"{cur} {done_i}/{total_i}"
-            st.markdown(f'<div class="small-muted">運算進度</div><div class="kpi" style="font-size:22px; font-weight:800; color:#f8fafc;">{prog_text}</div>', unsafe_allow_html=True)
-        with top_c:
-            elapsed_s = prog.get("elapsed_s")
-            es = "-" if elapsed_s is None else f"{float(elapsed_s):.1f} s"
-            st.markdown(f'<div class="small-muted">已耗時</div><div class="kpi" style="font-size:22px; font-weight:800; color:#f8fafc;">{es}</div>', unsafe_allow_html=True)
-        with top_d:
-            sc_txt = "-" if best_any_score is None else str(round(float(best_any_score), 6))
-            st.markdown(f'<div class="small-muted">當前最高分</div><div class="kpi" style="font-size:22px; font-weight:800; color:#10b981;">{sc_txt}</div>', unsafe_allow_html=True)
-
-        if str(phase) == "grid_search":
-            speed_cps = prog.get("speed_cps")
-            eta_s = prog.get("eta_s")
-            sp = "-" if speed_cps is None else f"{float(speed_cps):.0f} / s"
-            et = "-" if eta_s is None else f"{float(eta_s):.1f} s"
-            st.markdown(f'<div style="background:rgba(255,255,255,0.03); padding:8px 16px; border-radius:6px; margin-top:12px; font-size:13px; color:#94a3b8; display:flex; justify-content:space-between; border: 1px solid rgba(255,255,255,0.05);">'
-                        f'<span>算力速度: <span style="color:#60a5fa; font-weight:bold;">{sp}</span></span>'
-                        f'<span>預估剩餘: <span style="color:#fbbf24; font-weight:bold;">{et}</span></span>'
-                        f'</div>', unsafe_allow_html=True)
-
-        if last_error:
-            st.error(f"任務發生錯誤:\n\n{last_error}")
-            if prog.get("debug_traceback"):
-                with st.expander("點擊展開詳細錯誤追蹤 (Traceback)"):
-                    st.code(prog.get("debug_traceback"), language="python") 
-
-        # Progress visualization
-        sync = prog.get("sync")
-        if combos_total > 0:
-            st.progress(min(1.0, float(combos_done) / float(combos_total)))
-        elif str(phase) == "sync_data":
-            items = sync.get("items") if isinstance(sync, dict) else None
-            if isinstance(items, dict) and items:
-                order = []
-                if "1m" in items:
-                    order.append("1m")
-                cur = str(sync.get("current") or "") if isinstance(sync, dict) else ""
-                if cur and cur in items and cur not in order:
-                    order.append(cur)
-                for k in sorted(items.keys()):
-                    if k not in order:
-                        order.append(k)
-                for k in order:
-                    try:
-                        d = int(items[k].get("done") or 0)
-                        tot = int(items[k].get("total") or 0)
-                    except Exception:
-                        d, tot = 0, 0
-                    if tot > 0:
-                        st.markdown(f'<div class="small-muted">資料同步 {k}：{d}/{tot}</div>', unsafe_allow_html=True)
-                        st.progress(min(1.0, float(d) / float(tot)))
-            elif isinstance(phase_progress, (int, float)):
-                st.progress(float(phase_progress))
-
-        if phase_msg and (str(phase) != "sync_data" or not (isinstance(sync, dict) and isinstance(sync.get("items"), dict) and sync.get("items"))):
-            st.caption(phase_msg)
-
-        grid_a, grid_b = st.columns([1.2, 1.0])
-        with grid_a:
-            rows = []
-            rows.append({"指標": "交易筆數", "目前": "-" if trades is None else int(trades), "門檻": int(min_trades), "差距": _fmt_gap_min(float(trades) if trades is not None else None, float(min_trades))})
-            rows.append({"指標": "總報酬", "目前": "-" if ret_pct is None else round(float(ret_pct), 4), "門檻": float(min_total_return_pct), "差距": _fmt_gap_min(ret_pct, float(min_total_return_pct))})
-            rows.append({"指標": "最大回撤", "目前": "-" if dd_pct is None else round(float(dd_pct), 4), "門檻": float(max_drawdown_pct), "差距": _fmt_gap_max(dd_pct, float(max_drawdown_pct))})
-            rows.append({"指標": "Sharpe", "目前": "-" if sharpe is None else round(float(sharpe), 4), "門檻": float(min_sharpe), "差距": _fmt_gap_min(sharpe, float(min_sharpe))})
-            st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
-
-        with grid_b:
-            if exec_mode == "server":
-                col_btn1, col_btn2 = st.columns([1, 1])
-                with col_btn1:
-                    if status == "assigned" and (not running) and (not queued):
-                        if st.button("立即開始", key=f"start_now_{tid}"):
-                            ok = job_mgr.start(tid, bt)
-                            if not ok:
-                                job_mgr.enqueue_many(int(user["id"]), [tid], bt)
-                            st.rerun()
-                    elif queued and status == "assigned":
-                        st.write("隊列中")
-                    elif running:
-                        st.write("執行中")
-                with col_btn2:
-                    if status == "assigned" and (not running) and (not queued):
-                        if st.button("加入隊列", key=f"queue_{tid}"):
-                            job_mgr.enqueue_many(int(user["id"]), [tid], bt)
-                            st.rerun()
-                    if running:
-                        if st.button("停止", key=f"stop_{tid}"):
-                            job_mgr.stop(tid)
-                            st.rerun()
-                st.caption(f"並行上限 {int(max_concurrent_jobs)}")
-            else:
-                st.caption("此模式由 worker 執行。")
-
-        if best_any_params:
-            with st.expander("最佳參數", expanded=False):
-                st.json(best_any_params)
-
-        if status == "completed":
-            _render_candidates_and_submit(user, t)
-
-        st.markdown("</div>", unsafe_allow_html=True)
-        
-        return any_active_local
-
-    any_active = _render_tasks_live()
+        # 不在執行中頁面時，關閉外部 JS 的 AutoRefresh，確保不再閃爍
+        any_active = False
 
     if not getattr(st, "fragment", None):
         keep_polling = False
@@ -3599,93 +3754,134 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
             )
 
 
-def _render_candidates_and_submit(user: Dict[str, Any], task_row: Dict[str, Any]) -> None:
-    task_id = int(task_row["id"])
-    cands = db.list_candidates(task_id, limit=50)
-    if not cands:
-        st.warning("無候選結果。")
-        return
+@st.cache_data(ttl=120, show_spinner=False)
+def _cached_list_candidates(task_id: int) -> List[Dict[str, Any]]:
+    return db.list_candidates(task_id, limit=50)
 
-    st.markdown("候選結果")
-    rows = []
-    for c in cands:
-        m = c.get("metrics") or {}
-        rows.append({
-            "candidate_id": c["id"],
-            "score": round(float(c.get("score") or 0.0), 6),
-            "return_pct": round(float(m.get("total_return_pct") or 0.0), 4),
-            "dd_pct": round(float(m.get("max_drawdown_pct") or 0.0), 4),
-            "sharpe": round(float(m.get("sharpe") or 0.0), 4),
-            "trades": int(m.get("trades") or 0),
-            "submitted": int(c.get("is_submitted") or 0),
-        })
-    df = pd.DataFrame(rows)
-    st.dataframe(df, use_container_width=True, hide_index=True)
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_get_pool(pool_id: int) -> Dict[str, Any]:
+    return db.get_pool(pool_id)
 
-    # 防護 DataFrame 為空造成的 NaN 崩潰
-    if df.empty or "candidate_id" not in df.columns:
-        st.warning("目前無有效的候選資料可供提交。")
+def _render_all_candidates_and_audit(user: Dict[str, Any], completed_tasks: List[Tuple[Dict[str, Any], str]]) -> None:
+    st.markdown('<div class="sec_h4">候選結果與自動過擬合審核</div>', unsafe_allow_html=True)
+    
+    all_cands = []
+    for t_obj, _ in completed_tasks:
+        try:
+            task_id = int(t_obj["id"])
+            cands = _cached_list_candidates(task_id)
+            if cands:
+                for c in cands:
+                    all_cands.append((t_obj, c))
+        except Exception as e:
+            st.error(f"讀取任務 {t_obj.get('id')} 候選時發生錯誤: {e}")
+            
+    if not all_cands:
+        st.info("目前無任何候選結果。")
         return
         
-    min_cid = int(df["candidate_id"].min())
-    max_cid = int(df["candidate_id"].max())
+    min_trades = int(_cached_get_setting("min_trades", 40))
+    min_sharpe = float(_cached_get_setting("min_sharpe", 0.6))
+    max_drawdown = float(_cached_get_setting("max_drawdown_pct", 25.0))
+    min_oos_return = 0.0
+    min_fw_return = 0.0
+    min_sharpe_oos = max(0.0, min_sharpe * 0.5)
+    max_dd_oos = max_drawdown
+
+    un_audited = [ (t, c) for t, c in all_cands if f"audit_result_{c['id']}" not in st.session_state ]
     
-    sel = st.number_input("候選編號", min_value=min_cid, max_value=max_cid, value=min_cid, step=1)
-
-    cand = next((c for c in cands if int(c["id"]) == int(sel)), None)
-    if not cand:
-        return
-
-    if int(cand.get("is_submitted") or 0) == 1:
-        st.info("已提交。")
-        return
-
-    params = cand.get("params_json") or {}
-    if not params:
-        st.error("候選資料損壞。")
-        return
-
-    pool = db.get_pool(int(task_row["pool_id"]))
-    if not pool:
-        st.error("Pool 資料不存在。")
-        return
-
-    conn = db._conn()
-    try:
-        min_trades = int(db.get_setting(conn, "min_trades", 40))
-        min_sharpe = float(db.get_setting(conn, "min_sharpe", 0.6))
-        max_drawdown = float(db.get_setting(conn, "max_drawdown_pct", 25.0))
-        min_oos_return = 0.0
-        min_fw_return = 0.0
-        min_sharpe_oos = max(0.0, min_sharpe * 0.5)
-        max_dd_oos = max_drawdown
-    finally:
-        conn.close()
-    col1, col2 = st.columns([1, 1])
-    with col1:
-        if st.button("執行過擬合審核", key=f"audit_{task_id}_{sel}"):
-            with st.spinner("執行中"):
-                audit = _run_audit_for_candidate(pool, params, min_trades=min_trades, min_oos_return=min_oos_return, min_fw_return=min_fw_return, min_sharpe_oos=min_sharpe_oos, max_dd_oos=max_dd_oos)
-            st.session_state[f"audit_result_{cand['id']}"] = audit
-            st.rerun()
-    with col2:
-        if st.button("提交", key=f"submit_{task_id}_{sel}"):
-            with st.spinner("執行中"):
-                audit = _run_audit_for_candidate(pool, params, min_trades=min_trades, min_oos_return=min_oos_return, min_fw_return=min_fw_return, min_sharpe_oos=min_sharpe_oos, max_dd_oos=max_dd_oos)
-            if not audit.get("passed"):
-                st.error("審核未通過。")
-                st.session_state[f"audit_result_{cand['id']}"] = audit
-                st.stop()
-
-            sid = db.create_submission(candidate_id=int(cand["id"]), user_id=int(user["id"]), pool_id=int(pool["id"]), audit=audit)
-            db.write_audit_log(int(user["id"]), "submit", {"candidate_id": int(cand["id"]), "submission_id": int(sid)})
-            st.success("已提交。")
-            st.rerun()
-
-    audit_key = f"audit_result_{cand['id']}"
-    if audit_key in st.session_state:
-        audit = st.session_state[audit_key]
-        _render_audit(audit)
+    if un_audited:
+        progress_text = "自動執行過擬合審核中..."
+        my_bar = st.progress(0, text=progress_text)
+        total = len(un_audited)
+        for idx, (t_obj, c) in enumerate(un_audited):
+            try:
+                pool_id = int(t_obj["pool_id"])
+                pool = _cached_get_pool(pool_id)
+                params = c.get("params_json") or {}
+                if pool and params:
+                    audit = _run_audit_for_candidate(pool, params, min_trades=min_trades, min_oos_return=min_oos_return, min_fw_return=min_fw_return, min_sharpe_oos=min_sharpe_oos, max_dd_oos=max_dd_oos)
+                    st.session_state[f"audit_result_{c['id']}"] = audit
+                else:
+                    st.session_state[f"audit_result_{c['id']}"] = {"passed": False, "error": "參數或策略池無效"}
+            except Exception as e:
+                st.session_state[f"audit_result_{c['id']}"] = {"passed": False, "error": str(e)}
+            my_bar.progress((idx + 1) / total, text=f"審核進度: {idx + 1}/{total}")
+        my_bar.empty()
+        
+    passed_cands = []
+    failed_cands = []
+    
+    for t_obj, c in all_cands:
+        audit = st.session_state.get(f"audit_result_{c['id']}")
+        if audit and audit.get("passed"):
+            passed_cands.append((t_obj, c, audit))
+        else:
+            failed_cands.append((t_obj, c, audit))
+            
+    tab1, tab2 = st.tabs(["通過審核 (可提交)", "未通過審核"])
+    
+    with tab1:
+        if not passed_cands:
+            st.info("無通過審核的候選結果。")
+        else:
+            rows = []
+            for t_obj, c, audit in passed_cands:
+                m = c.get("metrics") or {}
+                rows.append({
+                    "候選編號": c["id"],
+                    "任務ID": t_obj["id"],
+                    "策略池": t_obj.get("pool_name", ""),
+                    "分數": round(float(c.get("score") or 0.0), 6),
+                    "總報酬(%)": round(float(m.get("total_return_pct") or 0.0), 4),
+                    "最大回撤(%)": round(float(m.get("max_drawdown_pct") or 0.0), 4),
+                    "夏普": round(float(m.get("sharpe") or 0.0), 4),
+                    "交易次數": int(m.get("trades") or 0),
+                    "提交狀態": "已提交" if int(c.get("is_submitted") or 0) == 1 else "未提交"
+                })
+            df_passed = pd.DataFrame(rows)
+            st.dataframe(df_passed, use_container_width=True, hide_index=True)
+            
+            unsubmitted = [r for r in rows if r["提交狀態"] == "未提交"]
+            if unsubmitted:
+                st.markdown("#### 提交候選結果")
+                c_id_to_submit = st.selectbox("選擇要提交的候選編號", [r["候選編號"] for r in unsubmitted])
+                if st.button("確認提交", key="btn_submit_passed"):
+                    c_info = next((item for item in passed_cands if item[1]["id"] == c_id_to_submit), None)
+                    if c_info:
+                        t_obj, c, audit = c_info
+                        pool = _cached_get_pool(int(t_obj["pool_id"]))
+                        try:
+                            sid = db.create_submission(candidate_id=int(c["id"]), user_id=int(user["id"]), pool_id=int(pool["id"]), audit=audit)
+                            db.write_audit_log(int(user["id"]), "submit", {"candidate_id": int(c["id"]), "submission_id": int(sid)})
+                            st.success(f"候選編號 {c['id']} 已成功提交！")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"提交失敗: {e}")
+                            
+    with tab2:
+        if not failed_cands:
+            st.info("無未通過審核的候選結果。")
+        else:
+            rows = []
+            for t_obj, c, audit in failed_cands:
+                m = c.get("metrics") or {}
+                if audit:
+                    reason = ", ".join(audit.get("reasons", [])) if audit.get("reasons") else audit.get("error", "條件未達標")
+                else:
+                    reason = "未知錯誤"
+                rows.append({
+                    "候選編號": c["id"],
+                    "任務ID": t_obj["id"],
+                    "策略池": t_obj.get("pool_name", ""),
+                    "分數": round(float(c.get("score") or 0.0), 6),
+                    "總報酬(%)": round(float(m.get("total_return_pct") or 0.0), 4),
+                    "最大回撤(%)": round(float(m.get("max_drawdown_pct") or 0.0), 4),
+                    "交易次數": int(m.get("trades") or 0),
+                    "未通過原因": reason
+                })
+            df_failed = pd.DataFrame(rows)
+            st.dataframe(df_failed, use_container_width=True, hide_index=True)
 
 
 def _run_audit_for_candidate(
@@ -3751,6 +3947,9 @@ def _render_audit(audit: Dict[str, Any]) -> None:
             "trades": m.get("trades"),
         })
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_leaderboard_stats(period_hours: int) -> Dict[str, Any]:
+    return db.get_leaderboard_stats(period_hours=period_hours)
 
 def _page_leaderboard(user: Dict[str, Any]) -> None:
     st.markdown(
@@ -3795,33 +3994,33 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
             margin-bottom: 15px !important;
         }
         div[data-testid="stRadio"] div[role="radiogroup"] label {
-            background: rgba(255, 255, 255, 0.03) !important;
-            border: 1px solid rgba(255, 255, 255, 0.05) !important;
+            background: #000000 !important;
+            border: 1px solid #333333 !important;
             border-radius: 10px !important;
             padding: 10px 24px !important;
             cursor: pointer !important;
             transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
         }
         div[data-testid="stRadio"] div[role="radiogroup"] label:hover {
-            background: rgba(255, 255, 255, 0.08) !important;
-            border-color: rgba(255, 255, 255, 0.15) !important;
+            background: rgba(128, 128, 128, 0.1) !important;
+            border-color: #555555 !important;
             transform: translateY(-2px);
         }
         div[data-testid="stRadio"] div[role="radiogroup"] label:has(input:checked) {
-            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%) !important;
-            border-color: #60a5fa !important;
-            box-shadow: 0 8px 20px rgba(37, 99, 235, 0.3) !important;
+            background: rgba(128, 128, 128, 0.2) !important;
+            border-color: #666666 !important;
+            box-shadow: none !important;
             transform: translateY(-2px);
         }
         div[data-testid="stRadio"] div[role="radiogroup"] label div[data-testid="stMarkdownContainer"] p {
-            color: #cbd5e1 !important;
+            color: #94a3b8 !important;
             font-weight: 600 !important;
             font-size: 15px !important;
             margin: 0 !important;
         }
         div[data-testid="stRadio"] div[role="radiogroup"] label:has(input:checked) div[data-testid="stMarkdownContainer"] p {
             color: #ffffff !important;
-            text-shadow: 0 2px 4px rgba(0,0,0,0.2) !important;
+            text-shadow: none !important;
         }
         div[data-testid="stRadio"] div[role="radiogroup"] label > div:first-child {
             display: none !important; /* 強制消滅原生選取圓圈 */
@@ -3829,13 +4028,13 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
         </style>
     ''', unsafe_allow_html=True)
     
-    period_map = {"1 小時": 1, "24 小時": 24, "30 天 (月賽)": 720}
+    period_map = {"小時榜": 1, "日榜": 24, "月榜": 720}
     period_label = st.radio("統計週期", list(period_map.keys()), index=1, horizontal=True, key="lb_period", label_visibility="collapsed")
     
     period_hours = period_map[period_label]
 
     try:
-        data = db.get_leaderboard_stats(period_hours=period_hours)
+        data = _cached_leaderboard_stats(period_hours=period_hours)
     except Exception as e:
         st.error(f"排行榜資料讀取錯誤：{e}")
         import traceback
@@ -3950,7 +4149,7 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
         )
         st.markdown(full_table, unsafe_allow_html=True)
 
-    t1, t2, t3, t4 = st.tabs(["算力貢獻", "積分收益", "最高分", "肝帝時長"])
+    t1, t2, t3, t4 = st.tabs(["算力貢獻", "積分收益", "最高分", "挖礦總時長"])
 
     with t1:
         st.caption("依據「已運算並回報的策略組合總數」排名。")
@@ -4009,14 +4208,10 @@ def _page_submissions(user: Dict[str, Any]) -> None:
 def _page_rewards(user: Dict[str, Any]) -> None:
     st.markdown("### 結算")
 
-    conn = db._conn()
-    try:
-        payout_currency = str(db.get_setting(conn, "payout_currency", "USDT") or "USDT").strip()
-        withdraw_min = float(db.get_setting(conn, "withdraw_min_usdt", 20.0) or 20.0)
-        withdraw_fee_usdt = float(db.get_setting(conn, "withdraw_fee_usdt", 1.0) or 1.0)
-        withdraw_fee_mode = str(db.get_setting(conn, "withdraw_fee_mode", "platform_absorb") or "platform_absorb").strip()
-    finally:
-        conn.close()
+    payout_currency = str(_cached_get_setting("payout_currency", "USDT") or "USDT").strip()
+    withdraw_min = float(_cached_get_setting("withdraw_min_usdt", 20.0) or 20.0)
+    withdraw_fee_usdt = float(_cached_get_setting("withdraw_fee_usdt", 1.0) or 1.0)
+    withdraw_fee_mode = str(_cached_get_setting("withdraw_fee_mode", "platform_absorb") or "platform_absorb").strip()
 
     fee_mode_label = "平台吸收" if withdraw_fee_mode == "platform_absorb" else "用戶內扣"
 
@@ -4070,7 +4265,7 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
 
     with tabs[0]:
         try:
-            cycle = db.get_active_cycle()
+            cycle = _cached_active_cycle()
             if not cycle:
                 st.warning("週期尚未初始化")
                 st.write("週期", "None", "None", "None")
@@ -4452,7 +4647,7 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
     with tabs[6]:
         st.markdown("Pool")
 
-        cycle = db.get_active_cycle()
+        cycle = _cached_active_cycle()
         if not cycle:
             st.error("週期未初始化。")
             st.stop()
@@ -4869,39 +5064,44 @@ def _run_weekly_check(week_start_ts: str, week_end_ts: str) -> None:
 
 
 
-def _render_user_hud(user: Dict[str, Any]) -> None:
-    """Fixed bottom-left user panel."""
-    try:
-        cycle = db.get_active_cycle()
-    except Exception:
-        cycle = None
-
-    cycle_id = int(cycle.get("id") or 0) if cycle else 0
-
-    combos_done_sum = 0
+@st.cache_data(ttl=15, show_spinner=False)
+def _cached_user_hud_stats(user_id: int, cycle_id: int) -> Tuple[int, float]:
+    combos = 0
+    points = 0.0
     try:
         if cycle_id > 0:
-            tasks = db.list_tasks_for_user(int(user["id"]), cycle_id=cycle_id)
+            tasks = db.list_tasks_for_user(user_id, cycle_id=cycle_id)
         else:
-            tasks = db.list_tasks_for_user(int(user["id"]))
+            tasks = db.list_tasks_for_user(user_id)
         for t in tasks or []:
             try:
                 prog = json.loads(t.get("progress_json") or "{}")
             except Exception:
                 prog = {}
-            combos_done_sum += int(prog.get("combos_done") or 0)
+            combos += int(prog.get("combos_done") or 0)
     except Exception:
-        combos_done_sum = 0
+        pass
 
-    points_sum = 0.0
     try:
-        payouts = db.list_payouts(user_id=int(user["id"]), limit=500)
+        payouts = db.list_payouts(user_id=user_id, limit=500)
         for p in payouts or []:
             if str(p.get("status") or "") == "void":
                 continue
-            points_sum += float(p.get("amount_usdt") or 0.0)
+            points += float(p.get("amount_usdt") or 0.0)
     except Exception:
-        points_sum = 0.0
+        pass
+    return combos, points
+
+def _render_user_hud(user: Dict[str, Any]) -> None:
+    """Fixed bottom-left user panel."""
+    try:
+        cycle = _cached_active_cycle()
+    except Exception:
+        cycle = None
+
+    cycle_id = int(cycle.get("id") or 0) if cycle else 0
+
+    combos_done_sum, points_sum = _cached_user_hud_stats(int(user["id"]), cycle_id)
 
     points_help = (
         "積分的規則：每跑過一個達標組合，且因子池系統在一週實盤結算後的 利潤，其中一半會換算成你的積分。積分可根據排名等等兌換空投獎勵，兌換與發放以結算規則為準。"
@@ -5000,6 +5200,26 @@ def main() -> None:
                 st.rerun()
 
         st.markdown('<div style="height: 10px"></div>', unsafe_allow_html=True)
+
+        st.markdown(
+            """
+            <style>
+            /* 針對側邊欄最後一個按鈕 (登出) 獨立設定紅色樣式 */
+            div[data-testid="stSidebar"] .stButton:last-of-type button {
+                background: rgba(239, 68, 68, 0.15) !important;
+                border: 1px solid rgba(239, 68, 68, 0.4) !important;
+                color: #f87171 !important;
+            }
+            div[data-testid="stSidebar"] .stButton:last-of-type button:hover {
+                background: rgba(239, 68, 68, 0.25) !important;
+                border-color: rgba(239, 68, 68, 0.6) !important;
+                color: #fca5a5 !important;
+                transform: translateY(-1px);
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
 
         if st.button("登出", key="logout_btn", type="secondary", use_container_width=True):
             _logout()

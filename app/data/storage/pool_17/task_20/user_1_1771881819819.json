@@ -1,0 +1,26 @@
+{
+  "task_info": {
+    "id": 20,
+    "user_id": 1,
+    "pool_id": 17,
+    "cycle_id": 1,
+    "partition_idx": 9,
+    "num_partitions": 16,
+    "status": "queued",
+    "progress_json": "{\"phase\": \"queued\", \"phase_msg\": \"收回並重新置入分配池\", \"combos_done\": 0, \"combos_total\": 0, \"updated_at\": \"2026-02-23T21:21:41.298406+00:00\"}",
+    "last_heartbeat": "2026-02-23T21:21:41.363243+00:00",
+    "created_at": "2026-02-23T21:21:32.425080+00:00",
+    "updated_at": "2026-02-23T21:21:41.363235+00:00",
+    "family": "SMA_Cross",
+    "symbol": "BTC_USDT",
+    "timeframe_min": 15,
+    "years": 1,
+    "grid_spec_json": "{\"fast_min\": 5, \"fast_max\": 30, \"fast_step\": 5, \"slow_min\": 20, \"slow_max\": 120, \"slow_step\": 10}",
+    "risk_spec_json": "{\"tp_min\": 0.3, \"tp_max\": 1.2, \"tp_step\": 0.3, \"sl_min\": 0.4, \"sl_max\": 1.6, \"sl_step\": 0.4, \"max_hold_min\": 30, \"max_hold_max\": 720, \"max_hold_step\": 30, \"fee_side\": 0.0002, \"slippage\": 0.0, \"worst_case\": true, \"reverse_mode\": false}",
+    "seed": 105583270,
+    "pool_name": "SMA_Cross | BTC_USDT | 1m [BTC_USDT_15m]"
+  },
+  "timestamp": "2026-02-23T21:23:39.819013+00:00",
+  "best_pass_count": 0,
+  "candidates": []
+}

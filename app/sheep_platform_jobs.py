@@ -8,6 +8,15 @@ from typing import Any, Deque, Dict, List, Optional, Set, Tuple
 
 import sheep_platform_db as db
 
+try:
+    from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
+except ImportError:
+    try:
+        from streamlit.scriptrunner import add_script_run_ctx, get_script_run_ctx
+    except ImportError:
+        add_script_run_ctx = None
+        get_script_run_ctx = None
+
 
 def _json_load(s: str) -> Dict[str, Any]:
     try:
@@ -93,9 +102,18 @@ class JobManager:
         self._queued_set_by_user: Dict[int, Set[int]] = {}
         self._rr_users: Deque[int] = deque()
 
+        self._fallback_ctx = None
         self._scheduler = threading.Thread(target=self._scheduler_loop, daemon=True)
+        if add_script_run_ctx:
+            add_script_run_ctx(self._scheduler)
         self._scheduler.start()
         self._last_zombie_clean = time.time()
+
+    def _get_ctx(self) -> Any:
+        ctx = get_script_run_ctx() if get_script_run_ctx else None
+        if ctx:
+            self._fallback_ctx = ctx
+        return ctx or self._fallback_ctx
 
     def is_running(self, task_id: int) -> bool:
         with self._lock:
@@ -116,6 +134,7 @@ class JobManager:
         user_id = int(user_id)
         added = 0
         skipped = 0
+        ctx = self._get_ctx()
         with self._lock:
             q = self._queue_by_user.setdefault(user_id, deque())
             s = self._queued_set_by_user.setdefault(user_id, set())
@@ -131,7 +150,7 @@ class JobManager:
                 if th is not None and th.is_alive():
                     skipped += 1
                     continue
-                q.append((tid, bt_module))
+                q.append((tid, bt_module, ctx))
                 s.add(tid)
                 added += 1
         return {"queued": int(added), "skipped": int(skipped)}
@@ -177,8 +196,12 @@ class JobManager:
             if th is not None and th.is_alive():
                 return False
 
+            ctx = self._get_ctx()
             flag = threading.Event()
-            th = threading.Thread(target=self._run_task, args=(task_id, bt_module, flag), daemon=True)
+            th = threading.Thread(target=self._run_task, args=(task_id, bt_module, flag, ctx), daemon=True)
+            if add_script_run_ctx and ctx:
+                add_script_run_ctx(th, ctx)
+                
             self._threads[task_id] = th
             self._stop_flags[task_id] = flag
             th.start()
@@ -190,7 +213,7 @@ class JobManager:
                 self._threads.pop(k, None)
                 self._stop_flags.pop(k, None)
 
-    def _pick_next_locked(self) -> Optional[Tuple[int, Any, int]]:
+    def _pick_next_locked(self) -> Optional[Tuple[int, Any, Any, int]]:
         while self._rr_users:
             uid = int(self._rr_users.popleft())
             q = self._queue_by_user.get(uid)
@@ -199,7 +222,13 @@ class JobManager:
                 self._queued_set_by_user.pop(uid, None)
                 continue
 
-            task_id, bt_module = q.popleft()
+            item = q.popleft()
+            if len(item) == 3:
+                task_id, bt_module, ctx = item
+            else:
+                task_id, bt_module = item
+                ctx = self._get_ctx()
+                
             s = self._queued_set_by_user.get(uid)
             if s is not None:
                 s.discard(int(task_id))
@@ -210,7 +239,7 @@ class JobManager:
                 self._queue_by_user.pop(uid, None)
                 self._queued_set_by_user.pop(uid, None)
 
-            return int(task_id), bt_module, uid
+            return int(task_id), bt_module, ctx, uid
         return None
 
     def _auto_enqueue_orphans(self) -> None:
@@ -240,7 +269,7 @@ class JobManager:
                                 db.update_task_status(tid, "queued")
                                 db.update_task_progress(tid, {
                                     "phase": "queued",
-                                    "phase_msg": "系統回收：已重新進入排程列隊...",
+                                    "phase_msg": "收回並重新置入分配池",
                                     "combos_done": 0,
                                     "combos_total": 0,
                                     "updated_at": db.utc_now_iso()
@@ -297,7 +326,7 @@ class JobManager:
                             item = self._pick_next_locked()
                             if item is None:
                                 break
-                            task_id, bt_module, _uid = item
+                            task_id, bt_module, ctx, _uid = item
     
                             th = self._threads.get(task_id)
                             if th is not None and th.is_alive():
@@ -308,7 +337,12 @@ class JobManager:
                                 continue
     
                             flag = threading.Event()
-                            th = threading.Thread(target=self._run_task, args=(int(task_id), bt_module, flag), daemon=True)
+                            ctx_to_use = ctx if ctx else self._get_ctx()
+                            th = threading.Thread(target=self._run_task, args=(int(task_id), bt_module, flag, ctx_to_use), daemon=True)
+                            
+                            if add_script_run_ctx and ctx_to_use:
+                                add_script_run_ctx(th, ctx_to_use)
+                                    
                             self._threads[int(task_id)] = th
                             self._stop_flags[int(task_id)] = flag
                             
@@ -324,7 +358,13 @@ class JobManager:
                 print(f"\n[{timestamp}] [CRITICAL SCHEDULER ERROR] 排程器主迴圈遭遇未預期異常，嘗試恢復執行: {e}\n{traceback.format_exc()}\n", file=sys.stderr)
                 time.sleep(1.0)
 
-    def _run_task(self, task_id: int, bt_module, stop_flag: threading.Event) -> None:
+    def _run_task(self, task_id: int, bt_module, stop_flag: threading.Event, ctx=None) -> None:
+        if add_script_run_ctx and ctx:
+            try:
+                add_script_run_ctx(threading.current_thread(), ctx)
+            except Exception:
+                pass
+                
         task_id = int(task_id)
         task = db.get_task(task_id)
         if not task:

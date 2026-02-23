@@ -21,63 +21,61 @@
 
   <style>
     :root {
-      --primary: #4F8CFF;
-      --bg: #090B10;
-      --card-bg: rgba(20, 24, 34, 0.7);
-      --border: rgba(79, 140, 255, 0.2);
+      --primary: #FCD535;
+      --bg: #0B0E11;
+      --card-bg: #181A20;
+      --border: #2B3139;
+      --text-main: #EAECEF;
+      --text-muted: #848E9C;
     }
-    html, body { height: 100%; margin: 0; overflow: hidden; }
+    html, body { height: 100%; margin: 0; background: var(--bg); overflow: hidden; }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      background: var(--bg);
-      background-image: radial-gradient(circle at 15% 50%, rgba(79, 140, 255, 0.08), transparent 40%),
-                        radial-gradient(circle at 85% 30%, rgba(138, 43, 226, 0.05), transparent 40%);
-      color: #E2E8F0;
+      font-family: "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      color: var(--text-main);
       display: flex;
       align-items: center;
       justify-content: center;
     }
     .container {
       width: 100%;
-      max-width: 600px;
-      padding: 32px;
-      border-radius: 16px;
+      max-width: 420px;
+      padding: 40px;
       background: var(--card-bg);
       border: 1px solid var(--border);
-      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.8);
-      backdrop-filter: blur(12px);
+      border-radius: 4px;
       text-align: center;
-      animation: fadeIn 0.8s cubic-bezier(0.22, 1, 0.36, 1);
     }
-    .header { font-size: 24px; font-weight: 700; letter-spacing: 0.5px; color: #FFFFFF; margin-bottom: 12px; }
-    .status-text { font-size: 15px; color: #94A3B8; line-height: 1.6; margin-bottom: 28px; }
-    .loader {
-      width: 40px;
-      height: 40px;
-      border: 3px solid rgba(79, 140, 255, 0.1);
-      border-top-color: var(--primary);
-      border-radius: 50%;
-      animation: spin 1s linear infinite;
-      margin: 0 auto 24px auto;
+    .header { font-size: 20px; font-weight: 600; color: var(--text-main); margin-bottom: 8px; }
+    .status-text { font-size: 14px; color: var(--text-muted); line-height: 1.5; margin-bottom: 32px; }
+    .progress-bar-container {
+      width: 100%;
+      height: 4px;
+      background: var(--border);
+      border-radius: 2px;
+      overflow: hidden;
+      margin-bottom: 32px;
+    }
+    .progress-bar {
+      height: 100%;
+      width: 0%;
+      background: var(--primary);
+      animation: loadProgress 0.8s ease-in-out forwards;
     }
     .action-btn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      padding: 12px 28px;
-      border-radius: 8px;
-      background: rgba(79, 140, 255, 0.1);
-      border: 1px solid var(--primary);
-      color: var(--primary);
-      font-weight: 600;
+      display: inline-block;
+      width: 100%;
+      padding: 12px 0;
+      background: var(--border);
+      color: var(--text-main);
       font-size: 14px;
+      font-weight: 500;
       text-decoration: none;
-      transition: all 0.2s;
+      border-radius: 4px;
+      transition: background 0.2s;
     }
-    .action-btn:hover { background: rgba(79, 140, 255, 0.2); transform: translateY(-1px); }
+    .action-btn:hover { background: #3B424C; }
     
-    @keyframes spin { to { transform: rotate(360deg); } }
-    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes loadProgress { to { width: 100%; } }
   </style>
 
   <script>
@@ -86,13 +84,10 @@
 </head>
 <body>
   <div class="container">
-    <div class="loader"></div>
-    <div class="header">SYSTEM INITIALIZATION</div>
-    <div class="status-text">
-      Establishing secure connection to the quantitative mining platform.<br>
-      Routing to operational dashboard...
-    </div>
-    <a class="action-btn" href="/app/">FORCE REDIRECT</a>
+    <div class="header">伺服器連線</div>
+    <div class="status-text">正在驗證安全憑證並路由至交易終端...</div>
+    <div class="progress-bar-container"><div class="progress-bar"></div></div>
+    <a class="action-btn" href="/app/">強制進入</a>
   </div>
 </body>
 </html>

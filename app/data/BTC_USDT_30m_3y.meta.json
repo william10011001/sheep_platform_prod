@@ -1,0 +1,10 @@
+{
+  "exchange": "bitmart",
+  "symbol": "BTC_USDT",
+  "step_min": 30,
+  "years": 1,
+  "last_sync_utc": "2026-02-23T22:30:07.310446+00:00",
+  "last_closed_open_ts_sec": 1771884000,
+  "rows_appended": 1,
+  "csv": "data\\BTC_USDT_30m_3y.csv"
+}
