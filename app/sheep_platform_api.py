@@ -723,7 +723,9 @@ def claim_task(
             import traceback
             error_detail = f"Server Hash Sync Failed: {str(hash_err)}\n{traceback.format_exc()}"
             print(f"\n[DATA INTEGRITY ERROR]\n{error_detail}")
-            db.update_task_progress(int(task["id"]), {"phase": "error", "last_error": "SERVER_DATA_NOT_READY", "detail": str(hash_err)})
+            prog = dict(progress)
+            prog.update({"phase": "error", "last_error": "SERVER_DATA_NOT_READY", "detail": str(hash_err)})
+            db.update_task_progress(int(task["id"]), prog)
             raise HTTPException(status_code=503, detail="server_data_sync_failed_please_retry")
 
     return TaskOut(

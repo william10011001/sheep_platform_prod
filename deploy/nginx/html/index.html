@@ -20,50 +20,79 @@
   <meta name="twitter:image" content="https://sheep123.com/S__13320194.jpg" />
 
   <style>
-    html, body { height: 100%; margin: 0; }
+    :root {
+      --primary: #4F8CFF;
+      --bg: #090B10;
+      --card-bg: rgba(20, 24, 34, 0.7);
+      --border: rgba(79, 140, 255, 0.2);
+    }
+    html, body { height: 100%; margin: 0; overflow: hidden; }
     body {
-      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans", Arial;
-      background: radial-gradient(1000px 600px at 25% 0%, rgba(120,180,255,0.22), transparent 55%),
-                  radial-gradient(900px 520px at 110% 25%, rgba(255,120,180,0.14), transparent 55%),
-                  #0b0f16;
-      color: rgba(255,255,255,0.92);
-      display: grid;
-      place-items: center;
-      padding: 24px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: var(--bg);
+      background-image: radial-gradient(circle at 15% 50%, rgba(79, 140, 255, 0.08), transparent 40%),
+                        radial-gradient(circle at 85% 30%, rgba(138, 43, 226, 0.05), transparent 40%);
+      color: #E2E8F0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
-    .card {
-      width: min(720px, 100%);
-      border-radius: 18px;
-      border: 1px solid rgba(255,255,255,0.12);
-      background: rgba(255,255,255,0.04);
-      box-shadow: 0 20px 50px rgba(0,0,0,0.45);
-      padding: 18px 18px 16px 18px;
+    .container {
+      width: 100%;
+      max-width: 600px;
+      padding: 32px;
+      border-radius: 16px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.8);
+      backdrop-filter: blur(12px);
+      text-align: center;
+      animation: fadeIn 0.8s cubic-bezier(0.22, 1, 0.36, 1);
     }
-    .title { font-size: 20px; font-weight: 800; margin: 0 0 8px 0; }
-    .desc  { font-size: 14px; line-height: 1.55; opacity: .84; margin: 0 0 14px 0; }
-    .btn {
-      display: inline-block;
-      padding: 10px 14px;
-      border-radius: 12px;
-      border: 1px solid rgba(120,180,255,0.55);
-      background: rgba(120,180,255,0.10);
-      color: rgba(255,255,255,0.92);
+    .header { font-size: 24px; font-weight: 700; letter-spacing: 0.5px; color: #FFFFFF; margin-bottom: 12px; }
+    .status-text { font-size: 15px; color: #94A3B8; line-height: 1.6; margin-bottom: 28px; }
+    .loader {
+      width: 40px;
+      height: 40px;
+      border: 3px solid rgba(79, 140, 255, 0.1);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 24px auto;
+    }
+    .action-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 12px 28px;
+      border-radius: 8px;
+      background: rgba(79, 140, 255, 0.1);
+      border: 1px solid var(--primary);
+      color: var(--primary);
+      font-weight: 600;
+      font-size: 14px;
       text-decoration: none;
-      font-weight: 700;
+      transition: all 0.2s;
     }
-    .muted { font-size: 12px; opacity: .62; margin-top: 10px; }
+    .action-btn:hover { background: rgba(79, 140, 255, 0.2); transform: translateY(-1px); }
+    
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
   </style>
 
   <script>
-    setTimeout(function(){ window.location.href = "/app/"; }, 400);
+    setTimeout(function(){ window.location.href = "/app/"; }, 800);
   </script>
 </head>
 <body>
-  <div class="card">
-    <div class="title">羊肉爐挖礦分潤任務平台</div>
-    <div class="desc">提供算力領取任務，搜尋策略參數。候選結果需通過伺服器複驗後進入策略池，依結算週期產出分潤明細。</div>
-    <a class="btn" href="/app/">進入平台</a>
-    <div class="muted">若未自動跳轉，請點選上方按鈕。</div>
+  <div class="container">
+    <div class="loader"></div>
+    <div class="header">SYSTEM INITIALIZATION</div>
+    <div class="status-text">
+      Establishing secure connection to the quantitative mining platform.<br>
+      Routing to operational dashboard...
+    </div>
+    <a class="action-btn" href="/app/">FORCE REDIRECT</a>
   </div>
 </body>
 </html>

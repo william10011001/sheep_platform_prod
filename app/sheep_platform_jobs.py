@@ -213,6 +213,27 @@ class JobManager:
             return int(task_id), bt_module, uid
         return None
 
+    def _auto_enqueue_orphans(self) -> None:
+        try:
+            import backtest_panel2
+            conn = db._conn()
+            rows = conn.execute("SELECT id, user_id FROM mining_tasks WHERE status IN ('assigned', 'queued') ORDER BY updated_at ASC LIMIT 100").fetchall()
+            conn.close()
+            
+            to_enqueue = {}
+            for r in rows:
+                tid = int(r["id"])
+                uid = int(r["user_id"])
+                if not self.is_queued(uid, tid) and not self.is_running(tid):
+                    if uid not in to_enqueue:
+                        to_enqueue[uid] = []
+                    to_enqueue[uid].append(tid)
+            
+            for uid, tids in to_enqueue.items():
+                self.enqueue_many(uid, tids, backtest_panel2)
+        except Exception:
+            pass
+
     def _scheduler_loop(self) -> None:
         try:
             import psutil
@@ -222,18 +243,22 @@ class JobManager:
 
         while True:
             try:
-                if time.time() - getattr(self, "_last_zombie_clean", 0) > 300:
+                if time.time() - getattr(self, "_last_zombie_clean", 0) > 60:
                     self._last_zombie_clean = time.time()
                     try:
                         cleared = db.clean_zombie_tasks(timeout_minutes=15)
                         if cleared > 0:
                             print(f"[SYSTEM] 偵測到斷線，已重置 {cleared} 個無回應任務。")
+                        self._auto_enqueue_orphans()
                     except Exception:
                         pass
 
                 conn = db._conn()
                 try:
-                    limit = int(db.get_setting(conn, "max_concurrent_jobs", 2))
+                    limit = int(db.get_setting(conn, "max_concurrent_jobs", 0))
+                    if limit <= 0:
+                        import os
+                        limit = max(2, (os.cpu_count() or 2) - 1)
                 finally:
                     conn.close()
 

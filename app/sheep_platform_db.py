@@ -1572,16 +1572,40 @@ def utc_now_iso() -> str:
     return _now_iso()
 
 def clean_zombie_tasks(timeout_minutes: int = 15) -> int:
-    """專家級防護：自動清理異常斷線導致卡在 running 狀態的殭屍任務"""
+    """自動清理異常斷線導致卡在 running 狀態的任務，並重置狀態與介面進度"""
     conn = _conn()
+    count = 0
     try:
-        cur = conn.execute(
-            "UPDATE mining_tasks SET status = 'assigned', updated_at = ? "
-            "WHERE status = 'running' AND last_heartbeat < datetime(?, ?)",
-            (_now_iso(), _now_iso(), f"-{timeout_minutes} minutes")
-        )
-        conn.commit()
-        return cur.rowcount
+        from datetime import datetime, timedelta, timezone
+        import json
+        cutoff_dt = datetime.now(timezone.utc) - timedelta(minutes=timeout_minutes)
+        cutoff_iso = cutoff_dt.isoformat()
+        
+        rows = conn.execute(
+            "SELECT id, progress_json FROM mining_tasks WHERE status = 'running' AND last_heartbeat < ?", 
+            (cutoff_iso,)
+        ).fetchall()
+        
+        for row in rows:
+            tid = row["id"]
+            try:
+                prog = json.loads(row["progress_json"] or "{}")
+            except Exception:
+                prog = {}
+            prog["phase"] = "queued"
+            prog["phase_msg"] = "任務因超時或節點斷線，已由系統自動回收並等待重新分配。"
+            prog["last_error"] = "執行超時系統強制回收"
+            prog["updated_at"] = _now_iso()
+            
+            conn.execute(
+                "UPDATE mining_tasks SET status = 'assigned', updated_at = ?, progress_json = ? WHERE id = ?", 
+                (_now_iso(), json.dumps(prog, ensure_ascii=False), tid)
+            )
+            count += 1
+            
+        if count > 0:
+            conn.commit()
+        return count
     except Exception as e:
         print(f"[DB ERROR] clean_zombie_tasks: {e}")
         return 0
