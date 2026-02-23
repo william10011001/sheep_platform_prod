@@ -1209,7 +1209,7 @@ def _style() -> None:
             width: 28px; height: 28px; font-size: 12px;
         }
 
-        /* 3. 暱稱設定卡片美化 (Expert Style) */
+        /* 3. 暱稱設定卡片樣式設定 */
         .nick-card {
             background: linear-gradient(135deg, rgba(255,215,0,0.08) 0%, rgba(0,0,0,0.2) 100%);
             border: 1px solid rgba(255,215,0,0.4);
@@ -1580,7 +1580,7 @@ def _login_form() -> None:
         st.error("登入已鎖定。")
         return
 
-    # [專家除錯] 強化密碼驗證邏輯，完美處理資料庫儲存為 bytes/str 以及字串化 bytes (如 "b'...'") 的潛在錯誤
+    # 強化密碼驗證邏輯，處理資料庫儲存為 bytes/str 以及字串化 bytes (如 "b'...'") 的潛在錯誤
     is_valid = False
     hash_stored = user.get("password_hash", "")
     
@@ -2605,7 +2605,7 @@ def _render_global_progress(cycle_id: int) -> None:
 
     st.markdown(_section_title_html("全域挖掘進度", "統計全部用戶已跑組合數、任務完成數與全域進度。", level=4), unsafe_allow_html=True)
     
-    # [專家級視覺優化] 使用更清晰的進度條與 KPI 卡片
+    # 進度條與 KPI 卡片視覺設定
     st.progress(float(ratio))
     
     kcols = st.columns(4)
@@ -2794,7 +2794,7 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
             conn.close()
             
         try:
-            # [專家級修復] 修正引數錯位問題：明確指定 cycle_id 與 min_tasks 避免資料庫關聯崩潰
+            # 修正引數對齊問題：明確指定 cycle_id 與 min_tasks 避免資料庫關聯錯誤
             db.assign_tasks_for_user(int(user["id"]), cycle_id=int(cycle["id"]), min_tasks=min_tasks)
         except AttributeError as ae:
             st.error(f"系統核心函數遺失。")
@@ -3231,13 +3231,37 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
         gap = float(cur) - float(thr)
         return f"{gap:.4f}" if gap > 0 else "0"
 
-    any_active = False
-
-    for t in tasks:
+    fragment_decorator = getattr(st, "fragment", None)
+    if fragment_decorator:
         try:
-            prog = json.loads(t.get("progress_json") or "{}")
+            refresh_interval = float(os.environ.get("SHEEP_TASKS_REFRESH_S", "2.0"))
+            refresh_interval = max(1.0, min(10.0, refresh_interval))
         except Exception:
-            prog = {}
+            refresh_interval = 2.0
+        fragment_decorator = fragment_decorator(run_every=timedelta(seconds=refresh_interval))
+    else:
+        def fragment_decorator(func): return func
+
+    @fragment_decorator
+    def _render_tasks_live():
+        live_tasks = db.list_tasks_for_user(int(user["id"]), cycle_id=int(cycle["id"]))
+        if sel_family != "全部策略" and allowed_pool_ids:
+            live_tasks = [t for t in live_tasks if int(t.get("pool_id") or 0) in set(allowed_pool_ids)]
+
+        def _sort_task_priority(task_item: Dict[str, Any]) -> tuple:
+            st_val = str(task_item.get("status") or "")
+            priority = {"running": 0, "queued": 1, "assigned": 2, "error": 3, "expired": 4, "revoked": 5, "completed": 6}
+            return (priority.get(st_val, 9), -int(task_item.get("id") or 0))
+
+        live_tasks = sorted(live_tasks, key=_sort_task_priority)
+
+        any_active_local = False
+
+        for t in live_tasks:
+            try:
+                prog = json.loads(t.get("progress_json") or "{}")
+            except Exception:
+                prog = {}
 
         tid = int(t["id"])
         status = str(t.get("status") or "")
@@ -3265,7 +3289,7 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
         last_error = str(prog.get("last_error") or "").strip()
 
         if view_status in ("running", "queued"):
-            any_active = True
+            any_active_local = True
 
         ret_pct = None
         dd_pct = None
@@ -3327,7 +3351,7 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
             if k in ("expired", "revoked", "error"): return "bad"
             return "neutral"
 
-        # [專家級 UI] 強化的進度儀表板
+        # 進階進度儀表板介面
         st.markdown(
             f'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">'
             f'<span class="pill pill-{_pill_class(view_status)}" style="font-size:14px; padding:6px 12px;">狀態: {status_label}</span>'
@@ -3486,41 +3510,43 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
             _render_candidates_and_submit(user, t)
 
         st.markdown("</div>", unsafe_allow_html=True)
+        
+        return any_active_local
 
-    keep_polling = False
-    if exec_mode == "server":
-        run_key = f"server_run_all_{int(user['id'])}"
-        keep_polling = bool(st.session_state.get(run_key, False))
-    else:
-        keep_polling = bool(run_enabled)
+    any_active = _render_tasks_live()
 
-    # [專家級修復] 解除錯誤的縮排，確保 Server 模式下也能每秒精準觸發 UI 刷新
-    # - any_active=True：有人在跑 / 在隊列 -> 正常刷新
-    # - keep_polling=True：使用者點過「開始全部任務」(server) 或 run_enabled=True(worker)
-    #   即使暫時沒任務，也會持續刷新，才能無縫接新任務。
-    if auto_refresh and (any_active or keep_polling):
-        try:
-            base_s = float(refresh_s)
-        except Exception:
-            base_s = 1.0
+    if not getattr(st, "fragment", None):
+        keep_polling = False
+        if exec_mode == "server":
+            run_key = f"server_run_all_{int(user['id'])}"
+            keep_polling = bool(st.session_state.get(run_key, False))
+        else:
+            keep_polling = bool(run_enabled)
 
-        if not any_active:
-            base_s = max(base_s, 3.0)
+        # 修正縮排確保排程觸發，並於缺乏 fragment 支援時使用 JS 刷新
+        if auto_refresh and (any_active or keep_polling):
+            try:
+                base_s = float(refresh_s)
+            except Exception:
+                base_s = 1.0
 
-        base_s = float(min(30.0, max(0.8, base_s)))
-        interval_ms = int(base_s * 1000)
+            if not any_active:
+                base_s = max(base_s, 3.0)
 
-        try:
-            interval_ms = int(interval_ms + random.randint(0, 250))
-        except Exception:
-            pass
+            base_s = float(min(30.0, max(0.8, base_s)))
+            interval_ms = int(base_s * 1000)
 
-        # [專家級修復] 放置一個隱藏按鈕，透過 JS 觸發 Streamlit 原生 rerun，徹底消滅全頁面刷新的閃爍與效能問題
-        if st.button("AutoRefreshHiddenBtn", key="hidden_refresh_btn", use_container_width=False):
-            pass
+            try:
+                interval_ms = int(interval_ms + random.randint(0, 250))
+            except Exception:
+                pass
 
-        st.components.v1.html(
-            f"""
+            # 放置隱藏按鈕作為刷新觸發點
+            if st.button("AutoRefreshHiddenBtn", key="hidden_refresh_btn", use_container_width=False):
+                pass
+
+            st.components.v1.html(
+                f"""
 <script>
 (function() {{
   try {{
@@ -3568,9 +3594,9 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
   }}
 }})();
 </script>
-            """,
-            height=0,
-        )
+                """,
+                height=0,
+            )
 
 
 def _render_candidates_and_submit(user: Dict[str, Any], task_row: Dict[str, Any]) -> None:
@@ -3596,7 +3622,7 @@ def _render_candidates_and_submit(user: Dict[str, Any], task_row: Dict[str, Any]
     df = pd.DataFrame(rows)
     st.dataframe(df, use_container_width=True, hide_index=True)
 
-    # [專家級修復] 防護 DataFrame 為空造成的 NaN min/max 崩潰
+    # 防護 DataFrame 為空造成的 NaN 崩潰
     if df.empty or "candidate_id" not in df.columns:
         st.warning("目前無有效的候選資料可供提交。")
         return
@@ -3830,16 +3856,16 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
                     can_set_nickname = True
                 break
     
-    # 3. 尊榮暱稱設定區塊 (美化版)
+    # 3. 暱稱設定區塊
     if can_set_nickname:
         st.markdown(
             """
             <div class="nick-card">
                 <div style="font-size:20px; font-weight:800; color:#FFD700; margin-bottom:12px; display:flex; align-items:center;">
-                    <span class="crown-icon"></span>尊榮權限已解鎖
+                    <span class="crown-icon"></span>權限已解鎖
                 </div>
                 <div style="font-size:15px; color:#cbd5e1; line-height:1.6;">
-                    恭喜！您是本月算力貢獻前 5 名的頂尖強者。您現在可以設定專屬暱稱，讓全平台看見您的稱號。
+                    您是本月算力貢獻前 5 名。您現在可以設定專屬暱稱。
                 </div>
             </div>
             """, unsafe_allow_html=True
@@ -3847,7 +3873,7 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
         col_n1, col_n2 = st.columns([3, 1])
         with col_n1:
             # 增加一些 padding 和 placeholder
-            new_nick = st.text_input("設定新暱稱", value=user.get("nickname", ""), max_chars=10, label_visibility="collapsed", placeholder="在此輸入您的尊榮稱號...")
+            new_nick = st.text_input("設定新暱稱", value=user.get("nickname", ""), max_chars=10, label_visibility="collapsed", placeholder="在此輸入您的稱號...")
         with col_n2:
             if st.button("更新稱號", type="primary", use_container_width=True):
                 safe_nick = html.escape(new_nick.strip())
@@ -3855,7 +3881,7 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
                     db.update_user_nickname(int(user["id"]), safe_nick)
                     user["nickname"] = safe_nick # Update session cache
                     db.write_audit_log(int(user["id"]), "update_nickname", {"nickname": safe_nick})
-                    st.toast("稱號已閃亮更新！")
+                    st.toast("稱號已更新。")
                     time.sleep(1)
                     st.rerun()
                 else:
@@ -3901,7 +3927,7 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
             is_me = (r.get("username") == user["username"])
             bg_style = 'style="background: rgba(59, 130, 246, 0.15); border: 1px solid rgba(59, 130, 246, 0.4); box-shadow: 0 4px 12px rgba(0,0,0,0.2);"' if is_me else ""
             
-            # [專家級修復] 同樣去除行內 HTML 縮排，確保 Markdown 不會介入干擾
+            # 去除行內 HTML 縮排，確保 Markdown 不會介入干擾
             row_html = (
                 f'<tr class="lb-row" {bg_style}>\n'
                 f'<td><div class="rank-badge {rank_class}">{rank}</div></td>\n'
@@ -3912,7 +3938,7 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
             html_rows.append(row_html)
 
         # 組合 Table，注意：必須使用 unsafe_allow_html=True
-        # [專家級修復] 徹底移除縮排，避免 Streamlit Markdown 引擎將其誤判為程式碼區塊 (Code Block)
+        # 移除縮排避免 Markdown 誤判
         full_table = (
             '<div class="leaderboard-wrapper">\n'
             '<table class="lb-table" style="width:100%; border-spacing:0 8px; border-collapse:separate;">\n'
@@ -4928,7 +4954,7 @@ def main() -> None:
     # [新增] 排行榜頁面入口
     pages = ["新手教學", "控制台", "排行榜", "任務", "提交", "結算"] + (["管理"] if role == "admin" else [])
 
-    # [專家級修復] 利用 URL 查詢參數持久化當前頁面狀態，徹底解決頁面自動重整(location.reload)導致的閃退回首頁問題
+    # 利用 URL 查詢參數持久化當前頁面狀態
     try:
         q_page = st.query_params.get("page", "")
         if q_page in pages:
