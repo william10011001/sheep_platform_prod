@@ -279,17 +279,9 @@ class JobManager:
             except Exception as e:
                 import traceback
                 import sys
-                from datetime import datetime, timezone
-                ts_utc = datetime.now(timezone.utc).isoformat()
-                err_msg = f"\n[{ts_utc}] [CRITICAL SCHEDULER ERROR] 排程器主迴圈發生例外狀況:\n{str(e)}\n{traceback.format_exc()}\n"
-                print(err_msg, file=sys.stderr, flush=True)
-                try:
-                    conn = db._conn()
-                    db.write_audit_log(None, "scheduler_crash", {"error": str(e), "trace": traceback.format_exc()[:2000]})
-                    conn.close()
-                except Exception:
-                    pass
-                time.sleep(5.0)
+                timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+                print(f"\n[{timestamp}] [SCHEDULER ERROR] 迴圈異常: {e}\n{traceback.format_exc()}\n", file=sys.stderr)
+                time.sleep(1.0)
 
     def _run_task(self, task_id: int, bt_module, stop_flag: threading.Event) -> None:
         task_id = int(task_id)
@@ -339,7 +331,7 @@ class JobManager:
             db.update_task_progress(task_id, progress)
 
             _SYNC_RE = re.compile(r"^\s*(\S+)\s+已寫入\s+(\d+)\s*/\s*(\d+)\s*$")
-            t0 = time.time()
+            t0 = time.time()  # [專家級修復] 提前記錄起始時間，讓資料同步階段也能顯示已耗時
 
             def _progress_cb(frac: float, msg: str) -> None:
                 if stop_flag.is_set():
@@ -347,7 +339,7 @@ class JobManager:
                 progress["phase"] = "sync_data"
                 progress["phase_progress"] = float(frac)
                 progress["phase_msg"] = str(msg)
-                progress["elapsed_s"] = round(float(max(0.0, time.time() - t0)), 3)
+                progress["elapsed_s"] = round(float(max(0.0, time.time() - t0)), 3) # [專家級修復] 即時更新耗時
 
                 m = _SYNC_RE.match(str(msg))
                 if m:
@@ -378,11 +370,13 @@ class JobManager:
                     progress["sync"] = sync
 
                 progress["updated_at"] = db.utc_now_iso()
+                # [專家級容錯防護] K線同步回呼極為頻繁，若遇 SQLite 鎖死 (database is locked) 絕不能讓主執行緒崩潰
                 try:
                     db.update_task_progress(task_id, progress)
                 except Exception as db_err:
                     print(f"[WARN] K線同步進度寫入 DB 失敗 (可忽略): {db_err}")
 
+            # [專家級修正] 強制寫入狀態，確保 K 線下載期間前端不會停留在 "queued" 假死
             progress["phase"] = "sync_data"
             progress["phase_msg"] = f"準備向交易所拉取 {pool['symbol']} ({pool['timeframe_min']}m) 歷史 K 線資料..."
             try:
@@ -413,9 +407,11 @@ class JobManager:
 
             combos = bt_module.grid_combinations_from_ui(family, grid_spec)
             
+            # [防護機制] 檢查展開後的組合是否為空，避免除以零或無盡迴圈
             if not combos:
                 raise ValueError(f"格點參數展開失敗或為空，請檢查策略池 ({pool['name']}) 的參數設定範圍。")
             
+            # [深度防御] 確保所有參與種子計算的數值皆非 None 且型別正確
             safe_cycle_id = int(task.get("cycle_id") if task.get("cycle_id") is not None else 0)
             safe_pool_seed = int(pool.get("seed") if pool.get("seed") is not None else 0)
             safe_partition_idx = int(partition_idx if partition_idx is not None else 0)
@@ -482,6 +478,7 @@ class JobManager:
             sig_cache = None
             if use_fast_path and part:
                 try:
+                    # [專家級即時進度] 建立專屬 Logger，將指標計算進度即時寫入 DB 讓 UI 顯示
                     def _cache_logger(msg: str):
                         progress["phase"] = "build_grid"
                         progress["phase_msg"] = f"指標計算中: {msg}"
@@ -625,30 +622,19 @@ class JobManager:
             import traceback, sys
             err_trace = traceback.format_exc()
             
-            # 在控制台輸出錯誤以便即時監控
-            print(f"\n{'='*60}\n[TASK EXCEPTION] Task ID: {task_id}\n{err_trace}\n{'='*60}", file=sys.stderr)
+            print(f"\n{'='*60}\n[TASK ERROR] Task ID: {task_id}\n{err_trace}\n{'='*60}", file=sys.stderr)
             
             try:
-                # 重新讀取任務以確保 progress_json 是最新的
                 current_t = db.get_task(task_id)
                 if current_t:
                     prog = _json_load(current_t.get("progress_json") or "{}")
                     prog["phase"] = "error"
-                    # 將錯誤訊息與完整堆疊寫入 JSON
-                    prog["last_error"] = f"Runtime Error: {str(e)}"
+                    prog["last_error"] = f"系統執行異常: {str(e)}"
                     prog["debug_traceback"] = err_trace
                     prog["error_ts"] = db.utc_now_iso()
                     
-                    # 寫入資料庫：更新進度與狀態
                     db.update_task_progress(task_id, prog)
                     db.update_task_status(task_id, "error")
-                    
-                    # 寫入審計日誌
-                    db.write_audit_log(
-                        user_id=int(current_t.get("user_id") or 0),
-                        action="task_execution_failed",
-                        payload={"task_id": task_id, "exception": str(e), "trace": err_trace[:4000]}
-                    )
                     
                     db.write_audit_log(
                         user_id=int(current_t.get("user_id") or 0),
@@ -658,10 +644,13 @@ class JobManager:
                 else:
                     db.update_task_status(task_id, "error")
             except Exception as nested_err:
-                print(f"[CRITICAL] Error Handler Failed: {nested_err}\n{traceback.format_exc()}", file=sys.stderr)
+                print(f"[CRITICAL] 錯誤處理器本身發生異常: {nested_err}\n{traceback.format_exc()}", file=sys.stderr)
             finally:
                 with self._lock:
-                    self._threads.pop(task_id, None)
-                    self._stop_flags.pop(task_id, None)
+                    if task_id in self._threads:
+                        self._threads.pop(task_id, None)
+                    if task_id in self._stop_flags:
+                        self._stop_flags.pop(task_id, None)
+
 
 JOB_MANAGER = JobManager()

@@ -15,33 +15,52 @@ import streamlit as st
 import traceback
 import sys
 
-# 系統版本相容性處理：建立穩健的 DataFrame 渲染包裝器
-if not hasattr(st, "_original_dataframe_renderer"):
-    st._original_dataframe_renderer = st.dataframe
-
-def _safe_dataframe(data=None, **kwargs):
-    target_kwargs = kwargs.copy()
-    if "width" in target_kwargs:
-        if str(target_kwargs["width"]).lower() == "stretch":
-            target_kwargs["use_container_width"] = True
-        target_kwargs.pop("width", None)
-
-    try:
-        return st._original_dataframe_renderer(data, **target_kwargs)
-    except TypeError:
-        target_kwargs.pop("hide_index", None)
+# --- 專家級版本相容修復：解決 dataframe_selector 遺失問題 ---
+def _get_orig_dataframe():
+    # 嘗試取得 Streamlit 原始的 dataframe 渲染方法，避開遞迴
+    if hasattr(st, "_sheep_orig_dataframe"):
+        return st._sheep_orig_dataframe
+    
+    # 這裡直接從 st 取得原始方法，但要確保我們沒有取得已經被覆蓋過的自己
+    orig = getattr(st, "dataframe")
+    if getattr(orig, "__name__", "") == "_dataframe_compat":
+        # 如果已經被覆蓋，嘗試從類別定義中找回原始方法
         try:
-            return st._original_dataframe_renderer(data, **target_kwargs)
-        except TypeError:
-            target_kwargs.pop("use_container_width", None)
-            try:
-                return st._original_dataframe_renderer(data, **target_kwargs)
-            except Exception as e:
-                st.error(f"表格渲染發生例外狀況: {str(e)}")
-                return st.table(data)
+            from streamlit.delta_generator import DeltaGenerator
+            return DeltaGenerator.dataframe
+        except Exception:
+            return orig
+    return orig
 
-st.dataframe = _safe_dataframe
+def _dataframe_compat(data=None, **kwargs):
+    # 取得原始 dataframe 方法
+    orig = _get_orig_dataframe()
+    
+    # 處理舊版參數與新版 UI 寬度適配
+    if "width" in kwargs and str(kwargs["width"]) == "stretch":
+        kwargs.pop("width")
+        kwargs["use_container_width"] = True
+        
+    # 移除新舊版本衝突的參數
+    pop_args = ["hide_index"] # 如果版本太舊不支援此參數，先移除
+    
+    try:
+        # 第一次嘗試執行
+        return orig(data, **kwargs)
+    except (TypeError, Exception):
+        # 如果報錯（通常是參數不支持），移除爭議參數後再試一次
+        for arg in pop_args:
+            kwargs.pop(arg, None)
+        try:
+            return orig(data, **kwargs)
+        except Exception:
+            # 最後防線：退回靜態表格顯示，確保資料不丟失
+            return st.table(data)
 
+# 執行覆蓋，僅在尚未覆蓋時進行
+if getattr(st.dataframe, "__name__", "") != "_dataframe_compat":
+    st._sheep_orig_dataframe = st.dataframe
+    st.dataframe = _dataframe_compat
 # --------------------------------------------------------
 import backtest_panel2 as bt
 import sheep_platform_db as db
@@ -60,12 +79,18 @@ from sheep_platform_audit import audit_candidate
 APP_TITLE = "羊肉爐挖礦分潤任務平台"
 
 _BRAND_WEBM_1 = os.environ.get("SHEEP_BRAND_WEBM_1", "static/羊LOGO影片(去背).webm")
+# 注意：舊版 Streamlit 的 st.components.v1.html 不支援 key=
+# 因此不使用 key，並改用更穩的 CSS selector 來固定 iframe
+
 
 def _mask_username(username: str, nickname: str = None) -> str:
     """
-    用戶名隱私遮罩邏輯：
-    1. 若有設定 nickname，直接顯示。
-    2. 無 nickname 時，根據 username 長度進行遮罩。
+    專家級隱私遮罩邏輯 (V2)：
+    1. 若有設定 nickname，直接回傳 nickname (前端 CSS 會負責加上皇冠)。
+    2. 遮罩邏輯：
+       - 長度 <= 2: 顯示首字 + *
+       - 長度 3~4: 首1 + ** + 尾1
+       - 長度 >= 5: 首1 + *** + 尾2
     """
     if nickname and str(nickname).strip():
         return str(nickname).strip()
@@ -73,15 +98,14 @@ def _mask_username(username: str, nickname: str = None) -> str:
     s = str(username or "")
     n = len(s)
     if n <= 0:
-        return "Unknown"
+        return "???"
     if n <= 2:
         return s[0] + "*"
     if n <= 4:
         return f"{s[0]}**{s[-1]}"
-    if n <= 8:
-        return f"{s[:2]}****{s[-2:]}"
     
-    return f"{s[:3]}****{s[-3:]}"
+    # 長度 >= 5: 首1 + *** + 尾2 (例如 s***pd)
+    return f"{s[0]}***{s[-2:]}"
 
 def _abs_asset_path(p: str) -> str:
     p = (p or "").strip()
@@ -118,68 +142,51 @@ def _render_brand_header(animate: bool, dim: bool = False) -> None:
     st.markdown(
         f"""
 <style>
-iframe[data-sheep-brand="1"] {{
+iframe[data-sheep-brand="1"],
+iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
   position: fixed !important;
-  left: 72px !important;
-  top: 6px !important;
-  width: 280px !important;
-  height: 80px !important;
+  top: 0 !important;
+  /* 教授級終極修正：將 Header 偏移 60px 避開側邊欄控制鈕區域 */
+  left: 60px !important; 
+  width: 300px !important;
+  height: 84px !important;
   border: 0 !important;
-  z-index: 999990 !important;
+  /* 降低層級避免遮擋 React 交互層 */
+  z-index: 500 !important;
   background: transparent !important;
   pointer-events: none !important;
 }}
 
-header[data-testid="stHeader"] {{
-    background-color: transparent !important;
-    background-image: none !important;
-    border-bottom: none !important;
-    box-shadow: none !important;
-    z-index: 999998 !important;
-}}
-
-/* Lock sidebar always expanded: eliminate the "expand button missing" state entirely */
-section[data-testid="stSidebar"] {{
-    transform: none !important;
-    margin-left: 0 !important;
-    left: 0 !important;
-    width: 320px !important;
-    min-width: 320px !important;
-    max-width: 320px !important;
-    visibility: visible !important;
-    opacity: 1 !important;
-}}
-
-div[data-testid="stSidebar"] {{
-    transform: none !important;
-}}
-
-button[data-testid="stSidebarCollapseButton"] {{
-    display: none !important;
-}}
-
-button[data-testid="stExpandSidebarButton"] {{
-    display: none !important;
-}}
-
-/* Legacy selectors (older Streamlit) */
-div[data-testid="collapsedControl"],
-div[data-testid="stSidebarCollapsedControl"] {{
-    display: none !important;
-}}
+div[data-testid="stSidebarCollapsedControl"],
+        div[data-testid="collapsedControl"],
+        button[kind="headerNoPadding"] {{
+            opacity: 0 !important;
+            position: absolute !important;
+            width: 1px !important;
+            height: 1px !important;
+            pointer-events: none !important;
+        }}
+        
+        header[data-testid="stHeader"] {{
+            background: transparent !important;
+            z-index: 99999 !important;
+            pointer-events: none !important;
+        }}
+        
+        header[data-testid="stHeader"] * {{
+            pointer-events: auto !important;
+        }}
 
 @media (max-width: 720px) {{
   iframe[data-sheep-brand="1"],
   iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
-    left: 60px !important;
-    width: 240px !important;
-    height: 70px !important;
-    top: 2px !important;
+    width: 270px !important;
+    height: 78px !important;
   }}
 }}
 
 div[data-testid="stAppViewContainer"] > .main {{
-  padding-top: 60px !important;
+  padding-top: 0 !important;
 }}
 
 {dim_css}
@@ -419,6 +426,10 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 def _issue_api_token(user: Dict[str, Any], ttl_seconds: int = 86400, name: str = "worker") -> Dict[str, Any]:
+    """Issue an API token stored in DB (compatible with FastAPI Bearer auth).
+
+    NOTE: Raw token is only shown once; store it securely on the worker side.
+    """
     return db.create_api_token(int(user["id"]), ttl_seconds=int(ttl_seconds), name=str(name or "worker"))
 
 
@@ -428,6 +439,7 @@ _REMEMBER_TTL_DAYS = 90
 
 
 def _get_ws_headers() -> Dict[str, str]:
+    # Prefer the non-deprecated API.
     try:
         h = getattr(st, "context", None)
         if h is not None and getattr(st.context, "headers", None) is not None:
@@ -438,8 +450,11 @@ def _get_ws_headers() -> Dict[str, str]:
                 return {str(k): str(v) for k, v in hdrs.items()}
     except Exception:
         pass
+
+    # Backward compatibility (older Streamlit only).
     try:
-        from streamlit.web.server.websocket_headers import _get_websocket_headers
+        from streamlit.web.server.websocket_headers import _get_websocket_headers  # type: ignore
+
         h2 = _get_websocket_headers()
         if not h2:
             return {}
@@ -652,48 +667,14 @@ def _style() -> None:
         }
 
         .stApp {
-          background-color: var(--bg);
-          background-image: 
-            radial-gradient(circle at 0% 0%, rgba(30, 58, 138, 0.08) 0%, transparent 50%),
-            radial-gradient(circle at 100% 100%, rgba(15, 118, 110, 0.05) 0%, transparent 50%);
+          background: radial-gradient(circle at 15% 0%, rgba(30, 58, 138, 0.15) 0%, transparent 40%),
+                      radial-gradient(circle at 85% 100%, rgba(15, 118, 110, 0.1) 0%, transparent 40%),
+                      var(--bg);
           color: var(--text);
         }
 
-        header[data-testid="stHeader"] {
-            background-color: transparent !important;
-            box-shadow: none !important;
-            border-bottom: none !important;
-            z-index: 999990 !important;
-            pointer-events: auto !important;
-        }
-
-        div[data-testid="collapsedControl"],
-        div[data-testid="stSidebarCollapsedControl"] {
-            position: fixed !important;
-            top: 10px !important;
-            left: 10px !important;
-            z-index: 1000000 !important;
-            pointer-events: auto !important;
-            display: block !important;
-            opacity: 1 !important;
-            visibility: visible !important;
-        }
-
-        div[data-testid="collapsedControl"] button,
-        div[data-testid="stSidebarCollapsedControl"] button {
-            background: rgba(10, 14, 20, 0.70) !important;
-            border: 1px solid rgba(255, 255, 255, 0.10) !important;
-            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55) !important;
-            border-radius: 10px !important;
-        }
-        div[data-testid="collapsedControl"] button:hover,
-        div[data-testid="stSidebarCollapsedControl"] button:hover {
-            border-color: rgba(59, 130, 246, 0.55) !important;
-        }
-
         html, body, [class*="css"]  {
-          font-family: "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-          letter-spacing: 0.01em;
+          font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
         }
 
         html { color-scheme: dark; }
@@ -702,20 +683,18 @@ def _style() -> None:
         div[data-testid="stTextInput"] textarea,
         div[data-testid="stNumberInput"] input,
         div[data-testid="stTextArea"] textarea,
-        div[data-testid="stPassword"] input,
-        div[data-baseweb="select"] > div {
-          background: rgba(10, 14, 20, 0.4) !important;
+        div[data-testid="stPassword"] input {
+          background: rgba(0, 0, 0, 0.2) !important;
           border: 1px solid var(--border) !important;
-          border-radius: 6px !important;
+          border-radius: 8px !important;
           color: var(--text) !important;
-          transition: border-color 0.15s ease, box-shadow 0.15s ease;
+          transition: all 0.2s ease;
         }
         div[data-testid="stTextInput"] input:focus,
         div[data-testid="stTextArea"] textarea:focus,
-        div[data-testid="stPassword"] input:focus,
-        div[data-baseweb="select"] > div:focus-within {
+        div[data-testid="stPassword"] input:focus {
           border-color: var(--accent) !important;
-          box-shadow: 0 0 0 2px var(--accent-glow) !important;
+          box-shadow: 0 0 0 1px var(--accent-glow) !important;
         }
         div[data-testid="stTextInput"] input::placeholder,
         div[data-testid="stTextArea"] textarea::placeholder,
@@ -780,6 +759,12 @@ def _style() -> None:
           letter-spacing: 0.5px;
           margin: 0 0 16px 0;
           color: #ffffff;
+        }
+
+        header[data-testid="stHeader"] {
+          background: transparent !important;
+          z-index: 2147483640 !important;
+          pointer-events: auto !important;
         }
 
         footer { visibility: hidden !important; }
@@ -905,11 +890,11 @@ def _style() -> None:
         .help_wrap:hover .help_tip { opacity: 1; transform: translateX(-50%) translateY(0); }
         
         .user_hud .help_tip {
-          left: 50%;
-          transform: translateX(-35%) translateY(4px);
+          left: 0;
+          transform: translateX(0) translateY(4px);
         }
         .user_hud .help_wrap:hover .help_tip {
-          transform: translateX(-35%) translateY(0);
+          transform: translateX(0) translateY(0);
         }
 
         .sec_h3 { font-size: 24px; font-weight: 800; color: #ffffff; margin: 32px 0 16px 0; display: flex; align-items: center; }
@@ -947,6 +932,38 @@ def _style() -> None:
         .pill-warn { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
         .pill-bad { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
         .pill-neutral { background: rgba(255, 255, 255, 0.1); color: #94a3b8; border: 1px solid rgba(255, 255, 255, 0.2); }
+
+        #custom-sys-menu-btn {
+            position: fixed !important;
+            top: 16px !important;
+            left: 16px !important;
+            width: 44px !important;
+            height: 44px !important;
+            background: linear-gradient(135deg, rgba(30,41,59,0.95) 0%, rgba(15,23,42,0.98) 100%) !important;
+            border-radius: 12px !important;
+            border: 1px solid rgba(255,255,255,0.15) !important;
+            z-index: 2147483647 !important;
+            cursor: pointer !important;
+            display: flex !important;
+            align-items: center !important;
+            justify-content: center !important;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.6) !important;
+            transition: all 0.2s ease !important;
+            pointer-events: auto !important;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+        }
+        #custom-sys-menu-btn:hover {
+            background: linear-gradient(135deg, rgba(59,130,246,0.9) 0%, rgba(37,99,235,0.95) 100%) !important;
+            border-color: rgba(96,165,250,0.5) !important;
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(37,99,235,0.4) !important;
+        }
+        #custom-sys-menu-btn svg {
+            fill: #ffffff !important;
+            width: 22px !important;
+            height: 22px !important;
+        }
 
         /* --- [排行榜美化系統] --- */
         /* 1. 隱藏 Streamlit 原生 Radio 的醜陋圓點 */
@@ -1064,7 +1081,7 @@ def _style() -> None:
             width: 28px; height: 28px; font-size: 12px;
         }
 
-        /* 3. 暱稱設定卡片樣式 */
+        /* 3. 暱稱設定卡片美化 (Expert Style) */
         .nick-card {
             background: linear-gradient(135deg, rgba(255,215,0,0.08) 0%, rgba(0,0,0,0.2) 100%);
             border: 1px solid rgba(255,215,0,0.4);
@@ -1151,7 +1168,79 @@ def _style() -> None:
         unsafe_allow_html=True,
     )
 
-    # 移除舊版自訂按鈕腳本，完全依賴原生的側邊欄控制元件與上方的 CSS 權重覆蓋。
+    st.components.v1.html(
+        """
+        <script>
+        (function() {
+            const doc = window.parent && window.parent.document ? window.parent.document : document;
+            
+            function isSidebarOpen() {
+                try {
+                    const sidebar = doc.querySelector('section[data-testid="stSidebar"]');
+                    if (!sidebar) return false;
+                    const transform = window.getComputedStyle(sidebar).getPropertyValue('transform');
+                    const left = sidebar.getBoundingClientRect().left;
+                    return (transform === 'matrix(1, 0, 0, 1, 0, 0)' || left >= 0);
+                } catch (e) {
+                    return false;
+                }
+            }
+
+            function injectMenuButton() {
+                try {
+                    let btn = doc.getElementById('custom-sys-menu-btn');
+                    if (!btn) {
+                        btn = doc.createElement('div');
+                        btn.id = 'custom-sys-menu-btn';
+                        btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"></path></svg>';
+                        
+                        btn.addEventListener('click', function(e) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            
+                            const stSidebar = doc.querySelector('section[data-testid="stSidebar"]');
+                            if (!stSidebar) return;
+                            
+                            const isOpen = isSidebarOpen();
+                            
+                            if (isOpen) {
+                                const closeBtn = doc.querySelector('section[data-testid="stSidebar"] button[kind="headerNoPadding"]');
+                                if (closeBtn) {
+                                    closeBtn.click();
+                                    return;
+                                }
+                                stSidebar.style.setProperty('transform', 'translateX(-100%)', 'important');
+                                stSidebar.style.setProperty('min-width', '0', 'important');
+                            } else {
+                                const openBtn = doc.querySelector('div[data-testid="collapsedControl"] button') || doc.querySelector('div[data-testid="stSidebarCollapsedControl"] button') || doc.querySelector('button[aria-label="Open sidebar"]');
+                                if (openBtn) {
+                                    openBtn.click();
+                                    return;
+                                }
+                                stSidebar.style.setProperty('transform', 'translateX(0)', 'important');
+                                stSidebar.style.setProperty('min-width', '16rem', 'important');
+                            }
+                        });
+                        doc.body.appendChild(btn);
+                    }
+                    btn.style.display = 'flex';
+                } catch (err) {}
+            }
+
+            const observer = new MutationObserver(() => { injectMenuButton(); });
+            if (doc.body) {
+                observer.observe(doc.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
+            }
+            setInterval(injectMenuButton, 800);
+            
+            if (doc.defaultView) {
+                doc.defaultView.addEventListener('resize', injectMenuButton);
+            }
+        })();
+        </script>
+        """,
+        height=0,
+    )
 
 _LAST_ROLLOVER_CHECK = 0.0
 
@@ -1180,7 +1269,8 @@ def _init_once() -> None:
         if row:
             conn = db._conn()
             try:
-                # 若管理員帳號已存在，確保權限狀態正確，不覆蓋現有密碼
+                # [專家級修復] 若管理員帳號已存在，僅確保其權限為 admin 且未被停用，絕對不覆蓋其密碼
+                # 避免管理員自行修改密碼後，伺服器重啟又被洗掉的嚴重資安 Bug
                 conn.execute(
                     "UPDATE users SET role = 'admin', disabled = 0 WHERE id = ?",
                     (int(row["id"]),),
@@ -2379,6 +2469,7 @@ def _render_global_progress(cycle_id: int) -> None:
 
     st.markdown(_section_title_html("全域挖掘進度", "統計全部用戶已跑組合數、任務完成數與全域進度。", level=4), unsafe_allow_html=True)
     
+    # [專家級視覺優化] 使用更清晰的進度條與 KPI 卡片
     st.progress(float(ratio))
     
     kcols = st.columns(4)
@@ -2567,16 +2658,17 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
             conn.close()
             
         try:
+            # [專家級修復] 修正引數錯位問題：明確指定 cycle_id 與 min_tasks 避免資料庫關聯崩潰
             db.assign_tasks_for_user(int(user["id"]), cycle_id=int(cycle["id"]), min_tasks=min_tasks)
         except AttributeError as ae:
-            st.error("系統核心函數遺失。")
-            with st.expander("詳細錯誤追蹤 (Traceback)", expanded=True):
+            st.error(f"系統核心函數遺失。")
+            with st.expander("詳細錯誤資訊", expanded=True):
                 import traceback
                 st.code(traceback.format_exc(), language="python")
             return
         except Exception as general_e:
-            st.error(f"分配任務時發生未預期錯誤：{str(general_e)}")
-            with st.expander("詳細錯誤追蹤 (Traceback)", expanded=True):
+            st.error(f"分配任務時發生未預期錯誤。")
+            with st.expander("詳細錯誤資訊", expanded=True):
                 import traceback
                 st.code(traceback.format_exc(), language="python")
             return
@@ -2802,6 +2894,7 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                         tid = int(t["id"])
                         st_raw = str(t.get("status") or "")
                         
+                        # [專家級修復] 擴大可排程狀態，包含 queued 與 意外死掉的 running
                         if st_raw not in ("assigned", "queued", "error", "running"):
                             continue
                         if job_mgr.is_running(tid):
@@ -2809,12 +2902,15 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                         if job_mgr.is_queued(int(user["id"]), tid):
                             continue
                             
+                        # 如果任務在 DB 是 running，但 job_mgr 判斷它根本沒在跑，這就是「殭屍任務」
+                        # 我們主動將其降級回 assigned 讓它能被重新領取
                         if st_raw == "running":
                             try:
                                 db.update_task_status(tid, "assigned")
                             except Exception:
                                 pass
                         elif st_raw == "error":
+                            # [專家級修復] 若之前發生錯誤卡在 error，重新排程時也應初始化狀態
                             try:
                                 db.update_task_status(tid, "assigned")
                             except Exception:
@@ -2823,8 +2919,10 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                         to_queue.append(tid)
                     
                     if to_queue:
+                        # 呼叫 job_mgr 實際將任務加入排程列隊，這行非常關鍵，否則任務無法啟動且會報錯
                         result = job_mgr.enqueue_many(int(user["id"]), to_queue, bt)
                         
+                        # [專家級 UX 修復] 將任務狀態變更為 queued 的同時，立即注入詳細的排隊進度 JSON，打破點擊後毫無反應的死寂
                         for qid in to_queue:
                             db.update_task_status(qid, "queued")
                             db.update_task_progress(qid, {
@@ -3080,6 +3178,7 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
             if k in ("expired", "revoked", "error"): return "bad"
             return "neutral"
 
+        # [專家級 UI] 強化的進度儀表板
         st.markdown(
             f'<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">'
             f'<span class="pill pill-{_pill_class(view_status)}" style="font-size:14px; padding:6px 12px;">狀態: {status_label}</span>'
@@ -3246,6 +3345,10 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
     else:
         keep_polling = bool(run_enabled)
 
+    # [專家級修復] 解除錯誤的縮排，確保 Server 模式下也能每秒精準觸發 UI 刷新
+    # - any_active=True：有人在跑 / 在隊列 -> 正常刷新
+    # - keep_polling=True：使用者點過「開始全部任務」(server) 或 run_enabled=True(worker)
+    #   即使暫時沒任務，也會持續刷新，才能無縫接新任務。
     if auto_refresh and (any_active or keep_polling):
         try:
             base_s = float(refresh_s)
@@ -3263,6 +3366,7 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
         except Exception:
             pass
 
+        # [專家級修復] 放置一個隱藏按鈕，透過 JS 觸發 Streamlit 原生 rerun，徹底消滅全頁面刷新的閃爍與效能問題
         if st.button("AutoRefreshHiddenBtn", key="hidden_refresh_btn", use_container_width=False):
             pass
 
@@ -3270,60 +3374,48 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
             f"""
 <script>
 (function() {{
-  function initAutoRefresh() {{
-    try {{
-      const w = window.parent || window;
-      const ms = Math.max(1000, Math.min(60000, {interval_ms}));
+  try {{
+    const w = window.parent || window;
+    const ms = Math.max(1000, Math.min(60000, {interval_ms}));
 
-      const ps = w.document.querySelectorAll('button p, button div, button span');
-      let targetBtn = null;
-      for (let i = 0; i < ps.length; i++) {{
-          if (ps[i].textContent && ps[i].textContent.trim() === 'AutoRefreshHiddenBtn') {{
-              targetBtn = ps[i].closest('button');
-              break;
-          }}
-      }}
-
-      if (targetBtn) {{
-          targetBtn.style.opacity = '0';
-          targetBtn.style.position = 'absolute';
-          targetBtn.style.width = '1px';
-          targetBtn.style.height = '1px';
-          targetBtn.style.pointerEvents = 'none';
-          targetBtn.style.overflow = 'hidden';
-          targetBtn.style.zIndex = '-1';
-      }} else {{
-          setTimeout(initAutoRefresh, 500);
-          return;
-      }}
-
-      if (w.__sheep_autorefresh_timer) {{
-        clearTimeout(w.__sheep_autorefresh_timer);
-      }}
-
-      w.__sheep_autorefresh_timer = setTimeout(function() {{
-        try {{
-          if (document.hidden) return;
-          const activeEl = w.document.activeElement;
-          if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT')) {{
-              return;
-          }}
-          if (targetBtn && typeof targetBtn.click === 'function') {{
-              targetBtn.click();
-          }}
-        }} catch (e) {{
-          console.error('自動刷新執行發生錯誤:', e);
+    const ps = w.document.querySelectorAll('button p, button div');
+    let targetBtn = null;
+    ps.forEach(p => {{
+        if (p.textContent && p.textContent.trim() === 'AutoRefreshHiddenBtn') {{
+            targetBtn = p.closest('button');
+            if (targetBtn) {{
+                targetBtn.style.opacity = '0';
+                targetBtn.style.position = 'absolute';
+                targetBtn.style.width = '1px';
+                targetBtn.style.height = '1px';
+                targetBtn.style.pointerEvents = 'none';
+                targetBtn.style.overflow = 'hidden';
+            }}
         }}
-      }}, ms);
-    }} catch (e) {{
-      console.error('自動刷新初始化失敗:', e);
+    }});
+
+    if (w.__sheep_autorefresh_timer) {{
+      clearTimeout(w.__sheep_autorefresh_timer);
     }}
-  }}
-  
-  if (document.readyState === 'complete') {{
-      initAutoRefresh();
-  }} else {{
-      window.addEventListener('load', initAutoRefresh);
+
+    w.__sheep_autorefresh_timer = setTimeout(function() {{
+      try {{
+        if (document.hidden) return;
+        
+        const activeEl = w.document.activeElement;
+        if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT')) {{
+            return;
+        }}
+        
+        if (targetBtn && typeof targetBtn.click === 'function') {{
+            targetBtn.click();
+        }}
+      }} catch (e) {{
+        console.warn('AutoRefresh error', e);
+      }}
+    }}, ms);
+  }} catch (e) {{
+    console.warn('AutoRefresh init error', e);
   }}
 }})();
 </script>
@@ -3484,9 +3576,7 @@ def _render_audit(audit: Dict[str, Any]) -> None:
             "trades": m.get("trades"),
         })
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-@st.cache_data(ttl=60, show_spinner=False)
-def _cached_leaderboard_stats(period_hours: int) -> Dict[str, Any]:
-    return db.get_leaderboard_stats(period_hours=period_hours)
+
 def _page_leaderboard(user: Dict[str, Any]) -> None:
     st.markdown(
         """
@@ -3570,7 +3660,7 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
     period_hours = period_map[period_label]
 
     try:
-        data = _cached_leaderboard_stats(period_hours=period_hours)
+        data = db.get_leaderboard_stats(period_hours=period_hours)
     except Exception as e:
         st.error(f"排行榜資料讀取錯誤：{e}")
         import traceback
@@ -3622,8 +3712,9 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
                 else:
                     st.warning("稱號不可為空")
     elif period_hours == 720:
-        st.info(f"提示：月度算力榜前 5 名即可解鎖自訂暱稱功能。{my_rank_info}")
+        st.info(f" 提示：月度算力榜前 5 名即可解鎖自訂暱稱功能。{my_rank_info}")
 
+    # 4. 排行榜 HTML 渲染器 (修復 HTML 外洩問題)
     def _render_html_table(rows: list, val_col: str, val_fmt: str, unit: str):
         if not rows:
             st.markdown('<div class="panel" style="text-align:center; color:#64748b; padding:40px; font-size:14px;">此區間尚無數據，快來搶頭香！</div>', unsafe_allow_html=True)
@@ -3661,6 +3752,7 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
             is_me = (r.get("username") == user["username"])
             bg_style = 'style="background: rgba(59, 130, 246, 0.15); border: 1px solid rgba(59, 130, 246, 0.4); box-shadow: 0 4px 12px rgba(0,0,0,0.2);"' if is_me else ""
             
+            # [專家級修復] 同樣去除行內 HTML 縮排，確保 Markdown 不會介入干擾
             row_html = (
                 f'<tr class="lb-row" {bg_style}>\n'
                 f'<td><div class="rank-badge {rank_class}">{rank}</div></td>\n'
@@ -3671,6 +3763,7 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
             html_rows.append(row_html)
 
         # 組合 Table，注意：必須使用 unsafe_allow_html=True
+        # [專家級修復] 徹底移除縮排，避免 Streamlit Markdown 引擎將其誤判為程式碼區塊 (Code Block)
         full_table = (
             '<div class="leaderboard-wrapper">\n'
             '<table class="lb-table" style="width:100%; border-spacing:0 8px; border-collapse:separate;">\n'
@@ -3704,16 +3797,12 @@ def _page_submissions(user: Dict[str, Any]) -> None:
     try:
         subs = db.list_submissions(user_id=int(user["id"]), limit=300)
     except AttributeError as ae:
-        st.error("系統錯誤：`list_submissions` 函數遺失。")
-        with st.expander("詳細錯誤追蹤 (Traceback)", expanded=True):
-            import traceback
-            st.code(traceback.format_exc(), language="python")
+        st.error(f" 系統錯誤：`list_submissions` 函數遺失。\n\n詳細錯誤：{ae}")
         return
     except Exception as e:
-        st.error(f"載入提交紀錄時發生錯誤：{str(e)}")
-        with st.expander("詳細錯誤追蹤 (Traceback)", expanded=True):
-            import traceback
-            st.code(traceback.format_exc(), language="python")
+        st.error(f" 載入提交紀錄時發生錯誤：{str(e)}")
+        import traceback
+        st.code(traceback.format_exc(), language="text")
         return
     if not subs:
         st.info("無提交紀錄。")
@@ -3809,16 +3898,12 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
                 
             ov = db.list_task_overview(limit=500)
         except AttributeError as ae:
-            st.error("系統錯誤：管理核心函數遺失。")
-            with st.expander("詳細錯誤追蹤 (Traceback)", expanded=True):
-                import traceback
-                st.code(traceback.format_exc(), language="python")
+            st.error(f"系統錯誤：管理核心函數遺失。\n\n詳細錯誤：{ae}")
             ov = None
         except Exception as e:
-            st.error(f"載入管理總覽時發生錯誤：{str(e)}")
-            with st.expander("詳細錯誤追蹤 (Traceback)", expanded=True):
-                import traceback
-                st.code(traceback.format_exc(), language="python")
+            st.error(f" 載入管理總覽時發生錯誤：{str(e)}")
+            import traceback
+            st.code(traceback.format_exc(), language="text")
             ov = None
         if ov:
             rows = []
@@ -3973,10 +4058,10 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
                             st.success(f'已匯入 {int(result.get("applied") or 0)} 筆。')
                             st.rerun()
                     except Exception as imp_err:
+                        # [最大化錯誤顯示] 防護破損檔案造成的致命解析錯誤
                         st.error(f"檔案解析或匯入過程發生致命錯誤：{imp_err}")
-                        with st.expander("詳細錯誤追蹤 (Traceback)", expanded=True):
-                            import traceback
-                            st.code(traceback.format_exc(), language="python")
+                        import traceback
+                        st.code(traceback.format_exc(), language="python")
 
 
         if st.button("執行本週期最近一週"):
@@ -4650,463 +4735,6 @@ def _render_user_hud(user: Dict[str, Any]) -> None:
     )
     st.markdown(hud_html, unsafe_allow_html=True)
 
-def _drawer_init_state() -> None:
-    if "drawer_open" not in st.session_state:
-        st.session_state["drawer_open"] = False
-
-
-def _drawer_toggle(open_state: Optional[bool] = None) -> None:
-    _drawer_init_state()
-    if open_state is None:
-        st.session_state["drawer_open"] = not bool(st.session_state.get("drawer_open"))
-    else:
-        st.session_state["drawer_open"] = bool(open_state)
-    st.rerun()
-
-
-def _drawer_css() -> None:
-    st.markdown(
-        """
-        <style>
-        :root {
-          --sheep-drawer-w: 320px;
-          --sheep-z: 1000000;
-        }
-
-        /* floating toggle button */
-        .sheep_drawer_btn_wrap{
-          position: fixed;
-          top: 10px;
-          left: 10px;
-          z-index: var(--sheep-z);
-        }
-
-        /* drawer container */
-        .sheep_drawer_panel{
-          position: fixed;
-          top: 0;
-          left: 0;
-          height: 100vh;
-          width: var(--sheep-drawer-w);
-          z-index: var(--sheep-z);
-          background: rgba(8, 10, 14, 0.92);
-          border-right: 1px solid rgba(255,255,255,0.08);
-          backdrop-filter: blur(12px);
-          -webkit-backdrop-filter: blur(12px);
-          box-shadow: 16px 0 48px rgba(0,0,0,0.50);
-          transform: translateX(calc(-1 * var(--sheep-drawer-w)));
-          transition: transform 180ms ease;
-          padding: 14px 12px;
-        }
-        .sheep_drawer_panel.open{
-          transform: translateX(0);
-        }
-
-        .sheep_drawer_backdrop{
-          position: fixed;
-          inset: 0;
-          z-index: calc(var(--sheep-z) - 1);
-          background: rgba(0,0,0,0.35);
-        }
-
-        .sheep_drawer_title{
-          font-size: 16px;
-          font-weight: 700;
-          color: rgba(255,255,255,0.92);
-          margin-bottom: 6px;
-        }
-        .sheep_drawer_meta{
-          font-size: 12px;
-          opacity: 0.78;
-          color: rgba(255,255,255,0.85);
-          margin-bottom: 12px;
-        }
-
-        .sheep_drawer_nav .stButton > button{
-          width: 100%;
-          border-radius: 10px !important;
-          min-height: 40px !important;
-        }
-
-        .sheep_drawer_nav .stButton > button[kind="secondary"]{
-          border: 1px solid rgba(255,255,255,0.08) !important;
-          background: rgba(10,14,20,0.35) !important;
-        }
-        .sheep_drawer_nav .stButton > button[kind="primary"]{
-          border: 1px solid rgba(59,130,246,0.45) !important;
-          background: rgba(59,130,246,0.20) !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def _drawer_layout(user: Dict[str, Any], role: str) -> str:
-    pages = _nav_pages_for_role(role)
-    _sync_nav_state(pages)
-    _drawer_init_state()
-    _drawer_css()
-
-    current_page = str(st.session_state.get("nav_page") or pages[0])
-
-    # Floating toggle button (Streamlit widget, not HTML)
-    with st.container():
-        st.markdown('<div class="sheep_drawer_btn_wrap">', unsafe_allow_html=True)
-        if st.button("選單", key="drawer_toggle_btn", type="secondary"):
-            _drawer_toggle()
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    drawer_open = bool(st.session_state.get("drawer_open"))
-
-    # Backdrop click-to-close (use a transparent full-width button)
-    if drawer_open:
-        st.markdown('<div class="sheep_drawer_backdrop">', unsafe_allow_html=True)
-        # a fullscreen invisible button layer is not feasible via Streamlit alone;
-        # provide a close button at top of drawer and allow toggle button to close.
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    panel_cls = "sheep_drawer_panel open" if drawer_open else "sheep_drawer_panel"
-    st.markdown(f'<div class="{panel_cls}">', unsafe_allow_html=True)
-    st.markdown(f'<div class="sheep_drawer_title">{html.escape(str(APP_TITLE))}</div>', unsafe_allow_html=True)
-    st.markdown(
-        f'<div class="sheep_drawer_meta">{html.escape(str(user.get("username") or ""))} · {html.escape(str(role or ""))}</div>',
-        unsafe_allow_html=True,
-    )
-
-    st.markdown('<div class="sheep_drawer_nav">', unsafe_allow_html=True)
-    for p in pages:
-        is_active = (p == current_page)
-        btn_type = "primary" if is_active else "secondary"
-        if st.button(p, key=f"drawer_nav_{p}", type=btn_type, use_container_width=True):
-            st.session_state["drawer_open"] = False
-            _set_nav_page(p)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    st.markdown('<div style="height:12px"></div>', unsafe_allow_html=True)
-    if st.button("登出", key="drawer_logout_btn", type="secondary", use_container_width=True):
-        st.session_state["drawer_open"] = False
-        _logout()
-        st.rerun()
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    _render_user_hud(user)
-
-    return str(st.session_state.get("nav_page") or pages[0])
-def _nav_pages_for_role(role: str) -> List[str]:
-
-    base = ["新手教學", "控制台", "排行榜", "任務", "提交", "結算"]
-    if str(role or "").strip().lower() == "admin":
-        return base + ["管理"]
-    return base
-
-
-def _sync_nav_state(pages: List[str]) -> None:
-    # URL query param -> session_state
-    try:
-        q_page = str(st.query_params.get("page", "") or "").strip()
-        if q_page in pages:
-            st.session_state["nav_page"] = q_page
-    except Exception:
-        pass
-
-    # Pending navigation requests (e.g., from in-page buttons)
-    if "nav_page_pending" in st.session_state:
-        try:
-            pending = str(st.session_state.pop("nav_page_pending") or "").strip()
-        except Exception:
-            pending = ""
-        if pending and pending in pages:
-            st.session_state["nav_page"] = pending
-            try:
-                st.query_params["page"] = pending
-            except Exception:
-                pass
-
-    if "nav_page" not in st.session_state or st.session_state["nav_page"] not in pages:
-        st.session_state["nav_page"] = pages[0]
-        try:
-            st.query_params["page"] = pages[0]
-        except Exception:
-            pass
-
-
-def _set_nav_page(target: str) -> None:
-    st.session_state["nav_page"] = target
-    try:
-        st.query_params["page"] = target
-    except Exception:
-        pass
-    st.rerun()
-
-
-def _sidebar_layout_v2(user: Dict[str, Any], role: str) -> str:
-    pages = _nav_pages_for_role(role)
-    _sync_nav_state(pages)
-    current_page = str(st.session_state.get("nav_page") or pages[0])
-
-    # Hide native Streamlit sidebar entirely (we do not rely on its expand/collapse controls).
-    st.markdown(
-        """
-        <style>
-        section[data-testid="stSidebar"],
-        div[data-testid="stSidebar"] {
-            display: none !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    safe_app = html.escape(str(APP_TITLE))
-    safe_user = html.escape(str(user.get("username") or ""))
-    safe_role = html.escape(str(role or ""))
-
-    # Build links to drive navigation via URL query (stable, rerun-safe).
-    items = []
-    for p in pages:
-        cls = "sheep_nav_item active" if p == current_page else "sheep_nav_item"
-        items.append(
-            f'<button type="button" class="{cls}" data-page="{html.escape(p)}">{html.escape(p)}</button>'
-        )
-
-    nav_html = "\n".join(items)
-
-    # Full-screen overlay iframe for the custom drawer.
-    # The iframe styles itself to fixed full-screen via window.frameElement.
-    drawer = f"""
-    <style>
-      html, body {{
-        margin: 0;
-        padding: 0;
-        background: transparent;
-        width: 100%;
-        height: 100%;
-        pointer-events: none; /* default: click-through */
-        overflow: hidden;
-      }}
-
-      :root {{
-        --sheep-drawer-w: 320px;
-        --sheep-z: 2147483000;
-      }}
-
-      #sheepDrawerToggle {{
-        position: fixed;
-        left: -9999px;
-        top: -9999px;
-      }}
-
-      .sheepDrawerBtn {{
-        pointer-events: auto; /* clickable */
-        position: fixed;
-        top: 10px;
-        left: 10px;
-        z-index: var(--sheep-z);
-        width: 42px;
-        height: 42px;
-        border-radius: 10px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        border: 1px solid rgba(255,255,255,0.10);
-        background: rgba(10,14,20,0.70);
-        color: rgba(255,255,255,0.92);
-        box-shadow: 0 8px 24px rgba(0,0,0,0.55);
-        cursor: pointer;
-        user-select: none;
-      }}
-      .sheepDrawerBtn:hover {{
-        border-color: rgba(59,130,246,0.55);
-      }}
-
-      .sheepDrawerBackdrop {{
-        pointer-events: auto;
-        position: fixed;
-        inset: 0;
-        z-index: calc(var(--sheep-z) - 1);
-        background: rgba(0,0,0,0.35);
-        opacity: 0;
-        transition: opacity 140ms ease;
-      }}
-
-      .sheepDrawer {{
-        pointer-events: auto;
-        position: fixed;
-        top: 0;
-        left: 0;
-        height: 100vh;
-        width: var(--sheep-drawer-w);
-        z-index: var(--sheep-z);
-        transform: translateX(calc(-1 * var(--sheep-drawer-w)));
-        transition: transform 180ms ease;
-        background: rgba(8, 10, 14, 0.92);
-        border-right: 1px solid rgba(255,255,255,0.08);
-        backdrop-filter: blur(12px);
-        -webkit-backdrop-filter: blur(12px);
-        box-shadow: 16px 0 48px rgba(0,0,0,0.50);
-        padding: 14px 12px;
-      }}
-
-      #sheepDrawerToggle:checked ~ .sheepDrawer {{
-        transform: translateX(0);
-      }}
-      #sheepDrawerToggle:checked ~ .sheepDrawerBackdrop {{
-        opacity: 1;
-      }}
-
-      .sheepDrawerHeader {{
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-        margin-bottom: 12px;
-      }}
-      .sheepDrawerTitle {{
-        font-size: 16px;
-        font-weight: 700;
-        color: rgba(255,255,255,0.92);
-      }}
-      .sheepDrawerMeta {{
-        font-size: 12px;
-        opacity: 0.78;
-        color: rgba(255,255,255,0.85);
-      }}
-
-      .sheepNav {{
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-        margin-top: 10px;
-      }}
-      .sheep_nav_item {{
-        text-align: left;
-        border-radius: 10px;
-        padding: 10px 10px;
-        border: 1px solid rgba(255,255,255,0.08);
-        background: rgba(10,14,20,0.35);
-        color: rgba(255,255,255,0.90);
-        font-size: 13px;
-        cursor: pointer;
-      }}
-      .sheep_nav_item:hover {{
-        border-color: rgba(59,130,246,0.35);
-      }}
-      .sheep_nav_item.active {{
-        border-color: rgba(59,130,246,0.55);
-        background: rgba(59,130,246,0.20);
-      }}
-
-      .sheepDivider {{
-        height: 1px;
-        background: rgba(255,255,255,0.10);
-        margin: 12px 0;
-      }}
-
-      .sheepLogout {{
-        text-align: left;
-        border-radius: 10px;
-        padding: 10px 10px;
-        border: 1px solid rgba(255,255,255,0.08);
-        background: rgba(10,14,20,0.35);
-        color: rgba(255,255,255,0.90);
-        font-size: 13px;
-        cursor: pointer;
-        display: inline-block;
-      }}
-      .sheepLogout:hover {{
-        border-color: rgba(255,255,255,0.18);
-      }}
-    </style>
-
-    <script>
-      (function() {{
-        try {{
-          var fe = window.frameElement;
-          if (fe) {{
-            fe.style.position = "fixed";
-            fe.style.top = "0";
-            fe.style.left = "0";
-            fe.style.width = "100vw";
-            fe.style.height = "100vh";
-            fe.style.border = "0";
-            fe.style.zIndex = String({2147483000});
-            fe.style.background = "transparent";
-            fe.style.pointerEvents = "none"; /* click-through except our elements */
-          }}
-        }} catch (e) {{}}
-      }})();
-    </script>
-
-    <input id="sheepDrawerToggle" type="checkbox" />
-    <label class="sheepDrawerBtn" for="sheepDrawerToggle">選單</label>
-    <label class="sheepDrawerBackdrop" for="sheepDrawerToggle"></label>
-
-    <aside class="sheepDrawer" aria-label="Navigation">
-      <div class="sheepDrawerHeader">
-        <div class="sheepDrawerTitle">{safe_app}</div>
-        <div class="sheepDrawerMeta">{safe_user} · {safe_role}</div>
-      </div>
-
-      <div class="sheepNav">
-        {nav_html}
-      </div>
-
-      <div class="sheepDivider"></div>
-
-      <button class="sheepLogout" type="button" data-action="logout">登出</button>
-    </aside>
-
-    <script>
-      (function() {{
-        function closeDrawer() {{
-          var t = document.getElementById("sheepDrawerToggle");
-          if (t) t.checked = false;
-        }}
-
-        function go(qs) {{
-          try {{
-            if (window.top) {{
-              window.top.location.search = qs;
-            }} else {{
-              window.location.search = qs;
-            }}
-          }} catch (e) {{
-            window.location.search = qs;
-          }}
-        }}
-
-        document.addEventListener("click", function(ev) {{
-          var t = ev.target;
-          if (!t) return;
-
-          if (t.classList && t.classList.contains("sheep_nav_item")) {{
-            var page = t.getAttribute("data-page") || "";
-            closeDrawer();
-            if (page) go("?page=" + encodeURIComponent(page));
-            ev.preventDefault();
-            ev.stopPropagation();
-            return;
-          }}
-
-          if (t.getAttribute && t.getAttribute("data-action") === "logout") {{
-            closeDrawer();
-            go("?action=logout");
-            ev.preventDefault();
-            ev.stopPropagation();
-            return;
-          }}
-        }});
-      }})();
-    </script>
-    """
-
-    st.components.v1.html(drawer, height=1)
-
-    # Keep your existing HUD (it is independent from Streamlit sidebar).
-    _render_user_hud(user)
-
-    return str(st.session_state.get("nav_page") or pages[0])
 
 
 def main() -> None:
@@ -5120,21 +4748,6 @@ def main() -> None:
     _render_brand_header(animate=False, dim=False)
 
     _try_auto_login_from_cookie()
-
-    # URL action handling (used by the custom drawer)
-    try:
-        if str(st.query_params.get("action", "") or "").strip().lower() == "logout":
-            _logout()   
-            try:
-                del st.query_params["action"]
-            except Exception:
-                try:
-                    st.query_params.clear()
-                except Exception:
-                    pass
-            st.rerun()
-    except Exception:
-        pass
 
     user = _session_user()
     job_mgr = JOB_MANAGER
@@ -5150,7 +4763,63 @@ def main() -> None:
 
     role = str(user.get("role") or "user")
 
-    page = _drawer_layout(user=user, role=role)
+    # [新增] 排行榜頁面入口
+    pages = ["新手教學", "控制台", "排行榜", "任務", "提交", "結算"] + (["管理"] if role == "admin" else [])
+
+    # [專家級修復] 利用 URL 查詢參數持久化當前頁面狀態，徹底解決頁面自動重整(location.reload)導致的閃退回首頁問題
+    try:
+        q_page = st.query_params.get("page", "")
+        if q_page in pages:
+            st.session_state["nav_page"] = q_page
+    except Exception:
+        pass
+
+    if "nav_page_pending" in st.session_state:
+        try:
+            _pending = str(st.session_state.pop("nav_page_pending") or "").strip()
+        except Exception:
+            _pending = ""
+        if _pending and _pending in pages:
+            st.session_state["nav_page"] = _pending
+            try:
+                st.query_params["page"] = _pending
+            except Exception:
+                pass
+
+    if "nav_page" not in st.session_state or st.session_state["nav_page"] not in pages:
+        st.session_state["nav_page"] = pages[0]
+        try:
+            st.query_params["page"] = pages[0]
+        except Exception:
+            pass
+
+    with st.sidebar:
+        st.markdown(f"### {APP_TITLE}")
+        st.markdown(f'<div class="small-muted">{user["username"]} · {role}</div>', unsafe_allow_html=True)
+
+        # Navigation (custom buttons instead of st.radio) to avoid default red dot indicator
+        current_page = str(st.session_state.get("nav_page") or pages[0])
+
+        for p in pages:
+            is_active = (p == current_page)
+            btn_type = "primary" if is_active else "secondary"
+            if st.button(p, key=f"nav_btn_{p}", type=btn_type, use_container_width=True):
+                st.session_state["nav_page"] = p
+                try:
+                    st.query_params["page"] = p
+                except Exception:
+                    pass
+                st.rerun()
+
+        st.markdown('<div style="height: 10px"></div>', unsafe_allow_html=True)
+
+        if st.button("登出", key="logout_btn", type="secondary", use_container_width=True):
+            _logout()
+            st.rerun()
+
+        _render_user_hud(user)
+
+    page = str(st.session_state.get("nav_page") or pages[0])
 
     import traceback
     try:

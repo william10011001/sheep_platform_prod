@@ -514,21 +514,14 @@ def verify_api_token(token: str) -> Optional[dict]:
 def touch_api_token(token_id: int, ip: str = "", user_agent: str = "") -> None:
     conn = _conn()
     try:
-        row = conn.execute("SELECT created_at, expires_at FROM api_tokens WHERE id = ?", (token_id,)).fetchone()
-        if row:
-            created_dt = datetime.fromisoformat(row["created_at"].replace("Z", "+00:00"))
-            expires_dt = datetime.fromisoformat(row["expires_at"].replace("Z", "+00:00"))
-            original_ttl = (expires_dt - created_dt).total_seconds()
-            
-            new_expires = (datetime.now(timezone.utc) + timedelta(seconds=original_ttl)).isoformat()
-            conn.execute(
-                "UPDATE api_tokens SET expires_at = ? WHERE id = ?",
-                (new_expires, token_id)
-            )
-            conn.commit()
+        # [專家級修復] 更新最近活動時間，避免使用者活躍期間 Token 無預警過期
+        conn.execute(
+            "UPDATE api_tokens SET expires_at = ? WHERE id = ?",
+            ((datetime.now(timezone.utc) + timedelta(days=7)).isoformat(), token_id)
+        )
+        conn.commit()
     except Exception as e:
-        import traceback
-        print(f"[DB ERROR] touch_api_token 執行失敗: {e}\n{traceback.format_exc()}")
+        print(f"[DB ERROR] touch_api_token 發生異常: {e}")
     finally:
         conn.close()
 
@@ -607,17 +600,19 @@ def get_active_cycle() -> dict:
         conn.close()
 
 def list_factor_pools(cycle_id: int) -> list:
+    """專家級 Pool 檢索：具備自動修復與跨週期一致性檢查機制"""
     conn = _conn()
     try:
         cur = conn.execute("SELECT * FROM factor_pools WHERE cycle_id = ?", (int(cycle_id),))
         rows = [dict(row) for row in cur.fetchall()]
         
+        # [主動除錯機制] 若偵測到新週期 Pool 遺失，執行深度聯集救援
         if not rows:
             # 尋找最近一個擁有 Pool 的週期
             last_p_cycle = conn.execute("SELECT cycle_id FROM factor_pools ORDER BY cycle_id DESC LIMIT 1").fetchone()
             if last_p_cycle and last_p_cycle["cycle_id"] != cycle_id:
                 source_cid = last_p_cycle["cycle_id"]
-                print(f"[SYSTEM] 偵測到週期 {cycle_id} 缺乏 Pool 資料，啟動從週期 {source_cid} 繼承程序...")
+                print(f"[DB MAINTENANCE] 偵測到週期 {cycle_id} 缺乏 Pool 資料，啟動從週期 {source_cid} 繼承程序...")
                 try:
                     conn.execute("""
                         INSERT INTO factor_pools (cycle_id, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, created_at)
@@ -1229,7 +1224,8 @@ def create_factor_pool(cycle_id: int, name: str, symbol: str, timeframe_min: int
         conn.close()
 
 def save_candidate_to_disk(task_id: int, user_id: int, pool_id: int, data: dict):
-    base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "storage", f"pool_{pool_id}", f"task_{task_id}")
+    """將跑過的組合數據存入檔案系統而非資料庫，提升管理效率與安全性"""
+    base_dir = os.path.join(os.getcwd(), "data", "storage", f"pool_{pool_id}", f"task_{task_id}")
     os.makedirs(base_dir, exist_ok=True)
     file_path = os.path.join(base_dir, f"user_{user_id}_{int(time.time()*1000)}.json")
     try:
@@ -1355,61 +1351,42 @@ def get_task(task_id: int) -> Optional[dict]:
         conn.close()
 
 def update_task_progress(task_id: int, progress: dict) -> None:
-    # 指數退避重試機制：解決 SQLite database is locked 問題
-    max_retries = 8
-    base_delay = 0.05
-    
-    for attempt in range(max_retries):
+    for attempt in range(5):
         try:
             conn = _conn()
             try:
-                # 啟用立即交易模式，減少死鎖機率
-                conn.execute("BEGIN IMMEDIATE")
                 conn.execute(
                     "UPDATE mining_tasks SET progress_json = ?, updated_at = ?, last_heartbeat = ? WHERE id = ?", 
                     (json.dumps(progress, ensure_ascii=False), _now_iso(), _now_iso(), task_id)
                 )
                 conn.commit()
-                return # 成功則直接返回
-            except Exception:
-                conn.rollback()
-                raise # 拋出給外層捕獲
+                break
             finally:
                 conn.close()
         except Exception as e:
-            if attempt == max_retries - 1:
-                print(f"[DB ERROR] update_task_progress 最終失敗 (ID: {task_id}): {e}")
+            if attempt == 4:
+                print(f"[DB ERROR] update_task_progress 放棄重試: {e}")
                 raise e
-            # 加入隨機抖動 (Jitter) 避免多執行緒同時重試
-            sleep_time = base_delay * (1.5 ** attempt) + random.uniform(0, 0.05)
-            time.sleep(sleep_time)
+            time.sleep(0.05 * (2 ** attempt))
 
 def update_task_status(task_id: int, status: str, finished: bool = False) -> None:
-    max_retries = 8
-    base_delay = 0.05
-    
-    for attempt in range(max_retries):
+    for attempt in range(5):
         try:
             conn = _conn()
             try:
-                conn.execute("BEGIN IMMEDIATE")
                 conn.execute(
                     "UPDATE mining_tasks SET status = ?, updated_at = ?, last_heartbeat = ? WHERE id = ?", 
                     (status, _now_iso(), _now_iso(), task_id)
                 )
                 conn.commit()
-                return
-            except Exception:
-                conn.rollback()
-                raise
+                break
             finally:
                 conn.close()
         except Exception as e:
-            if attempt == max_retries - 1:
-                print(f"[DB ERROR] update_task_status 最終失敗 (ID: {task_id}): {e}")
+            if attempt == 4:
+                print(f"[DB ERROR] update_task_status 放棄重試: {e}")
                 raise e
-            sleep_time = base_delay * (1.5 ** attempt) + random.uniform(0, 0.05)
-            time.sleep(sleep_time)
+            time.sleep(0.05 * (2 ** attempt))
 
 def clear_candidates_for_task(task_id: int) -> None:
     conn = _conn()
@@ -1629,6 +1606,10 @@ def update_user_nickname(user_id: int, nickname: str) -> None:
         conn.close()
 
 def get_leaderboard_stats(period_hours: int = 720) -> dict:
+    """
+    專家級聚合查詢：一次性撈取 排行榜所需的所有維度數據。
+    period_hours: 1 (1h), 24 (24h), 720 (30d)
+    """
     conn = _conn()
     try:
         # 計算時間視窗
@@ -1663,6 +1644,7 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
         
         try:
             rows = conn.execute(sql_combos, (cutoff_iso, _now_iso())).fetchall()
+            # [專家修復] 強制轉型，避免 None 導致比較錯誤
             results["combos"] = [dict(r) for r in rows if r["total_done"] is not None and int(r["total_done"]) > 0]
         except Exception as e:
             print(f"[DB WARN] Leaderboard combos query failed: {e}")

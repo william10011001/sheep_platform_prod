@@ -521,9 +521,11 @@ def issue_token(req: Request, body: TokenRequest):
     if not user:
         raise HTTPException(status_code=401, detail="bad_credentials")
 
+    # [專家除錯] 修正遺失的方法調用，並套用強化的 Bytes/String 驗證護城河
     from sheep_platform_security import verify_password
     is_valid = False
     try:
+        # 強制將資料庫雜湊值正規化（使用更安全的字串轉換）
         raw_hash = user["password_hash"]
         if isinstance(raw_hash, str):
             import ast
@@ -684,9 +686,13 @@ def claim_task(
     except Exception:
             dh = {"data_hash": "", "data_hash_ts": ""}
 
+    # [專家級行情校驗護城河 V2]
+    # 支援 14 種組合自動發放時的行情檔案動態預熱
     if not str(dh.get("data_hash") or "").strip():
-        print(f"[SYSTEM] 偵測到新 Pool ({task.get('symbol')} {task.get('timeframe_min')}m)，啟動自動化預熱流程...")
+        print(f"[API] 偵測到新 Pool ({task.get('symbol')} {task.get('timeframe_min')}m)，啟動自動化預熱流程...")
         try:
+            # 1. 阻斷式同步：在發放前確保主週期就緒
+            # [專家級修復] 加上 skip_1m=True，嚴禁 API 伺服器去同步 1m 資料引發 504 Timeout 卡死
             csv_main, _ = bt.ensure_bitmart_data(
                 symbol=str(task.get("symbol") or ""),
                 main_step_min=int(task.get("timeframe_min") or 0),
@@ -886,6 +892,7 @@ def finish_task(
         worst_case = bool(risk_spec.get("worst_case", True))
         reverse_mode = bool(risk_spec.get("reverse_mode", False))
 
+        # [專家級修復] 伺服器端複驗時嚴禁同步 1m 資料，避免佔用資源
         csv_main, _ = bt.ensure_bitmart_data(
             symbol=symbol,
             main_step_min=int(tf_min),
