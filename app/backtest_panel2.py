@@ -8921,12 +8921,12 @@ def app():
         resdf["_sort_dd"] = -resdf["max_drawdown_pct"].astype(float)
         resdf = resdf.sort_values(by=["_sort_cagr", "_sort_pf", "_sort_dd"], ascending=[False, False, False])
 
-        # 只針對複雜策略做 Top-K 1m 驗證（快篩 + 精準回補）
+        # 針對複雜策略執行 1m 精準驗證回補
         if (family in ["TEMA_RSI", "LaguerreRSI_TEMA"]) and bool(st.session_state.get("use_1m_fill", False)) and (st.session_state.get("microfill_ctx", None) is not None):
             verify_k = int(min(len(resdf), max(int(topN) * 10, 50)))
             verify_uids = list(resdf.index[:verify_k])
 
-            st.info(f"已偵測到複雜策略（{family}）：正在用 1m 精準撮合驗證 Top-{verify_k}，避免快速掃描過度樂觀…")
+            st.info(f"系統正在執行 {family} 策略 1m 週期資料驗證程序 (Top-{verify_k})...")
             _vp = st.progress(0.0)
 
             for ii, uid in enumerate(verify_uids):
@@ -8964,7 +8964,7 @@ def app():
                 _vp.progress((ii + 1) / float(verify_k))
 
             _vp.empty()
-            st.success(f"1m 驗證完成：Top-{verify_k} 已回補 verified 欄位，可直接用 verified 結果排序。")
+            st.success(f"驗證完成：已更新 Top-{verify_k} 組合狀態。")
 
         # 最終排序：verified 置頂，再依 CAGR/PF/DD 排
         resdf["_sort_verified"] = resdf["verified"].astype(int)

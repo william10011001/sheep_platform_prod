@@ -307,7 +307,7 @@ class JobManager:
                     conn_err.commit()
                     conn_err.close()
                 except Exception as log_e:
-                    print(f"[FATAL] 無法將調度器錯誤寫入資料庫: {log_e}", file=sys.stderr)
+                    print(f"[ERROR] 無法將調度器錯誤寫入資料庫: {log_e}", file=sys.stderr)
                     
                 time.sleep(2.0)
 
@@ -672,7 +672,7 @@ class JobManager:
                 else:
                     db.update_task_status(task_id, "error")
             except Exception as nested_err:
-                print(f"[CRITICAL] 錯誤處理器本身發生異常: {nested_err}\n{traceback.format_exc()}", file=sys.stderr)
+                print(f"[ERROR] 錯誤處理程序異常: {nested_err}\n{traceback.format_exc()}", file=sys.stderr)
             finally:
                 with self._lock:
                     if task_id in self._threads:

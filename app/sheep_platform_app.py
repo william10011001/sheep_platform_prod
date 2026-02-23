@@ -2811,66 +2811,60 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
 
                 passed_badge = '<span style="background:rgba(16,185,129,0.15);color:#34d399;padding:4px 8px;border-radius:6px;font-size:11px;font-weight:600;border:1px solid rgba(16,185,129,0.3);box-shadow:0 0 8px rgba(16,185,129,0.2);">已達標</span>' if passed else ''
 
-                card_html = f"""
-                <style>
-                @keyframes pulse {{
-                    0% {{ opacity: 1; }}
-                    50% {{ opacity: 0.6; box-shadow: 0 0 10px {color}40; }}
-                    100% {{ opacity: 1; }}
-                }}
-                </style>
-                <div style="background: linear-gradient(145deg, rgba(30, 41, 59, 0.7) 0%, rgba(15, 23, 42, 0.9) 100%); border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 20px; margin-bottom: 16px; position: relative; overflow: hidden; box-shadow: 0 8px 24px rgba(0,0,0,0.4); {is_pulsing}">
-                    <div style="position: absolute; left: 0; top: 0; bottom: 0; width: 5px; background: {color}; box-shadow: 2px 0 12px {color}80;"></div>
-                    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px;">
-                        <div>
-                            <div style="display: flex; align-items: center; gap: 12px;">
-                                <span style="color: #ffffff; font-weight: 800; font-size: 18px; letter-spacing: 0.5px;">任務 {t['id']}</span>
-                                <span style="background: rgba(255,255,255,0.06); color: #cbd5e1; padding: 4px 10px; border-radius: 8px; font-size: 12px; border: 1px solid rgba(255,255,255,0.1); font-weight: 600;">{t['symbol']} · {t['timeframe_min']}m</span>
-                                {passed_badge}
-                            </div>
-                            <div style="color: #94a3b8; font-size: 13px; margin-top: 8px; display: flex; align-items: center; gap: 6px;">
-                                <span style="color:#60a5fa; font-weight:600;">{t['family']}</span>
-                                <span>|</span>
-                                <span>{t['pool_name']}</span>
-                                <span>|</span>
-                                <span>分割 {int(t['partition_idx'])+1} / {t.get('num_partitions', 1)}</span>
-                            </div>
-                        </div>
-                        <div style="text-align: right; background: rgba(0,0,0,0.2); padding: 8px 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.05);">
-                            <div style="color: {color}; font-weight: 800; font-size: 15px; text-transform: uppercase; letter-spacing: 1px;">{status_cn}</div>
-                            <div style="color: #94a3b8; font-size: 12px; margin-top: 4px; font-family: monospace;">{phase_cn}</div>
-                        </div>
-                    </div>
-                    
-                    <div style="background: rgba(0,0,0,0.4); border-radius: 8px; height: 8px; width: 100%; margin-bottom: 16px; overflow: hidden; border: 1px solid rgba(255,255,255,0.05);">
-                        <div style="background: linear-gradient(90deg, {color}80, {color}); height: 100%; width: {bar_width}%; transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1); box-shadow: 0 0 10px {color};"></div>
-                    </div>
-                    
-                    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; text-align: left;">
-                        <div style="background: rgba(255,255,255,0.02); padding: 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.04);">
-                            <div style="color: #64748b; font-size: 11px; margin-bottom: 6px; text-transform: uppercase; font-weight: 600;">參數運算進度</div>
-                            <div style="color: #f8fafc; font-size: 14px; font-family: 'JetBrains Mono', monospace; font-weight: 600;">{progress_display}</div>
-                        </div>
-                        <div style="background: rgba(255,255,255,0.02); padding: 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.04);">
-                            <div style="color: #64748b; font-size: 11px; margin-bottom: 6px; text-transform: uppercase; font-weight: 600;">目前最佳分數</div>
-                            <div style="color: #10b981; font-size: 14px; font-weight: 700; font-family: 'JetBrains Mono', monospace;">{score_str}</div>
-                        </div>
-                        <div style="background: rgba(255,255,255,0.02); padding: 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.04);">
-                            <div style="color: #64748b; font-size: 11px; margin-bottom: 6px; text-transform: uppercase; font-weight: 600;">處理速度</div>
-                            <div style="color: #e2e8f0; font-size: 14px; font-family: 'JetBrains Mono', monospace;">{speed_str}</div>
-                        </div>
-                        <div style="background: rgba(255,255,255,0.02); padding: 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.04);">
-                            <div style="color: #64748b; font-size: 11px; margin-bottom: 6px; text-transform: uppercase; font-weight: 600;">預估剩餘時間</div>
-                            <div style="color: #fbbf24; font-size: 14px; font-family: 'JetBrains Mono', monospace; font-weight: 600;">{eta_str}</div>
-                        </div>
-                    </div>
-                </div>
-                """
-                # [專家級修復] 確保 HTML 字串被完整推入陣列
+                pulse_anim_name = f"pulse_{t['id']}"
+                card_html = f"""<style>
+@{pulse_anim_name} {{
+  0% {{ opacity: 1; }}
+  50% {{ opacity: 0.6; box-shadow: 0 0 10px {color}40; }}
+  100% {{ opacity: 1; }}
+}}
+</style>
+<div style="background: linear-gradient(145deg, rgba(30, 41, 59, 0.7) 0%, rgba(15, 23, 42, 0.9) 100%); border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 20px; margin-bottom: 16px; position: relative; overflow: hidden; box-shadow: 0 8px 24px rgba(0,0,0,0.4); {is_pulsing.replace('pulse', pulse_anim_name)}">
+  <div style="position: absolute; left: 0; top: 0; bottom: 0; width: 5px; background: {color}; box-shadow: 2px 0 12px {color}80;"></div>
+  <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px;">
+    <div>
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <span style="color: #ffffff; font-weight: 800; font-size: 18px; letter-spacing: 0.5px;">任務 {t['id']}</span>
+        <span style="background: rgba(255,255,255,0.06); color: #cbd5e1; padding: 4px 10px; border-radius: 8px; font-size: 12px; border: 1px solid rgba(255,255,255,0.1); font-weight: 600;">{t['symbol']} · {t['timeframe_min']}m</span>
+        {passed_badge}
+      </div>
+      <div style="color: #94a3b8; font-size: 13px; margin-top: 8px; display: flex; align-items: center; gap: 6px;">
+        <span style="color:#60a5fa; font-weight:600;">{t['family']}</span>
+        <span>|</span>
+        <span>{t['pool_name']}</span>
+        <span>|</span>
+        <span>分割 {int(t['partition_idx'])+1} / {t.get('num_partitions', 1)}</span>
+      </div>
+    </div>
+    <div style="text-align: right; background: rgba(0,0,0,0.2); padding: 8px 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.05);">
+      <div style="color: {color}; font-weight: 800; font-size: 15px; text-transform: uppercase; letter-spacing: 1px;">{status_cn}</div>
+      <div style="color: #94a3b8; font-size: 12px; margin-top: 4px; font-family: monospace;">{phase_cn}</div>
+    </div>
+  </div>
+  <div style="background: rgba(0,0,0,0.4); border-radius: 8px; height: 8px; width: 100%; margin-bottom: 16px; overflow: hidden; border: 1px solid rgba(255,255,255,0.05);">
+    <div style="background: linear-gradient(90deg, {color}80, {color}); height: 100%; width: {bar_width}%; transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1); box-shadow: 0 0 10px {color};"></div>
+  </div>
+  <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; text-align: left;">
+    <div style="background: rgba(255,255,255,0.02); padding: 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.04);">
+      <div style="color: #64748b; font-size: 11px; margin-bottom: 6px; text-transform: uppercase; font-weight: 600;">參數運算進度</div>
+      <div style="color: #f8fafc; font-size: 14px; font-family: monospace; font-weight: 600;">{progress_display}</div>
+    </div>
+    <div style="background: rgba(255,255,255,0.02); padding: 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.04);">
+      <div style="color: #64748b; font-size: 11px; margin-bottom: 6px; text-transform: uppercase; font-weight: 600;">目前最佳分數</div>
+      <div style="color: #10b981; font-size: 14px; font-weight: 700; font-family: monospace;">{score_str}</div>
+    </div>
+    <div style="background: rgba(255,255,255,0.02); padding: 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.04);">
+      <div style="color: #64748b; font-size: 11px; margin-bottom: 6px; text-transform: uppercase; font-weight: 600;">處理速度</div>
+      <div style="color: #e2e8f0; font-size: 14px; font-family: monospace;">{speed_str}</div>
+    </div>
+    <div style="background: rgba(255,255,255,0.02); padding: 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.04);">
+      <div style="color: #64748b; font-size: 11px; margin-bottom: 6px; text-transform: uppercase; font-weight: 600;">預估剩餘時間</div>
+      <div style="color: #fbbf24; font-size: 14px; font-family: monospace; font-weight: 600;">{eta_str}</div>
+    </div>
+  </div>
+</div>"""
                 html_cards.append(card_html)
 
-            # [專家級修復] 解決純文字印出 HTML 標籤的災難。
-            # Streamlit 渲染大型 HTML 區塊時，必須確保外層包裹結構完整，且 unsafe_allow_html=True 確實生效。
             final_cards_html = f'<div style="margin-top: 10px; width: 100%; display: flex; flex-direction: column; gap: 0px;">{"".join(html_cards)}</div>'
             st.markdown(final_cards_html, unsafe_allow_html=True)
 
@@ -3039,10 +3033,10 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                         to_queue.append(tid)
                     
                     if to_queue:
-                        # 呼叫 job_mgr 實際將任務加入排程列隊，這行非常關鍵，否則任務無法啟動且會報錯
+                        # 將任務加入排程列隊
                         result = job_mgr.enqueue_many(int(user["id"]), to_queue, bt)
                         
-                        # [專家級 UX 修復] 將任務狀態變更為 queued 的同時，立即注入詳細的排隊進度 JSON，打破點擊後毫無反應的死寂
+                        # 將任務狀態變更為 queued，並更新排隊進度
                         for qid in to_queue:
                             db.update_task_status(qid, "queued")
                             db.update_task_progress(qid, {
@@ -3342,21 +3336,16 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
         
         anim_css = "animation: pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;" if is_animating else ""
         
-        # [專家級防護] 確保單一卡片內的 HTML 結構不會被 Streamlit 的 markdown parser 破壞
-        st.markdown(
-            f"""<div style="background: rgba(0,0,0,0.2); border: 1px solid {phase_color}40; border-left: 4px solid {phase_color}; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px;">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <div style="display: flex; align-items: center; gap: 10px;">
-                        <div style="width: 12px; height: 12px; border-radius: 50%; background: {phase_color}; {anim_css}"></div>
-                        <span style="color: {phase_color}; font-weight: 700; font-size: 16px;">目前作業：{display_phase_label}</span>
-                    </div>
-                </div>
-                <div style="margin-top: 8px; font-size: 14px; color: #cbd5e1; white-space: pre-wrap;">
-                    {html.escape(display_phase_msg)}
-                </div>
-            </div>""", 
-            unsafe_allow_html=True
-        )
+        html_content = f"""<div style="background: rgba(0,0,0,0.2); border: 1px solid {phase_color}40; border-left: 4px solid {phase_color}; border-radius: 8px; padding: 12px 16px; margin-bottom: 16px;">
+<div style="display: flex; justify-content: space-between; align-items: center;">
+<div style="display: flex; align-items: center; gap: 10px;">
+<div style="width: 12px; height: 12px; border-radius: 50%; background: {phase_color}; {anim_css}"></div>
+<span style="color: {phase_color}; font-weight: 700; font-size: 16px;">目前作業：{display_phase_label}</span>
+</div>
+</div>
+<div style="margin-top: 8px; font-size: 14px; color: #cbd5e1; white-space: pre-wrap;">{html.escape(display_phase_msg)}</div>
+</div>"""
+        st.markdown(html_content, unsafe_allow_html=True)
         
         top_b, top_c, top_d = st.columns([1.5, 1.5, 1.5])
         with top_b:
@@ -3412,12 +3401,10 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
 
         if last_error:
             st.markdown(
-                f"""
-                <div style="background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); border-radius: 8px; padding: 12px; margin-top: 12px;">
-                    <div style="color: #ef4444; font-weight: bold; margin-bottom: 4px;">系統中斷報告</div>
-                    <div style="color: #fca5a5; font-size: 13px; white-space: pre-wrap;">{html.escape(last_error)}</div>
-                </div>
-                """, unsafe_allow_html=True
+                f"""<div style="background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); border-radius: 8px; padding: 12px; margin-top: 12px;">
+<div style="color: #ef4444; font-weight: bold; margin-bottom: 4px;">系統中斷報告</div>
+<div style="color: #fca5a5; font-size: 13px; white-space: pre-wrap;">{html.escape(last_error)}</div>
+</div>""", unsafe_allow_html=True
             )
             if prog.get("debug_traceback"):
                 with st.expander("展開完整系統錯誤日誌"):
@@ -3746,30 +3733,21 @@ def _render_audit(audit: Dict[str, Any]) -> None:
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 def _page_leaderboard(user: Dict[str, Any]) -> None:
-    st.markdown(
-        """
-        <div style="background: linear-gradient(135deg, rgba(255,215,0,0.1) 0%, rgba(255,140,0,0.05) 100%); 
-                    border: 1px solid rgba(255, 215, 0, 0.3); 
-                    border-radius: 12px; 
-                    padding: 20px 24px; 
-                    margin-bottom: 24px;
-                    box-shadow: 0 8px 32px rgba(255, 215, 0, 0.05);
-                    display: flex; justify-content: space-between; align-items: center;">
-            <div style="display: flex; align-items: center; gap: 16px;">
-                <div style="width: 48px; height: 48px; background: linear-gradient(135deg, #FFD700 0%, #FF8C00 100%); border-radius: 12px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 16px rgba(255, 215, 0, 0.4);">
-                    <span style="font-size: 24px; font-weight: bold; color: #fff;">1</span>
-                </div>
-                <div>
-                    <div style="display: flex; align-items: center;">
-                        <h2 style="margin: 0; padding: 0; font-size: 28px; font-weight: 900; background: linear-gradient(135deg, #FFD700 0%, #FFFFFF 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 1px;">排行榜</h2>
-                        """ + _help_icon_html("此區塊展示全平台數據統計與排名。分為算力貢獻、積分收益、單次最高分與累積掛機時長。排名前列者將獲得專屬自訂稱號與相關權限。") + """
-                    </div>
-                    <div style="font-size: 13px; color: #94a3b8; margin-top: 4px;">展示頂尖貢獻者與數據紀錄。數據每分鐘更新一次。</div>
-                </div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True
-    )
+    lb_header_html = f"""<div style="background: linear-gradient(135deg, rgba(255,215,0,0.1) 0%, rgba(255,140,0,0.05) 100%); border: 1px solid rgba(255, 215, 0, 0.3); border-radius: 12px; padding: 20px 24px; margin-bottom: 24px; box-shadow: 0 8px 32px rgba(255, 215, 0, 0.05); display: flex; justify-content: space-between; align-items: center;">
+<div style="display: flex; align-items: center; gap: 16px;">
+<div style="width: 48px; height: 48px; background: linear-gradient(135deg, #FFD700 0%, #FF8C00 100%); border-radius: 12px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 16px rgba(255, 215, 0, 0.4);">
+<span style="font-size: 24px; font-weight: bold; color: #fff;">1</span>
+</div>
+<div>
+<div style="display: flex; align-items: center;">
+<h2 style="margin: 0; padding: 0; font-size: 28px; font-weight: 900; background: linear-gradient(135deg, #FFD700 0%, #FFFFFF 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: 1px;">排行榜</h2>
+{_help_icon_html('此區塊展示全平台數據統計與排名。分為算力貢獻、積分收益、單次最高分與累積掛機時長。排名前列者將獲得專屬自訂稱號與相關權限。')}
+</div>
+<div style="font-size: 13px; color: #94a3b8; margin-top: 4px;">展示頂尖貢獻者與數據紀錄。數據每分鐘更新一次。</div>
+</div>
+</div>
+</div>"""
+    st.markdown(lb_header_html, unsafe_allow_html=True)
 
     # 1. 徹底拋棄原生 Radio 紅點：注入頂級 Segmented Control CSS 模擬器
     st.markdown('''
@@ -3852,16 +3830,12 @@ def _page_leaderboard(user: Dict[str, Any]) -> None:
     # 3. 稱號設定區塊
     if can_set_nickname:
         st.markdown(
-            """
-            <div class="nick-card">
-                <div style="font-size:20px; font-weight:800; color:#FFD700; margin-bottom:12px; display:flex; align-items:center;">
-                    <span class="crown-icon"></span>特殊稱號權限已啟用
-                </div>
-                <div style="font-size:15px; color:#cbd5e1; line-height:1.6;">
-                    您的算力貢獻位居前列，系統已為您開放自訂稱號功能。
-                </div>
-            </div>
-            """, unsafe_allow_html=True
+            """<div class="nick-card">
+<div style="font-size:20px; font-weight:800; color:#FFD700; margin-bottom:12px; display:flex; align-items:center;">
+<span class="crown-icon"></span>特殊稱號權限已啟用
+</div>
+<div style="font-size:15px; color:#cbd5e1; line-height:1.6;">您的算力貢獻位居前列，系統已為您開放自訂稱號功能。</div>
+</div>""", unsafe_allow_html=True
         )
         col_n1, col_n2 = st.columns([3, 1])
         with col_n1:
@@ -5020,12 +4994,10 @@ def main() -> None:
         st.error(f"頁面渲染發生重大異常，系統已自動攔截並產生報告。")
         st.info(f"錯誤參考編號：{err_id} | 發生時間：{ts_utc}")
         st.markdown(
-            f"""
-            <div style="background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); border-left: 4px solid #ef4444; border-radius: 8px; padding: 16px; margin-bottom: 16px;">
-                <div style="color: #ef4444; font-weight: 800; margin-bottom: 8px; font-size: 16px;">異常類型</div>
-                <div style="color: #fca5a5; font-size: 14px; font-family: monospace; white-space: pre-wrap;">{str(route_err)}</div>
-            </div>
-            """, unsafe_allow_html=True
+            f"""<div style="background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); border-left: 4px solid #ef4444; border-radius: 8px; padding: 16px; margin-bottom: 16px;">
+<div style="color: #ef4444; font-weight: 800; margin-bottom: 8px; font-size: 16px;">異常類型</div>
+<div style="color: #fca5a5; font-size: 14px; font-family: monospace; white-space: pre-wrap;">{str(route_err)}</div>
+</div>""", unsafe_allow_html=True
         )
         with st.expander("展開完整系統錯誤追蹤紀錄 (Traceback)", expanded=True):
             st.code(tb, language="python")
