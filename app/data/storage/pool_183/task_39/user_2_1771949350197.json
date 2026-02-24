@@ -1,0 +1,26 @@
+{
+  "task_info": {
+    "id": 39,
+    "user_id": 2,
+    "pool_id": 183,
+    "cycle_id": 1,
+    "partition_idx": 10,
+    "num_partitions": 16,
+    "status": "queued",
+    "progress_json": "{\"phase\": \"build_grid\", \"phase_msg\": \"指標計算中:    WillR_Oversold 訊號快取完成，寫入全域快取...\", \"combos_done\": 54, \"combos_total\": 1152, \"updated_at\": \"2026-02-24T14:14:21.590554+00:00\", \"best_score\": null, \"best_candidate_id\": null, \"best_any_score\": -203.88, \"best_any_metrics\": {\"total_return_pct\": -100.0, \"max_drawdown_pct\": 100.0, \"sharpe\": -8.776, \"trades\": 59616, \"win_rate_pct\": 70.0433}, \"best_any_params\": {\"family\": \"WillR_Oversold\", \"family_params\": {\"period\": 11, \"enter_level\": -90.0}, \"tp\": 0.003, \"sl\": 0.008, \"max_hold\": 720}, \"best_any_passed\": false, \"phase_progress\": 0.0, \"last_error\": null, \"elapsed_s\": 127.38, \"speed_cps\": 0.423929, \"eta_s\": 2590.053}",
+    "last_heartbeat": "2026-02-24T14:14:21.768798+00:00",
+    "created_at": "2026-02-24T14:11:45.638876+00:00",
+    "updated_at": "2026-02-24T14:14:21.768789+00:00",
+    "family": "WillR_Oversold",
+    "symbol": "BTC_USDT",
+    "timeframe_min": 1,
+    "years": 1,
+    "grid_spec_json": "{\"p_min\": 7, \"p_max\": 21, \"p_step\": 2, \"lv_min\": -95, \"lv_max\": -70, \"lv_step\": 5}",
+    "risk_spec_json": "{\"tp_min\": 0.3, \"tp_max\": 1.2, \"tp_step\": 0.3, \"sl_min\": 0.4, \"sl_max\": 1.6, \"sl_step\": 0.4, \"max_hold_min\": 30, \"max_hold_max\": 720, \"max_hold_step\": 30, \"fee_side\": 0.0002, \"slippage\": 0.0, \"worst_case\": true, \"reverse_mode\": false}",
+    "seed": 1294504133,
+    "pool_name": "WillR_Oversold | BTC_USDT | 1m [BTC_USDT_1m]"
+  },
+  "timestamp": "2026-02-24T16:09:10.181597+00:00",
+  "best_pass_count": 0,
+  "candidates": []
+}

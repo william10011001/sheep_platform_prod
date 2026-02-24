@@ -83,7 +83,7 @@ from sheep_platform_security import (
 from sheep_platform_jobs import JOB_MANAGER, JobManager
 from sheep_platform_audit import audit_candidate
 
-APP_TITLE = "羊肉爐挖礦分潤任務平台"
+APP_TITLE = "OpenNode"
 
 _BRAND_WEBM_1 = os.environ.get("SHEEP_BRAND_WEBM_1", "static/羊LOGO影片(去背).webm")
 # 注意：舊版 Streamlit 的 st.components.v1.html 不支援 key=
@@ -342,8 +342,8 @@ div[data-testid="stAppViewContainer"] > .main {{
         <video id="v1" muted playsinline loop preload="auto"></video>
         <div id="fb" class="fallback">SS</div>
         </div>
-        <div class="name" aria-label="SouperSheep">
-        <span class="souper">Souper</span><span class="sheep">Sheep</span>
+        <div class="name" aria-label="SheepNode">
+        <span class="Sheep">Open</span><span class="sheep">Node</span>
         </div>
     </div>
 
@@ -1350,6 +1350,39 @@ def _style() -> None:
         unsafe_allow_html=True,
     )
 
+    # [專家級修正] 注入攔截器：強制將 Fivetran Webhook 等潛在阻塞的第三方請求設為非同步射後不理，瞬間釋放主渲染線程
+    st.components.v1.html(
+        """
+        <script>
+        (function() {
+            try {
+                const w = window.parent || window;
+                if (!w._webhook_intercepted) {
+                    w._webhook_intercepted = true;
+                    const originalFetch = w.fetch;
+                    w.fetch = async function() {
+                        const url = arguments[0];
+                        if (typeof url === 'string' && url.includes('webhooks.fivetran.com')) {
+                            originalFetch.apply(this, arguments).catch(e => {});
+                            return new Response(JSON.stringify({status: "ok"}), {status: 200, statusText: "OK"});
+                        }
+                        return originalFetch.apply(this, arguments);
+                    };
+                    const origOpen = w.XMLHttpRequest.prototype.open;
+                    w.XMLHttpRequest.prototype.open = function(method, url, async) {
+                        if (typeof url === 'string' && url.includes('webhooks.fivetran.com')) {
+                            async = true;
+                        }
+                        origOpen.call(this, method, url, async);
+                    };
+                }
+            } catch (err) {}
+        })();
+        </script>
+        """,
+        height=0,
+    )
+
     st.components.v1.html(
         """
         <script>
@@ -1490,8 +1523,10 @@ def _init_once() -> None:
             db.write_audit_log(None, "ensure_admin", {"username": admin_username})
         except Exception:
             pass
-    except Exception:
-        pass
+    except Exception as init_err:
+        import traceback
+        print(f"[CRITICAL] 資料庫初始化或管理員建立失敗: {init_err}")
+        print(traceback.format_exc())
 
 
 def _bootstrap() -> None:
@@ -2411,7 +2446,10 @@ def _cached_pool_total_combos(family: str, grid_spec_json: Any, risk_spec_json: 
                 r_size = int(t_s) * int(s_s) * int(m_s)
 
         return int(g_size * max(0, int(r_size)))
-    except Exception:
+    except Exception as combo_err:
+        import traceback
+        print(f"[ERROR] _cached_pool_total_combos 發生錯誤: {combo_err}")
+        print(traceback.format_exc())
         return 0
 
 
@@ -2721,7 +2759,7 @@ def _render_global_progress(cycle_id: int) -> None:
                 unsafe_allow_html=True,
             )
 def _page_tutorial(user: Optional[Dict[str, Any]] = None) -> None:
-    st.markdown(f"### {APP_TITLE} · 使用指引")
+    st.markdown(f"### {APP_TITLE} · Open the Mine , Mine the Node.")
 
     st.markdown(
         """

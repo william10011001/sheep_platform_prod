@@ -436,7 +436,13 @@ def _full_sync_bitmart_csv(symbol: str,
                 
                 # 絕對超時防護：若單一 K 線檔同步超過 15 分鐘，強制中止並保留已下載部分，避免永久卡死
                 if time.time() - sync_start_time > 900:
-                    print(f"[WARN] {symbol} {step_min}m 同步耗時過長，強制中斷保存。")
+                    err_msg = f"[WARN] {symbol} {step_min}m 同步耗時超過 15 分鐘，為防止應用程式死鎖，已強制中斷並保存現有數據。"
+                    print(err_msg)
+                    try:
+                        import streamlit as st
+                        st.warning(err_msg)
+                    except Exception:
+                        pass
                     break
 
                 rows, _hdr = client.get_klines(symbol=symbol, step_min=step_min, limit=200, after=after)
@@ -6639,7 +6645,9 @@ def grid_combinations_count_from_ui(family: str, ui: Dict) -> int:
 
 # ----------------------------- UI 與主流程 ----------------------------- #
 
+@st.cache_data(show_spinner=False, ttl=600)
 def load_and_validate_csv(path: str) -> pd.DataFrame:
+    """[專家級效能修正] 加上 Streamlit 快取，避免每次重載頁面時都要重新從硬碟讀取與解析數十 MB 的 CSV 檔案，大幅降低 FCP 時間。"""
     if not os.path.exists(path):
         raise FileNotFoundError(f"找不到檔案：{path}")
 
@@ -6695,8 +6703,9 @@ def load_and_validate_csv(path: str) -> pd.DataFrame:
 #        需要把整套出場邏輯搬到 1m 逐筆模擬（工作量很大且容易引入錯誤），因此本版本直接拒絕執行。
 
 
+@st.cache_data(show_spinner=False, ttl=600)
 def load_and_validate_csv_1m(path: str) -> pd.DataFrame:
-    """讀取並驗證 1m CSV（不做 30min 強制重採樣）。"""
+    """[專家級效能修正] 讀取並驗證 1m CSV，加上 Streamlit 快取防止巨量 1m K 線資料造成的頻繁 I/O 卡頓。"""
     if not os.path.exists(path):
         raise FileNotFoundError(f"找不到檔案：{path}")
 
