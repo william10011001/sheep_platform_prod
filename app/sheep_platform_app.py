@@ -730,6 +730,10 @@ def _week_bounds_last_completed(now_utc: datetime) -> Dict[str, str]:
 
 
 def _style() -> None:
+    # 終極修復：_style 每次 rerun 都重塞超大 CSS/iframe，會讓第二次開始越來越慢
+    if bool(st.session_state.get("_sheep_style_done")):
+        return
+    st.session_state["_sheep_style_done"] = True    
     st.markdown(
         """
         <style>
@@ -4484,7 +4488,63 @@ def _cached_get_setting(key: str, default_val: Any = None) -> Any:
 @st.cache_data(ttl=20, show_spinner=False)
 def _cached_global_progress_snapshot(cycle_id: int) -> Dict[str, Any]:
     return db.get_global_progress_snapshot(int(cycle_id))
+@st.cache_data(ttl=2, show_spinner=False)
+def _cached_worker_stats_snapshot() -> Dict[str, Any]:
+    try:
+        return db.get_worker_stats_snapshot(window_seconds=60)
+    except Exception:
+        return {"active_workers": 0, "total_workers": 0, "tasks_per_min": 0.0, "fail_rate": 0.0, "workers": []}
 
+def _render_compute_workers_panel() -> None:
+    snap = _cached_worker_stats_snapshot()
+    active_w = int(snap.get("active_workers") or 0)
+    total_w = int(snap.get("total_workers") or 0)
+    tpm = float(snap.get("tasks_per_min") or 0.0)
+    fr = float(snap.get("fail_rate") or 0.0) * 100.0
+    workers = list(snap.get("workers") or [])
+
+    st.markdown(_section_title_html("Compute Worker 狀態", "顯示目前 compute 節點數、吞吐、任務完成率與節點健康狀態。", level=4), unsafe_allow_html=True)
+
+    cols = st.columns(4)
+    with cols[0]:
+        st.markdown(_render_kpi("活躍節點", f"{active_w}", f"總數 {total_w}", help_text="30 秒內有回報視為活躍。"), unsafe_allow_html=True)
+    with cols[1]:
+        st.markdown(_render_kpi("任務/分鐘", f"{tpm:.2f}", "近 60 秒", help_text="近 60 秒完成的任務吞吐。"), unsafe_allow_html=True)
+    with cols[2]:
+        st.markdown(_render_kpi("失敗率", f"{fr:.2f}%", "近 60 秒", help_text="近 60 秒 task_finish_fail / (ok+fail)。"), unsafe_allow_html=True)
+    with cols[3]:
+        avg_cps = 0.0
+        try:
+            if workers:
+                avg_cps = sum(float(w.get("avg_cps") or 0.0) for w in workers[:min(20, len(workers))]) / float(max(1, min(20, len(workers))))
+        except Exception:
+            avg_cps = 0.0
+        st.markdown(_render_kpi("平均 CPS", f"{avg_cps:.1f}", "Top 20 估計", help_text="以 workers.avg_cps 的簡易均值估計吞吐。"), unsafe_allow_html=True)
+
+    with st.expander("展開節點清單", expanded=False):
+        if not workers:
+            st.markdown('<div class="small-muted">目前沒有任何 worker 註冊或回報。</div>', unsafe_allow_html=True)
+        else:
+            rows = []
+            now = _utc_now()
+            for w in workers:
+                last_seen = str(w.get("last_seen_at") or "")
+                age_s = None
+                try:
+                    age_s = max(0.0, (now - _parse_iso(last_seen)).total_seconds())
+                except Exception:
+                    age_s = None
+                rows.append({
+                    "worker_id": str(w.get("worker_id") or ""),
+                    "kind": str(w.get("kind") or ""),
+                    "avg_cps": float(w.get("avg_cps") or 0.0),
+                    "tasks_done": int(w.get("tasks_done") or 0),
+                    "tasks_fail": int(w.get("tasks_fail") or 0),
+                    "last_seen_s": None if age_s is None else round(float(age_s), 1),
+                    "last_task_id": w.get("last_task_id"),
+                    "last_error": str(w.get("last_error") or "")[:120],
+                })
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 @st.cache_data(ttl=20)
 def _cached_global_paid_payout_sum(cycle_id: int) -> float:
@@ -5208,7 +5268,12 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
         pools = db.list_factor_pools(cycle_id=int(cycle["id"])) if cycle else []
 
         st.markdown(_section_title_html("控制台", "查看你的任務、策略與結算概況。此頁也提供全域挖礦進度與策略池狀態。", level=3), unsafe_allow_html=True)
-
+        # compute worker 面板（只有 admin 顯示）
+        try:
+            if str(user.get("role") or "") == "admin":
+                _render_compute_workers_panel()
+        except Exception:
+            pass
         # Ensure tasks quota (使用快取)
         min_tasks = int(_cached_get_setting("min_tasks_per_user", 2))
             
@@ -6647,6 +6712,10 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
     tabs = st.tabs(["總覽", "用戶", "提交審核", "策略", "結算", "設定", "Pool"])
 
     with tabs[0]:
+        try:
+            _render_compute_workers_panel()
+        except Exception:
+            pass
         try:
             cycle = _cached_active_cycle()
             if not cycle:

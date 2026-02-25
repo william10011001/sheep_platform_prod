@@ -214,12 +214,21 @@ def _require_worker(
     req.state.worker_id = wid
 
     try:
+        kind = "worker"
+        try:
+            u = ctx.get("user") or {}
+            t = ctx.get("token") or {}
+            if str(u.get("role") or "") == "admin" and str(t.get("name") or "") == "compute":
+                kind = "compute"
+        except Exception:
+            kind = "worker"
+
         db.upsert_worker(
             worker_id=wid,
             user_id=int(ctx["user"]["id"]),
             version=wv,
             protocol=wp,
-            meta={"ua": req.headers.get("user-agent"), "ip": _client_ip(req)},
+            meta={"ua": req.headers.get("user-agent"), "ip": _client_ip(req), "kind": kind},
         )
     except Exception:
         pass
@@ -359,7 +368,21 @@ def healthz():
         "git_sha": os.getenv("SHEEP_GIT_SHA", ""),
     }
 
-
+@app.get("/compute/stats")
+def compute_stats(request: Request, authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    ctx = _auth_ctx(request, authorization)
+    role = str((ctx.get("user") or {}).get("role") or "")
+    if role != "admin":
+        raise HTTPException(status_code=403, detail="forbidden")
+    try:
+        win_s = 60
+        try:
+            win_s = int(db.get_setting("compute_stats_window_s", 60))
+        except Exception:
+            win_s = 60
+        return {"ts": _utc_iso(), "stats": db.get_worker_stats_snapshot(window_seconds=int(win_s))}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"compute_stats_failed: {e}")
 @app.get("/", response_class=HTMLResponse)
 def landing() -> HTMLResponse:
     """Lightweight landing HTML used for link previews (LINE/IG).

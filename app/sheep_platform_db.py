@@ -585,7 +585,67 @@ def init_db() -> None:
             pass
         try:
             conn.execute("ALTER TABLE users ADD COLUMN nickname TEXT DEFAULT ''")
-            
+        except Exception:
+            pass
+
+        # ── 任務 lease 欄位（舊 sqlite DB 也能自動補齊）
+        try:
+            conn.execute("ALTER TABLE mining_tasks ADD COLUMN lease_id TEXT")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE mining_tasks ADD COLUMN lease_worker_id TEXT")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE mining_tasks ADD COLUMN lease_expires_at TEXT")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE mining_tasks ADD COLUMN attempt INTEGER DEFAULT 0")
+        except Exception:
+            pass
+
+        # ── workers / worker_events（compute worker 狀態面板必備）
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS workers (
+                    worker_id TEXT PRIMARY KEY,
+                    user_id INTEGER,
+                    kind TEXT NOT NULL DEFAULT 'worker',
+                    version TEXT NOT NULL DEFAULT '',
+                    protocol INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL,
+                    last_task_id INTEGER,
+                    tasks_done INTEGER NOT NULL DEFAULT 0,
+                    tasks_fail INTEGER NOT NULL DEFAULT 0,
+                    avg_cps REAL NOT NULL DEFAULT 0.0,
+                    last_error TEXT NOT NULL DEFAULT '',
+                    meta_json TEXT NOT NULL DEFAULT '{}'
+                );
+
+                CREATE TABLE IF NOT EXISTS worker_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts TEXT NOT NULL,
+                    user_id INTEGER,
+                    worker_id TEXT,
+                    event TEXT NOT NULL,
+                    detail_json TEXT NOT NULL DEFAULT '{}'
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_workers_last_seen ON workers(last_seen_at);
+                CREATE INDEX IF NOT EXISTS idx_worker_events_ts ON worker_events(ts);
+                CREATE INDEX IF NOT EXISTS idx_worker_events_event_ts ON worker_events(event, ts);
+                """
+            )
+        except Exception:
+            pass
+
+        # ── 任務查詢加速（對 tasks_live_query_ms 直接有效）
+        try:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_mining_tasks_user_cycle_status_upd ON mining_tasks(user_id, cycle_id, status, updated_at)")
         except Exception:
             pass
         # mining_tasks lease columns (compute worker 必備)
@@ -753,9 +813,52 @@ def get_user_run_enabled(user_id: int) -> bool:
 
 
 def set_user_run_enabled(user_id: int, enabled: bool) -> None:
+    uid = int(user_id or 0)
+    if uid <= 0:
+        return
+
     conn = _conn()
     try:
-        conn.execute("UPDATE users SET run_enabled = ? WHERE id = ?", (1 if enabled else 0, int(user_id)))
+        conn.execute("UPDATE users SET run_enabled = ? WHERE id = ?", (1 if enabled else 0, uid))
+
+        # 關閉時：回收該 user 所有 running 任務，避免浪費算力
+        if not bool(enabled):
+            now = _now_iso()
+
+            # 舊 sqlite DB 可能沒有 lease 欄位：先嘗試補齊（不成功也不能炸）
+            try:
+                conn.execute("ALTER TABLE mining_tasks ADD COLUMN lease_id TEXT")
+            except Exception:
+                pass
+            try:
+                conn.execute("ALTER TABLE mining_tasks ADD COLUMN lease_worker_id TEXT")
+            except Exception:
+                pass
+            try:
+                conn.execute("ALTER TABLE mining_tasks ADD COLUMN lease_expires_at TEXT")
+            except Exception:
+                pass
+
+            # 優先用「帶 lease 清除」的回收；若欄位仍不存在則 fallback
+            try:
+                conn.execute(
+                    """
+                    UPDATE mining_tasks
+                    SET status='assigned',
+                        lease_id=NULL,
+                        lease_worker_id=NULL,
+                        lease_expires_at=NULL,
+                        updated_at=?
+                    WHERE user_id=? AND status='running'
+                    """,
+                    (now, uid),
+                )
+            except Exception:
+                conn.execute(
+                    "UPDATE mining_tasks SET status='assigned', updated_at=? WHERE user_id=? AND status='running'",
+                    (now, uid),
+                )
+
         conn.commit()
     finally:
         conn.close()
@@ -1936,11 +2039,176 @@ def worker_heartbeat(worker_id: str, user_id: int, task_id: int = None) -> None:
     finally:
         conn.close()
 
+def insert_worker_event(user_id: Optional[int], worker_id: Optional[str], event: str, detail: Any) -> None:
+    conn = _conn()
+    try:
+        conn.execute(
+            "INSERT INTO worker_events (ts, user_id, worker_id, event, detail_json) VALUES (?, ?, ?, ?, ?)",
+            (_now_iso(), int(user_id) if user_id is not None else None, str(worker_id or ""), str(event or ""), json.dumps(detail or {}, ensure_ascii=False)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
 def upsert_worker(worker_id: str, user_id: int, version: str, protocol: int, meta: dict) -> None:
-    # 由於沒有獨立的 workers 表，這裡將其記錄在 audit_logs 作為心跳註冊，保證最大化顯示節點狀態
-    write_audit_log(user_id, "worker_register", {
-        "worker_id": worker_id, "version": version, "protocol": protocol, "meta": meta
-    })
+    wid = str(worker_id or "").strip()
+    if not wid:
+        return
+
+    uid = int(user_id or 0)
+    now = _now_iso()
+
+    kind = "worker"
+    try:
+        if isinstance(meta, dict) and str(meta.get("kind") or "").strip():
+            kind = str(meta.get("kind")).strip()
+    except Exception:
+        kind = "worker"
+
+    conn = _conn()
+    try:
+        # 確保表存在（就算 init_db 沒跑到也不會炸）
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS workers (
+                    worker_id TEXT PRIMARY KEY,
+                    user_id INTEGER,
+                    kind TEXT NOT NULL DEFAULT 'worker',
+                    version TEXT NOT NULL DEFAULT '',
+                    protocol INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL,
+                    last_task_id INTEGER,
+                    tasks_done INTEGER NOT NULL DEFAULT 0,
+                    tasks_fail INTEGER NOT NULL DEFAULT 0,
+                    avg_cps REAL NOT NULL DEFAULT 0.0,
+                    last_error TEXT NOT NULL DEFAULT '',
+                    meta_json TEXT NOT NULL DEFAULT '{}'
+                );
+                CREATE TABLE IF NOT EXISTS worker_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts TEXT NOT NULL,
+                    user_id INTEGER,
+                    worker_id TEXT,
+                    event TEXT NOT NULL,
+                    detail_json TEXT NOT NULL DEFAULT '{}'
+                );
+                """
+            )
+        except Exception:
+            pass
+
+        conn.execute(
+            """
+            INSERT INTO workers (worker_id, user_id, kind, version, protocol, created_at, last_seen_at, meta_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(worker_id) DO UPDATE SET
+                user_id=excluded.user_id,
+                kind=excluded.kind,
+                version=excluded.version,
+                protocol=excluded.protocol,
+                last_seen_at=excluded.last_seen_at,
+                meta_json=excluded.meta_json
+            """,
+            (wid, uid if uid > 0 else None, str(kind), str(version or ""), int(protocol or 0), now, now, json.dumps(meta or {}, ensure_ascii=False)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+def _worker_mark_finish(worker_id: str, ok: bool, cps: float = 0.0, err: str = "", task_id: int = 0, owner_user_id: int = 0) -> None:
+    wid = str(worker_id or "").strip()
+    if not wid:
+        return
+    conn = _conn()
+    try:
+        now = _now_iso()
+        # 簡單 EMA 平滑 avg_cps（避免亂跳）
+        row = conn.execute("SELECT avg_cps, tasks_done, tasks_fail FROM workers WHERE worker_id=? LIMIT 1", (wid,)).fetchone()
+        prev = float(row["avg_cps"]) if row and row.get("avg_cps") is not None else 0.0
+        alpha = 0.25
+        new_avg = (alpha * float(cps)) + ((1 - alpha) * float(prev))
+
+        if bool(ok):
+            conn.execute(
+                "UPDATE workers SET last_seen_at=?, last_task_id=?, tasks_done=tasks_done+1, avg_cps=? , last_error='' WHERE worker_id=?",
+                (now, int(task_id) if task_id else None, float(new_avg), wid),
+            )
+            insert_worker_event(owner_user_id if owner_user_id > 0 else None, wid, "task_finish_ok", {"task_id": int(task_id), "cps": float(cps)})
+        else:
+            conn.execute(
+                "UPDATE workers SET last_seen_at=?, last_task_id=?, tasks_fail=tasks_fail+1, avg_cps=? , last_error=? WHERE worker_id=?",
+                (now, int(task_id) if task_id else None, float(new_avg), str(err or "")[:600], wid),
+            )
+            insert_worker_event(owner_user_id if owner_user_id > 0 else None, wid, "task_finish_fail", {"task_id": int(task_id), "error": str(err or "")[:600]})
+
+        conn.commit()
+    finally:
+        conn.close()
+
+def worker_touch_progress(worker_id: str, cps: float = 0.0, task_id: int = 0) -> None:
+    wid = str(worker_id or "").strip()
+    if not wid:
+        return
+    conn = _conn()
+    try:
+        now = _now_iso()
+        row = conn.execute("SELECT avg_cps FROM workers WHERE worker_id=? LIMIT 1", (wid,)).fetchone()
+        prev = float(row["avg_cps"]) if row and row.get("avg_cps") is not None else 0.0
+        alpha = 0.15
+        new_avg = (alpha * float(cps)) + ((1 - alpha) * float(prev))
+        conn.execute(
+            "UPDATE workers SET last_seen_at=?, last_task_id=?, avg_cps=? WHERE worker_id=?",
+            (now, int(task_id) if task_id else None, float(new_avg), wid),
+        )
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+def get_worker_stats_snapshot(window_seconds: int = 60) -> Dict[str, Any]:
+    win_s = int(max(10, min(3600, int(window_seconds or 60))))
+    now_dt = datetime.now(timezone.utc)
+    cutoff = (now_dt - timedelta(seconds=win_s)).isoformat()
+    active_cutoff = (now_dt - timedelta(seconds=30)).isoformat()
+
+    conn = _conn()
+    try:
+        total = conn.execute("SELECT COUNT(*) as c FROM workers").fetchone()
+        total_workers = int(total["c"] or 0) if total else 0
+
+        act = conn.execute("SELECT COUNT(*) as c FROM workers WHERE last_seen_at >= ?", (active_cutoff,)).fetchone()
+        active_workers = int(act["c"] or 0) if act else 0
+
+        okr = conn.execute("SELECT COUNT(*) as c FROM worker_events WHERE ts >= ? AND event = 'task_finish_ok'", (cutoff,)).fetchone()
+        far = conn.execute("SELECT COUNT(*) as c FROM worker_events WHERE ts >= ? AND event = 'task_finish_fail'", (cutoff,)).fetchone()
+        ok_n = int(okr["c"] or 0) if okr else 0
+        fail_n = int(far["c"] or 0) if far else 0
+
+        denom = float(max(1, ok_n + fail_n))
+        fail_rate = float(fail_n) / denom
+
+        tasks_per_min = float(ok_n) / (float(win_s) / 60.0)
+
+        rows = conn.execute(
+            "SELECT worker_id, kind, version, protocol, last_seen_at, last_task_id, tasks_done, tasks_fail, avg_cps, last_error FROM workers ORDER BY last_seen_at DESC LIMIT 200"
+        ).fetchall()
+        workers = [dict(r) for r in rows] if rows else []
+
+        return {
+            "window_seconds": win_s,
+            "active_workers": int(active_workers),
+            "total_workers": int(total_workers),
+            "tasks_ok": int(ok_n),
+            "tasks_fail": int(fail_n),
+            "tasks_per_min": float(tasks_per_min),
+            "fail_rate": float(fail_rate),
+            "workers": workers,
+        }
+    finally:
+        conn.close()
 
 def claim_next_task(user_id: int, worker_id: str) -> Optional[dict]:
     import uuid
@@ -1987,8 +2255,22 @@ def update_task_progress_with_lease(task_id: int, user_id: int, worker_id: str, 
             "UPDATE mining_tasks SET progress_json = ?, updated_at = ?, last_heartbeat = ? WHERE id = ? AND user_id = ? AND status = 'running'",
             (json.dumps(progress, ensure_ascii=False), _now_iso(), _now_iso(), task_id, user_id)
         )
+        ok = (cur.rowcount > 0)
         conn.commit()
-        return cur.rowcount > 0
+
+        # 統計：吞吐 cps / last_seen
+        try:
+            sp = 0.0
+            try:
+                sp = float((progress or {}).get("speed_cps") or 0.0)
+            except Exception:
+                sp = 0.0
+            if ok:
+                worker_touch_progress(worker_id=str(worker_id), cps=float(sp), task_id=int(task_id))
+        except Exception:
+            pass
+
+        return bool(ok)
     except Exception as e:
         print(f"[DB ERROR] update_task_progress_with_lease: {e}")
         return False
@@ -2033,6 +2315,18 @@ def finish_task_with_lease(task_id: int, user_id: int, worker_id: str, lease_id:
                 best_candidate_id = cid
                 
         conn.commit()
+
+        # 統計：完成任務
+        try:
+            cps = 0.0
+            try:
+                cps = float((final_progress or {}).get("speed_cps") or 0.0)
+            except Exception:
+                cps = 0.0
+            _worker_mark_finish(worker_id=str(worker_id), ok=True, cps=float(cps), err="", task_id=int(task_id), owner_user_id=int(user_id))
+        except Exception:
+            pass
+
         return best_candidate_id
     except Exception as e:
         import traceback

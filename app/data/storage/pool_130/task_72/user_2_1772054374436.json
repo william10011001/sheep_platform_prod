@@ -1,0 +1,26 @@
+{
+  "task_info": {
+    "id": 72,
+    "user_id": 2,
+    "pool_id": 130,
+    "cycle_id": 1,
+    "partition_idx": 4,
+    "num_partitions": 24,
+    "status": "queued",
+    "progress_json": "{\"phase\": \"queued\", \"phase_msg\": \"等待排程分配...\", \"queue_pos\": 1, \"queue_total\": 1, \"updated_at\": \"2026-02-25T21:19:14.390690+00:00\", \"combos_total\": 1536, \"combos_done\": 1255, \"best_score\": null, \"best_candidate_id\": null, \"best_any_score\": -27.630199999999995, \"best_any_metrics\": {\"total_return_pct\": 3.089, \"max_drawdown_pct\": 55.157, \"sharpe\": 0.475, \"trades\": 1346, \"win_rate_pct\": 59.584}, \"best_any_params\": {\"family\": \"PVO_Cross\", \"family_params\": {\"fast\": 10, \"slow\": 30, \"signal\": 8}, \"tp\": 0.012, \"sl\": 0.016, \"max_hold\": 240}, \"best_any_passed\": false, \"best_pass\": [], \"phase_progress\": 0.0, \"last_error\": null, \"elapsed_s\": 30.086, \"speed_cps\": 41.713618, \"eta_s\": 6.736}",
+    "last_heartbeat": "2026-02-25T21:19:14.393009+00:00",
+    "created_at": "2026-02-25T21:17:41.432799+00:00",
+    "updated_at": "2026-02-25T21:19:14.392997+00:00",
+    "family": "PVO_Cross",
+    "symbol": "BTC_USDT",
+    "timeframe_min": 30,
+    "years": 1,
+    "grid_spec_json": "{\"fast_min\": 6, \"fast_max\": 12, \"fast_step\": 2, \"slow_min\": 18, \"slow_max\": 30, \"slow_step\": 3, \"sig_min\": 6, \"sig_max\": 12, \"sig_step\": 2}",
+    "risk_spec_json": "{\"tp_min\": 0.3, \"tp_max\": 1.2, \"tp_step\": 0.3, \"sl_min\": 0.4, \"sl_max\": 1.6, \"sl_step\": 0.4, \"max_hold_min\": 30, \"max_hold_max\": 720, \"max_hold_step\": 30, \"fee_side\": 0.0002, \"slippage\": 0.0, \"worst_case\": true, \"reverse_mode\": false}",
+    "seed": 1586651724,
+    "pool_name": "PVO_Cross | BTC_USDT | 1m [BTC_USDT_30m]"
+  },
+  "timestamp": "2026-02-25T21:19:34.434971+00:00",
+  "best_pass_count": 0,
+  "candidates": []
+}
