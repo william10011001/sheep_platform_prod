@@ -1465,13 +1465,16 @@ def _style() -> None:
         unsafe_allow_html=True,
     )
 
-# [載入動畫] 完美整合 index.html 的載入動畫，並確保僅於系統初始載入時顯示一次，杜絕重複執行
+# [載入動畫] 完全使用 index.html，並加入 Streamlit iframe 全螢幕與隱藏修正
     st.components.v1.html(
         """
         <!doctype html>
         <html lang="zh-Hant">
         <head>
           <meta charset="utf-8" />
+          <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+          <title>羊肉爐挖礦分潤任務平台</title>
           <style>
             :root{
               --bg0:#050007;
@@ -1569,6 +1572,50 @@ def _style() -> None:
               will-change: transform;
             }
 
+            body.edit-mode #scene{ pointer-events:auto; }
+            body.edit-mode #scene *{ pointer-events:auto; }
+            body.edit-mode{ cursor: default; }
+
+            #editorHud{
+              position: absolute;
+              right: 18px;
+              top: 18px;
+              z-index: 10;
+              width: min(420px, calc(100vw - 36px));
+              padding: 14px 14px 12px 14px;
+              border: 1px solid rgba(255,0,60,0.55);
+              border-radius: 14px;
+              background: rgba(0,0,0,0.55);
+              box-shadow: 0 0 24px rgba(255,0,60,0.18);
+              backdrop-filter: blur(10px);
+              display: none;
+              user-select:none;
+              pointer-events:none;
+            }
+            body.edit-mode #editorHud{ display:block; }
+
+            #editorHud .t{
+              font-weight: 900;
+              letter-spacing: 0.08em;
+              color: rgba(255,0,60,0.95);
+              text-shadow: 0 0 10px rgba(255,0,60,0.35);
+              margin-bottom: 10px;
+              font-size: 12px;
+            }
+            #editorHud .b{
+              font-size: 12px;
+              line-height: 1.55;
+              color: rgba(255,255,255,0.85);
+            }
+            #editorHud .k{
+              color: rgba(247,147,26,0.95);
+              font-weight: 800;
+            }
+            #editorHud .id{
+              color: rgba(255,255,255,0.95);
+              font-weight: 900;
+            }
+
             .hud{
               position:absolute;
               left:26px;
@@ -1614,6 +1661,7 @@ def _style() -> None:
         <div id="loader" data-auto-remove="true" aria-label="Loading" role="status">
           <div class="grid-layer" aria-hidden="true"></div>
           <canvas id="fx" aria-hidden="true"></canvas>
+
           <svg id="scene" viewBox="0 0 1000 600" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
             <defs>
               <filter id="glowRed" x="-50%" y="-50%" width="200%" height="200%">
@@ -1662,6 +1710,7 @@ def _style() -> None:
                 <path d="M0 2 V28" stroke="rgba(255,0,60,0.8)" stroke-width="3" stroke-linecap="round"/>
                 <path d="M8 2 V28" stroke="rgba(255,0,60,0.8)" stroke-width="3" stroke-linecap="round"/>
               </g>
+
               <circle id="trashMouth" cx="0" cy="-6" r="2" fill="rgba(255,255,255,0.0)"/>
             </g>
 
@@ -1684,9 +1733,11 @@ def _style() -> None:
 
                 <g id="armRGroup" transform="translate(0 -38)">
                   <g id="armRRot" transform="rotate(-35)">
+
                     <g id="pickaxeHandle" transform="translate(0 0)"> 
                       <line x1="0" y1="0" x2="56" y2="0" stroke="url(#metalGrad)" stroke-width="10" stroke-linecap="round" />
-                      <path d="M34 -5 L34 5 M39 -5 L39 5 M44 -5 L44 5 M49 -5 L49 5" stroke="rgba(247,147,26,0.75)" stroke-width="2" stroke-linecap="round" filter="url(#glowOrange)"/>
+                      <path d="M34 -5 L34 5 M39 -5 L39 5 M44 -5 L44 5 M49 -5 L49 5"
+                            stroke="rgba(247,147,26,0.75)" stroke-width="2" stroke-linecap="round" filter="url(#glowOrange)"/>
                       <path d="M30 -10 C 26 -14, 24 -8, 28 -6" fill="none" stroke="rgba(255,255,255,0.35)" stroke-width="2" stroke-linecap="round"/>
                     </g>
 
@@ -1697,7 +1748,13 @@ def _style() -> None:
 
                     <g id="handR" transform="translate(56 0)">
                       <g id="handRInner" transform="scale(1)">
-                        <path d="M2 -6 C 9 -10, 18 -9, 21 -2 C 23 4, 20 11, 12 12 C 6 13, 1 8, 0 2 C -1 -3, -1 -4, 2 -6 Z" fill="rgba(0,0,0,0.55)" stroke="#ff003c" stroke-width="2.5" stroke-linejoin="round" filter="url(#glowRed)"/>
+                        <path d="M2 -6
+                                 C 9 -10, 18 -9, 21 -2
+                                 C 23 4, 20 11, 12 12
+                                 C 6 13, 1 8, 0 2
+                                 C -1 -3, -1 -4, 2 -6 Z"
+                              fill="rgba(0,0,0,0.55)" stroke="#ff003c" stroke-width="2.5"
+                              stroke-linejoin="round" filter="url(#glowRed)"/>
                         <path d="M10 -6 C 12 -12, 20 -11, 21 -5" fill="none" stroke="#ff003c" stroke-width="3" stroke-linecap="round" filter="url(#glowRed)"/>
                         <path d="M12 -2 C 14 -8, 22 -7, 23 -1" fill="none" stroke="#ff003c" stroke-width="3" stroke-linecap="round" filter="url(#glowRed)"/>
                         <path d="M12 2 C 14 -3, 22 -2, 23 4" fill="none" stroke="#ff003c" stroke-width="3" stroke-linecap="round" filter="url(#glowRed)"/>
@@ -1708,10 +1765,12 @@ def _style() -> None:
 
                     <g id="pickaxe" transform="translate(56 0)">
                       <line x1="57" y1="-22" x2="57" y2="22" stroke="#111" stroke-width="12" stroke-linecap="round" />
-                      <rect x="52" y="-10" width="10" height="20" rx="4" fill="#111" filter="url(#glowRed)"/>
+                      <rect x="52" y="-10" width="10" height="20" rx="4"
+                            fill="#111" filter="url(#glowRed)"/>
                       <path d="M57 -7 H82" fill="none" stroke="#ff003c" stroke-width="6" stroke-linecap="round" filter="url(#glowRed)"/>
                       <path d="M57 8 L80 16" fill="none" stroke="#ff003c" stroke-width="6" stroke-linecap="round" filter="url(#glowRed)"/>
                     </g>
+
                   </g>
                 </g>
               </g>
@@ -1738,214 +1797,1283 @@ def _style() -> None:
         </div>
 
         <script>
-        (function() {
+        (() => {
+          try {
             if (window.parent.__sheep_loader_played) {
-                if (window.frameElement) window.frameElement.style.display = 'none';
-                return;
+              if (window.frameElement) window.frameElement.style.display = 'none';
+              return;
             }
             window.parent.__sheep_loader_played = true;
 
             if (window.frameElement) {
-                window.frameElement.style.position = 'fixed';
-                window.frameElement.style.top = '0';
-                window.frameElement.style.left = '0';
-                window.frameElement.style.width = '100vw';
-                window.frameElement.style.height = '100vh';
-                window.frameElement.style.zIndex = '2147483647';
-                window.frameElement.style.border = 'none';
-                window.frameElement.style.background = 'transparent';
+              window.frameElement.style.position = 'fixed';
+              window.frameElement.style.top = '0';
+              window.frameElement.style.left = '0';
+              window.frameElement.style.width = '100vw';
+              window.frameElement.style.height = '100vh';
+              window.frameElement.style.zIndex = '2147483647';
+              window.frameElement.style.border = 'none';
+              window.frameElement.style.background = 'transparent';
+              setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
+            }
+          } catch(err) {
+            console.error('[Loader] Iframe breakout failed:', err);
+          }
+
+          const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+          const loader = document.getElementById('loader');
+          const svg = document.getElementById('scene');
+          const canvas = document.getElementById('fx');
+          const ctx = canvas.getContext('2d', { alpha: true });
+
+          const must = (id) => {
+            const n = document.getElementById(id);
+            if (!n) {
+              console.error('[LoaderAnim] Missing required element:', id);
+              throw new Error('[LoaderAnim] Missing required element: ' + id);
+            }
+            return n;
+          };
+
+          const el = {
+            group: must('miningGroup'),
+            stickRoot: must('stickRoot'),
+            armRot: must('armRRot'),
+            coin: must('coin'),
+            cursor: must('cursor'),
+            trash: must('trash'),
+            portalRing: must('portalRing'),
+            shock: must('shockwave'),
+            select: must('select'),
+            handInner: must('handRInner'),
+            hudText: must('hudText'),
+            hudPct: must('hudPct'),
+            progress: must('progressBar'),
+          };
+
+          const VB = { w: 1000, h: 600 };
+          const CONFIG = {
+            duration: 7200,
+            autoRemove: loader.dataset.autoRemove === 'true',
+            idleAfter: true,
+          };
+
+          const TL = Object.freeze({
+            tApproach0: 900,  tApproach1: 2000,
+            tGrab0: 2000,     tGrab1: 2600,
+            tDrag0: 2600,     tDrag1: 3800,
+            tRelease: 3800,
+            tLand: 4500,
+            tSwallow0: 4500,  tSwallow1: 5200,
+            tShock0: 5000,    tShock1: 5600,
+            tGrid0: 5400,     tGrid1: 6200,
+          });
+
+          const CALIB_STORAGE_KEY = 'loader_calib_preset_v1';
+
+          const CALIB_DEFAULT_PRESET = {
+            deleted_ids: [
+              'core_path_15',
+              'core_path_21','core_path_22','core_path_23','core_path_24','core_path_25','core_path_26',
+            ],
+            transforms: {
+              portalRing: 'rotate(195.46)',
+              shockwave: 'translate(500 470) scale(0.000)',
+              selectBox: 'translate(0.95 14.99) rotate(0.84) scale(1.0000 1.0000)',
+
+              core_line_14: 'translate(-2.94 2.56) rotate(0.00) scale(1.0000 1.0000)',
+              core_path_16: 'translate(-143.07 88.77) rotate(0.00) scale(1.0000 1.0000)',
+              core_line_17: 'translate(-9.20 1.09) rotate(0.00) scale(1.0000 1.0000)',
+              core_line_18: 'translate(-25.34 2.33) rotate(0.00) scale(1.0000 1.0000)',
+              core_line_19: 'translate(-12.59 40.59) rotate(321.35) scale(1.0000 1.0000)',
+              core_line_20: 'translate(-12.53 36.95) rotate(323.05) scale(1.0000 1.0000)',
+              core_line_27: 'translate(-17.44 6.57) rotate(329.68) scale(1.0000 1.0000)',
+              core_rect_28: 'translate(-35.63 -25.73) rotate(330.39) scale(1.0000 1.0000)',
+              core_path_29: 'translate(5.96 25.39) rotate(0.00) scale(1.0000 1.0000)',
+              core_path_30: 'translate(-108.52 7.70) rotate(-13.24) scale(1.0000 1.0000)',
+            },
+            created_svg: ''
+          };
+
+          let BASE_CORE_IDS = null;
+          let portalRingOffsetDeg = 0;
+
+          const ensureDrawLayer = () => {
+            const NS = 'http://www.w3.org/2000/svg';
+            let dl = document.getElementById('drawLayer');
+            if (!dl) {
+              dl = document.createElementNS(NS, 'g');
+              dl.setAttribute('id', 'drawLayer');
+              svg.appendChild(dl);
+            }
+            return dl;
+          };
+
+          const assignDeterministicCoreIds = () => {
+            let seq = 0;
+            const ids = [];
+            const nodes = svg.querySelectorAll('path,line,rect,circle,ellipse,polygon,polyline,text');
+            for (const n of nodes) {
+              if (n.closest('defs')) continue;
+              if (n.closest('#editorOverlay')) continue;
+              if (!n.id) {
+                const tag = (n.tagName || 'el').toLowerCase();
+                n.id = `core_${tag}_${(++seq)}`;
+                n.setAttribute('data-core', '1');
+              }
+              ids.push(n.id);
+            }
+            return ids;
+          };
+
+          const loadCalibPreset = () => {
+            try {
+              const raw = localStorage.getItem(CALIB_STORAGE_KEY);
+              if (!raw) return structuredClone(CALIB_DEFAULT_PRESET);
+
+              const obj = JSON.parse(raw);
+              if (!obj || typeof obj !== 'object') throw new Error('preset is not an object');
+
+              const preset = {
+                deleted_ids: Array.isArray(obj.deleted_ids) ? obj.deleted_ids : [],
+                transforms: (obj.transforms && typeof obj.transforms === 'object') ? obj.transforms : {},
+                created_svg: (typeof obj.created_svg === 'string') ? obj.created_svg : '',
+              };
+              return preset;
+            } catch (e) {
+              console.error('[Calib] load failed, fallback to default:', e);
+              return structuredClone(CALIB_DEFAULT_PRESET);
+            }
+          };
+
+          const saveCalibPreset = (preset) => {
+            try {
+              localStorage.setItem(CALIB_STORAGE_KEY, JSON.stringify(preset));
+              console.log('[Calib] Saved preset to localStorage:', preset);
+              return true;
+            } catch (e) {
+              console.error('[Calib] save failed:', e);
+              return false;
+            }
+          };
+
+          const parseRotateDeg = (s) => {
+            if (!s) return null;
+            const m = /rotate\(\s*([-\d.]+)/.exec(String(s));
+            return m ? parseFloat(m[1]) : null;
+          };
+
+          const applyCalibPreset = (preset) => {
+            try {
+              const ids = assignDeterministicCoreIds();
+              if (!BASE_CORE_IDS) BASE_CORE_IDS = ids.slice();
+
+              const dl = ensureDrawLayer();
+
+              const pr = parseRotateDeg(preset?.transforms?.portalRing);
+              if (Number.isFinite(pr)) portalRingOffsetDeg = pr;
+
+              for (const id of (preset.deleted_ids || [])) {
+                const n = document.getElementById(id);
+                if (n) n.remove();
+                else console.error('[Calib] delete id not found:', id);
+              }
+
+              for (const [id, tr] of Object.entries(preset.transforms || {})) {
+                const n = document.getElementById(id);
+                if (!n) { console.error('[Calib] transform id not found:', id); continue; }
+                if (!tr) n.removeAttribute('transform');
+                else n.setAttribute('transform', tr);
+              }
+
+              if (typeof preset.created_svg === 'string' && preset.created_svg.trim()) {
+                dl.innerHTML = preset.created_svg;
+              }
+
+              console.log('[Calib] Applied preset:', preset);
+            } catch (e) {
+              console.error('[Calib] apply failed:', e);
+              throw e;
+            }
+          };
+
+          const getDeletedTotalIds = () => {
+            if (!Array.isArray(BASE_CORE_IDS)) return [];
+            return BASE_CORE_IDS.filter(id => !document.getElementById(id));
+          };
+
+          const CALIB_ACTIVE = loadCalibPreset();
+          applyCalibPreset(CALIB_ACTIVE);
+
+          const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+          const lerp = (a, b, t) => a + (b - a) * t;
+          const mix2 = (p0, p1, t) => ({ x: lerp(p0.x, p1.x, t), y: lerp(p0.y, p1.y, t) });
+
+          const easeOutCubic = t => 1 - Math.pow(1 - t, 3);
+          const easeInCubic = t => t * t * t;
+          const easeInOutCubic = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+          const easeOutBack = t => {
+            const c1 = 1.70158;
+            const c3 = c1 + 1;
+            return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+          };
+          const easeInBack = t => {
+            const c1 = 1.70158;
+            const c3 = c1 + 1;
+            return c3 * t * t * t - c1 * t * t;
+          };
+
+          const seg = (t, a, b) => clamp((t - a) / (b - a), 0, 1);
+          const rad = d => d * Math.PI / 180;
+
+          const bez3 = (p0, p1, p2, p3, t) => {
+            const u = 1 - t;
+            const tt = t * t;
+            const uu = u * u;
+            const uuu = uu * u;
+            const ttt = tt * t;
+            return {
+              x: uuu * p0.x + 3 * uu * t * p1.x + 3 * u * tt * p2.x + ttt * p3.x,
+              y: uuu * p0.y + 3 * uu * t * p1.y + 3 * u * tt * p2.y + ttt * p3.y,
+            };
+          };
+
+          const geom = {
+            base: { x: 500, y: 280 },
+            stick: { x: -60, y: 25 },
+            coinLocal: { x: 50, y: -10 },
+            coinR: 28,
+            grabOffset: { x: -42, y: 36 },
+            trash: { x: 500, y: 470 },
+            mouthLocal: { x: 0, y: -6 },
+          };
+
+          let map = { s: 1, ox: 0, oy: 0, dpr: 1 };
+          function resize() {
+            const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+            map.dpr = dpr;
+            canvas.width = Math.floor(window.innerWidth * dpr);
+            canvas.height = Math.floor(window.innerHeight * dpr);
+            canvas.style.width = window.innerWidth + 'px';
+            canvas.style.height = window.innerHeight + 'px';
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+            const r = svg.getBoundingClientRect();
+            const s = Math.min(r.width / VB.w, r.height / VB.h);
+            const ox = r.left + (r.width - VB.w * s) / 2;
+            const oy = r.top + (r.height - VB.h * s) / 2;
+            map.s = s; map.ox = ox; map.oy = oy;
+          }
+          window.addEventListener('resize', resize, { passive: true });
+          resize();
+
+          const particles = [];
+          function spawnSparks(worldX, worldY, power = 1) {
+            const count = Math.floor(12 + 10 * power);
+            for (let i = 0; i < count; i++) {
+              const a = rad(-40 + Math.random() * 80);
+              const sp = 380 + Math.random() * 520 * power;
+              const life = 0.55 + Math.random() * 0.25;
+              particles.push({
+                x: worldX + (Math.random() * 2 - 1) * 4,
+                y: worldY + (Math.random() * 2 - 1) * 4,
+                vx: Math.cos(a) * sp,
+                vy: Math.sin(a) * sp - 120,
+                life,
+                max: life,
+                size: 1.2 + Math.random() * 1.8,
+              });
+            }
+          }
+          function drawParticles(dt) {
+            ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+            if (!particles.length) return;
+
+            const g = 1200;
+            for (let i = particles.length - 1; i >= 0; i--) {
+              const p = particles[i];
+              p.vy += g * dt;
+              p.x += p.vx * dt;
+              p.y += p.vy * dt;
+              p.life -= dt;
+              if (p.life <= 0) { particles.splice(i, 1); continue; }
+
+              const alpha = clamp(p.life / p.max, 0, 1);
+              const px = p.x * map.s + map.ox;
+              const py = p.y * map.s + map.oy;
+
+              ctx.globalAlpha = alpha;
+              ctx.beginPath();
+              ctx.fillStyle = 'rgba(247,147,26,0.95)';
+              ctx.arc(px, py, p.size, 0, Math.PI * 2);
+              ctx.fill();
+
+              ctx.globalAlpha = alpha * 0.6;
+              ctx.fillStyle = 'rgba(255,255,255,0.9)';
+              ctx.beginPath();
+              ctx.arc(px, py, p.size * 0.45, 0, Math.PI * 2);
+              ctx.fill();
+            }
+            ctx.globalAlpha = 1;
+          }
+
+          let running = true;
+          let start = performance.now();
+          let last = start;
+
+          let groupPos = { ...geom.base };
+          let groupVel = { x: 0, y: 0 };
+          let groupRot = 0;
+          let groupScale = 1;
+          let groupOpacity = 1;
+
+          let cursorPos = { x: 1040, y: 80 };
+          let cursorOpacity = 0;
+          let cursorScale = 1.1;
+
+          let trashOpacity = 0;
+          let trashScale = 0.1;
+
+          let shockOpacity = 0;
+          let shockScale = 0;
+
+          let hitPulse = 0;
+          let shake = 0;
+
+          let impactedThisCycle = false;
+          let lastCycle = -1;
+
+          let releaseInit = false;
+          let landed = false;
+
+          function setTransform(elm, x, y, rDeg = 0, s = 1) {
+            elm.setAttribute('transform', `translate(${x.toFixed(2)} ${y.toFixed(2)}) rotate(${rDeg.toFixed(2)}) scale(${s.toFixed(4)})`);
+          }
+          function setOpacity(elm, o) {
+            elm.setAttribute('opacity', o.toFixed(4));
+          }
+
+          function miningArmAngle(phase) {
+            const impactAt = 0.58;
+            const up = -58;
+            const down = 7;
+
+            if (phase < impactAt) {
+              const t = easeInCubic(phase / impactAt);
+              return lerp(up, down, t);
+            }
+            const t = easeOutCubic((phase - impactAt) / (1 - impactAt));
+            return lerp(down, up, t);
+          }
+
+          function worldImpactPoint(gx, gy) {
+            return {
+              x: gx + (geom.coinLocal.x - geom.coinR + 3),
+              y: gy + geom.coinLocal.y,
+            };
+          }
+
+          function updateHUD(t) {
+            let pct;
+            if (t < 2000) pct = lerp(8, 34, easeOutCubic(t / 2000));
+            else if (t < 3800) pct = lerp(34, 72, easeInOutCubic((t - 2000) / 1800));
+            else if (t < 5200) pct = lerp(72, 92, easeInOutCubic((t - 3800) / 1400));
+            else if (t < CONFIG.duration) pct = lerp(92, 100, easeOutCubic((t - 5200) / (CONFIG.duration - 5200)));
+            else pct = 100;
+
+            const pctInt = Math.round(pct);
+            el.hudPct.textContent = pctInt + '%';
+            el.progress.style.width = pct + '%';
+
+            if (t < 2000) el.hudText.textContent = '載入緩存...';
+            else if (t < 3800) el.hudText.textContent = '鼠標覆蓋...';
+            else if (t < 5200) el.hudText.textContent = '載入模型...';
+            else el.hudText.textContent = '載入量化參數組合...';
+          }
+
+          function update(t, dt) {
+            const {
+              tApproach0, tApproach1,
+              tGrab0, tGrab1,
+              tDrag0, tDrag1,
+              tRelease,
+              tLand,
+              tSwallow0, tSwallow1,
+              tShock0, tShock1,
+              tGrid0, tGrid1,
+            } = TL;
+
+            const pOff = { x: 1040, y: 80 };
+            const pGrab = { x: 560, y: 220 };
+            const pDrag = { x: 540, y: 418 };
+            const pFlick = { x: 840, y: 250 };
+
+            if (t < tApproach0) {
+              cursorPos = { ...pOff };
+              cursorOpacity = 0;
+            } else if (t < tApproach1) {
+              const u = easeOutCubic(seg(t, tApproach0, tApproach1));
+              cursorPos = bez3(pOff, { x: 900, y: 120 }, { x: 700, y: 110 }, pGrab, u);
+              cursorOpacity = u;
+            } else if (t < tDrag1) {
+              const dragU = easeInOutCubic(seg(t, tDrag0, tDrag1));
+              const grabHold = easeInOutCubic(seg(t, tGrab0, tGrab1));
+              const pHold = mix2(pGrab, { x: 548, y: 232 }, grabHold * 0.35);
+              cursorPos = bez3(pHold, { x: 740, y: 280 }, { x: 620, y: 360 }, pDrag, dragU);
+              cursorOpacity = 1;
+            } else {
+              const u = easeOutCubic(seg(t, tRelease, tRelease + 700));
+              cursorPos = bez3(pDrag, { x: 620, y: 410 }, { x: 760, y: 300 }, pFlick, u);
+              cursorOpacity = 1 - u;
             }
 
-            const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-            const loader = document.getElementById('loader');
-            const svg = document.getElementById('scene');
-            const canvas = document.getElementById('fx');
-            const ctx = canvas.getContext('2d', { alpha: true });
+            const click = seg(t, tGrab0 + 80, tGrab1 - 120);
+            const clickEase = easeInOutCubic(click);
+            cursorScale = 1.1 - 0.22 * clickEase;
 
-            const must = (id) => document.getElementById(id);
-            const el = {
-              group: must('miningGroup'), stickRoot: must('stickRoot'), armRot: must('armRRot'),
-              coin: must('coin'), cursor: must('cursor'), trash: must('trash'), portalRing: must('portalRing'),
-              shock: must('shockwave'), select: must('select'), handInner: must('handRInner'),
-              hudText: must('hudText'), hudPct: must('hudPct'), progress: must('progressBar'),
+            const isMiningNow = t < tGrab0;
+            const isGrabbedNow = (t >= tGrab0 && t < tRelease);
+
+            const squeezeFromClick = isGrabbedNow ? (0.14 * clickEase) : 0;
+            const squeezeFromHit = isMiningNow ? (0.10 * Math.max(0, hitPulse)) : 0;
+
+            const handSX = 1 - clamp(squeezeFromClick + squeezeFromHit, 0, 0.18);
+            const handSY = 1 + clamp((squeezeFromClick * 0.35) + (squeezeFromHit * 0.25), 0, 0.10);
+
+            el.handInner.setAttribute('transform', `scale(${handSX.toFixed(3)} ${handSY.toFixed(3)})`);
+            el.cursor.setAttribute('transform', `translate(${cursorPos.x.toFixed(2)} ${cursorPos.y.toFixed(2)}) scale(${cursorScale.toFixed(3)})`);
+            setOpacity(el.cursor, cursorOpacity);
+
+            if (t < 2400) {
+              trashOpacity = 0;
+              trashScale = 0.1;
+            } else {
+              const u = easeOutBack(seg(t, 2400, 3050));
+              trashOpacity = clamp(u, 0, 1);
+              trashScale = lerp(0.2, 1.0, u);
+            }
+            el.trash.setAttribute('transform', `translate(${geom.trash.x} ${geom.trash.y}) scale(${trashScale.toFixed(3)})`);
+            setOpacity(el.trash, trashOpacity);
+
+            const ringRot = (portalRingOffsetDeg + (t * 0.22)) % 360;
+            el.portalRing.setAttribute('transform', `rotate(${ringRot.toFixed(2)})`);
+
+            const isMining = t < tGrab0;
+            const isGrabbed = t >= tGrab0 && t < tRelease;
+            const isFlying = t >= tRelease && t < tLand;
+            const isSwallow = t >= tSwallow0 && t < tSwallow1;
+
+            const selIn = easeOutCubic(seg(t, tGrab0, tGrab1));
+            const selOut = easeOutCubic(seg(t, tRelease, tRelease + 260));
+            const selOpacity = clamp(selIn * (1 - selOut), 0, 1);
+            setOpacity(el.select, selOpacity);
+
+            let armAngle = -40;
+
+            if (isMining) {
+              const bob = Math.sin(t * 0.006) * 3;
+              const sway = Math.sin(t * 0.003) * 2;
+              groupPos = { x: geom.base.x + sway, y: geom.base.y + bob };
+              groupVel = { x: 0, y: 0 };
+              groupScale = 1;
+              groupOpacity = 1;
+              groupRot = Math.sin(t * 0.003) * 2;
+
+              const cycle = 520;
+              const phase = (t % cycle) / cycle;
+              armAngle = miningArmAngle(phase);
+
+              const ci = Math.floor(t / cycle);
+              if (ci !== lastCycle) { lastCycle = ci; impactedThisCycle = false; }
+              if (!impactedThisCycle && phase >= 0.58) {
+                impactedThisCycle = true;
+                hitPulse = 1;
+                shake = Math.max(shake, 0.65);
+                const ip = worldImpactPoint(groupPos.x, groupPos.y);
+                spawnSparks(ip.x, ip.y, 0.9);
+              }
+
+            } else if (isGrabbed) {
+              const grip = easeInOutCubic(seg(t, tGrab0, tGrab1));
+              const target = { x: cursorPos.x + geom.grabOffset.x, y: cursorPos.y + geom.grabOffset.y };
+
+              const k = lerp(0, 52, grip);
+              const damp = lerp(18, 12, grip);
+
+              groupVel.x += (target.x - groupPos.x) * k * dt;
+              groupVel.y += (target.y - groupPos.y) * k * dt;
+              const decay = Math.exp(-damp * dt);
+              groupVel.x *= decay;
+              groupVel.y *= decay;
+              groupPos.x += groupVel.x * dt;
+              groupPos.y += groupVel.y * dt;
+
+              groupRot = clamp((-groupVel.x * 0.015) + (groupVel.y * 0.010), -18, 18);
+              groupScale = lerp(1.0, 0.92, grip);
+              groupOpacity = 1;
+
+              armAngle = lerp(7, -18, grip) + clamp(-groupVel.x * 0.03, -14, 14);
+
+            } else if (isFlying) {
+              if (!releaseInit) {
+                releaseInit = true;
+                landed = false;
+
+                const g = 2400;
+                const dtFlight = (tLand - tRelease) / 1000;
+                const target = { x: geom.trash.x, y: geom.trash.y + geom.mouthLocal.y };
+
+                const vx = (target.x - groupPos.x) / dtFlight;
+                const vy = (target.y - groupPos.y - 0.5 * g * dtFlight * dtFlight) / dtFlight;
+
+                groupVel.x = vx;
+                groupVel.y = vy;
+              }
+
+              const g = 2400;
+              groupVel.y += g * dt;
+              groupPos.x += groupVel.x * dt;
+              groupPos.y += groupVel.y * dt;
+
+              groupRot += clamp(groupVel.x * 0.0009, -1.2, 1.2) * 180 * dt;
+              groupScale = 0.92;
+              groupOpacity = 1;
+              armAngle = -10 + clamp(groupVel.y * 0.01, -25, 25);
+
+            } else if (isSwallow) {
+              if (!landed) {
+                landed = true;
+                shake = Math.max(shake, 1.2);
+                spawnSparks(geom.trash.x, geom.trash.y - 10, 1.6);
+              }
+
+              groupPos = { x: geom.trash.x, y: geom.trash.y + geom.mouthLocal.y };
+              const u = easeInBack(seg(t, tSwallow0, tSwallow1));
+              groupScale = lerp(0.92, 0.02, u);
+              groupRot = lerp(groupRot, 540, easeOutCubic(u));
+              groupOpacity = 1 - u;
+
+              armAngle = lerp(-10, 25, easeInOutCubic(seg(t, tSwallow0, (tSwallow0 + tSwallow1) / 2)));
+
+            } else {
+              groupOpacity = 0;
+              groupScale = 0.02;
+            }
+
+            hitPulse = Math.max(0, hitPulse - dt * 3.2);
+            const coinSpin = (t * 0.35) % 360;
+            const coinScale = 1 + hitPulse * 0.08;
+            const coinTilt = Math.sin(t * 0.01) * 6 + hitPulse * 18;
+            el.coin.setAttribute('transform', `translate(${geom.coinLocal.x} ${geom.coinLocal.y}) rotate(${(coinSpin + coinTilt).toFixed(2)}) scale(${coinScale.toFixed(3)})`);
+
+            const micro = isMining ? Math.sin(t * 0.012) * 1.2 : clamp(groupVel.x * -0.04, -4, 4);
+            el.stickRoot.setAttribute('transform', `translate(${geom.stick.x} ${geom.stick.y}) rotate(${micro.toFixed(2)})`);
+
+            el.armRot.setAttribute('transform', `rotate(${armAngle.toFixed(2)})`);
+
+            setTransform(el.group, groupPos.x, groupPos.y, groupRot, groupScale);
+            setOpacity(el.group, groupOpacity);
+
+            if (t < tShock0) {
+              shockOpacity = 0;
+              shockScale = 0;
+            } else {
+              const u = seg(t, tShock0, tShock1);
+              shockOpacity = 1 - u;
+              shockScale = lerp(0.2, 46, easeOutCubic(u));
+            }
+
+            el.shock.setAttribute('transform', `translate(500 470) scale(${shockScale.toFixed(3)})`);
+            setOpacity(el.shock, shockOpacity);
+
+            const gridA = easeOutCubic(seg(t, tGrid0, tGrid1));
+            loader.style.setProperty('--gridA', gridA.toFixed(3));
+
+            const flash = (t >= tShock0 && t <= tShock0 + 220) ? (1 - seg(t, tShock0, tShock0 + 220)) : 0;
+            loader.style.setProperty('--flash', flash.toFixed(3));
+
+            shake = Math.max(0, shake - dt * 2.6);
+            const shakeX = (Math.random() * 2 - 1) * shake * 6;
+            const shakeY = (Math.random() * 2 - 1) * shake * 5;
+            svg.style.transform = `translate(${shakeX.toFixed(2)}px, ${shakeY.toFixed(2)}px)`;
+
+            updateHUD(t);
+            if (!reduceMotion) drawParticles(dt);
+
+            if (CONFIG.autoRemove && t >= CONFIG.duration) {
+              window.LoaderAnim.finish();
+            }
+          }
+
+          function loop(now) {
+            if (!running) return;
+            const t = now - start;
+            const dt = Math.min(0.033, Math.max(0.001, (now - last) / 1000));
+            last = now;
+
+            if (reduceMotion) {
+              updateHUD(Math.min(t, CONFIG.duration));
+              loader.style.setProperty('--gridA', '1');
+              el.cursor.setAttribute('opacity', '0');
+              el.trash.setAttribute('opacity', '1');
+              el.trash.setAttribute('transform', `translate(${geom.trash.x} ${geom.trash.y}) scale(1)`);
+              setTransform(el.group, geom.base.x, geom.base.y, 0, 1);
+              setOpacity(el.group, 1);
+              el.armRot.setAttribute('transform', `rotate(7)`);
+              return;
+            }
+
+            update(t, dt);
+
+            if (t >= CONFIG.duration) {
+              loader.style.setProperty('--gridA', '1');
+              if (!CONFIG.idleAfter) running = false;
+            }
+
+            requestAnimationFrame(loop);
+          }
+
+          window.LoaderAnim = {
+            replay() {
+              running = true;
+              start = performance.now();
+              last = start;
+              releaseInit = false;
+              landed = false;
+              hitPulse = 0;
+              shake = 0;
+              impactedThisCycle = false;
+              lastCycle = -1;
+              particles.length = 0;
+              groupPos = { ...geom.base };
+              groupVel = { x: 0, y: 0 };
+              groupRot = 0;
+              groupScale = 1;
+              groupOpacity = 1;
+              cursorOpacity = 0;
+              loader.classList.remove('is-fading');
+              loader.style.opacity = '1';
+              requestAnimationFrame(loop);
+            },
+            finish({ immediate = false } = {}) {
+              if (immediate) {
+                running = false;
+                loader.remove();
+                if (window.frameElement) window.frameElement.style.display = 'none';
+                return;
+              }
+              loader.classList.add('is-fading');
+              running = false;
+              setTimeout(() => {
+                  loader.remove();
+                  if (window.frameElement) window.frameElement.style.display = 'none';
+              }, 430);
+            }
+          };
+
+          let editMode = false;
+          let pausedTms = 0;
+
+          const Editor = (() => {
+            const NS = 'http://www.w3.org/2000/svg';
+            const body = document.body;
+
+            let EDIT_NODES = [];
+            let EDIT_NODE_BY_ID = new Map();
+
+            const isCoreDrawable = (n) => {
+              if (!n || !n.tagName) return false;
+              const tag = n.tagName.toLowerCase();
+              return (
+                tag === 'path' || tag === 'line' || tag === 'rect' || tag === 'circle' ||
+                tag === 'ellipse' || tag === 'polygon' || tag === 'polyline' || tag === 'text'
+              );
             };
 
-            const VB = { w: 1000, h: 600 };
-            const CONFIG = { duration: 7200, autoRemove: true, idleAfter: true };
-            const TL = Object.freeze({
-              tApproach0: 900,  tApproach1: 2000, tGrab0: 2000,     tGrab1: 2600,
-              tDrag0: 2600,     tDrag1: 3800,     tRelease: 3800,   tLand: 4500,
-              tSwallow0: 4500,  tSwallow1: 5200,  tShock0: 5000,    tShock1: 5600,
-              tGrid0: 5400,     tGrid1: 6200,
-            });
-
-            const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
-            const lerp = (a, b, t) => a + (b - a) * t;
-            const mix2 = (p0, p1, t) => ({ x: lerp(p0.x, p1.x, t), y: lerp(p0.y, p1.y, t) });
-            const easeOutCubic = t => 1 - Math.pow(1 - t, 3);
-            const easeInCubic = t => t * t * t;
-            const easeInOutCubic = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-            const easeOutBack = t => { const c1 = 1.70158; const c3 = c1 + 1; return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2); };
-            const easeInBack = t => { const c1 = 1.70158; const c3 = c1 + 1; return c3 * t * t * t - c1 * t * t; };
-            const seg = (t, a, b) => clamp((t - a) / (b - a), 0, 1);
-            const rad = d => d * Math.PI / 180;
-            const bez3 = (p0, p1, p2, p3, t) => {
-              const u = 1 - t, tt = t * t, uu = u * u, uuu = uu * u, ttt = tt * t;
-              return { x: uuu * p0.x + 3 * uu * t * p1.x + 3 * u * tt * p2.x + ttt * p3.x, y: uuu * p0.y + 3 * uu * t * p1.y + 3 * u * tt * p2.y + ttt * p3.y };
+            const ensureIdsForCore = () => {
+              let seq = 0;
+              const nodes = svg.querySelectorAll('path,line,rect,circle,ellipse,polygon,polyline,text');
+              for (const n of nodes) {
+                if (n.closest('defs')) continue;
+                if (n.closest('#editorOverlay')) continue;
+                if (!n.id) {
+                  const tag = (n.tagName || 'el').toLowerCase();
+                  n.id = `core_${tag}_${(++seq)}`;
+                  n.setAttribute('data-core', '1');
+                }
+              }
             };
 
-            const geom = { base: { x: 500, y: 280 }, stick: { x: -60, y: 25 }, coinLocal: { x: 50, y: -10 }, coinR: 28, grabOffset: { x: -42, y: 36 }, trash: { x: 500, y: 470 }, mouthLocal: { x: 0, y: -6 } };
+            const indexEditableNodes = () => {
+              ensureIdsForCore();
+              EDIT_NODES = [];
+              EDIT_NODE_BY_ID = new Map();
 
-            let map = { s: 1, ox: 0, oy: 0, dpr: 1 };
-            function resize() {
-              const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
-              map.dpr = dpr; canvas.width = Math.floor(window.innerWidth * dpr); canvas.height = Math.floor(window.innerHeight * dpr);
-              canvas.style.width = window.innerWidth + 'px'; canvas.style.height = window.innerHeight + 'px';
-              ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-              const r = svg.getBoundingClientRect(); const s = Math.min(r.width / VB.w, r.height / VB.h);
-              map.s = s; map.ox = r.left + (r.width - VB.w * s) / 2; map.oy = r.top + (r.height - VB.h * s) / 2;
-            }
-            window.addEventListener('resize', resize, { passive: true }); resize();
-
-            const particles = [];
-            function spawnSparks(worldX, worldY, power = 1) {
-              const count = Math.floor(12 + 10 * power);
-              for (let i = 0; i < count; i++) {
-                const a = rad(-40 + Math.random() * 80), sp = 380 + Math.random() * 520 * power, life = 0.55 + Math.random() * 0.25;
-                particles.push({ x: worldX + (Math.random() * 2 - 1) * 4, y: worldY + (Math.random() * 2 - 1) * 4, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 120, life, max: life, size: 1.2 + Math.random() * 1.8 });
+              const nodes = svg.querySelectorAll('path,line,rect,circle,ellipse,polygon,polyline,text');
+              for (const n of nodes) {
+                if (n.closest('defs')) continue;
+                if (n.closest('#editorOverlay')) continue;
+                if (!n.id) continue;
+                EDIT_NODES.push(n);
+                EDIT_NODE_BY_ID.set(n.id, n);
               }
-            }
-            function drawParticles(dt) {
-              ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
-              if (!particles.length) return;
-              const g = 1200;
-              for (let i = particles.length - 1; i >= 0; i--) {
-                const p = particles[i]; p.vy += g * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
-                if (p.life <= 0) { particles.splice(i, 1); continue; }
-                const alpha = clamp(p.life / p.max, 0, 1), px = p.x * map.s + map.ox, py = p.y * map.s + map.oy;
-                ctx.globalAlpha = alpha; ctx.beginPath(); ctx.fillStyle = 'rgba(247,147,26,0.95)'; ctx.arc(px, py, p.size, 0, Math.PI * 2); ctx.fill();
-                ctx.globalAlpha = alpha * 0.6; ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.beginPath(); ctx.arc(px, py, p.size * 0.45, 0, Math.PI * 2); ctx.fill();
+            };
+
+            let hud = null;
+            let drawLayer = null;
+            let overlay = null;
+            let bboxRect = null;
+            let pivotDot = null;
+
+            let selected = null;
+            let drag = null;
+            let lastP = { x: 0, y: 0 };
+            let lineMode = false;
+            let lineStart = null;
+
+            let uidSeq = 0;
+            let deletedIds = new Set(); 
+
+            const hardErr = (msg, extra) => {
+              console.error('[LoaderEditor]', msg, extra || '');
+            };
+
+            const hardAssert = (cond, msg, extra) => {
+              if (!cond) {
+                hardErr(msg, extra);
+                throw new Error('[LoaderEditor] ' + msg);
               }
-              ctx.globalAlpha = 1;
-            }
+            };
 
-            let running = true, start = performance.now(), last = start;
-            let groupPos = { ...geom.base }, groupVel = { x: 0, y: 0 }, groupRot = 0, groupScale = 1, groupOpacity = 1;
-            let cursorPos = { x: 1040, y: 80 }, cursorOpacity = 0, cursorScale = 1.1;
-            let trashOpacity = 0, trashScale = 0.1, shockOpacity = 0, shockScale = 0, hitPulse = 0, shake = 0;
-            let impactedThisCycle = false, lastCycle = -1, releaseInit = false, landed = false;
+            const ensureHud = () => {
+              if (hud) return hud;
+              hud = document.createElement('div');
+              hud.id = 'editorHud';
+              hud.innerHTML = `
+                <div class="t">編輯模式</div>
+                <div class="b"></div>
+              `;
+              loader.appendChild(hud);
+              return hud;
+            };
 
-            function setTransform(elm, x, y, rDeg = 0, s = 1) { elm.setAttribute('transform', `translate(${x.toFixed(2)} ${y.toFixed(2)}) rotate(${rDeg.toFixed(2)}) scale(${s.toFixed(4)})`); }
-            function setOpacity(elm, o) { elm.setAttribute('opacity', o.toFixed(4)); }
-            function miningArmAngle(phase) {
-              const impactAt = 0.58, up = -58, down = 7;
-              if (phase < impactAt) return lerp(up, down, easeInCubic(phase / impactAt));
-              return lerp(down, up, easeOutCubic((phase - impactAt) / (1 - impactAt)));
-            }
+            const ensureSvgLayers = () => {
+              drawLayer = document.getElementById('drawLayer');
+              if (!drawLayer) {
+                drawLayer = document.createElementNS(NS, 'g');
+                drawLayer.setAttribute('id', 'drawLayer');
+                svg.appendChild(drawLayer);
+              }
 
-            function updateHUD(t) {
-              let pct;
-              if (t < 2000) pct = lerp(8, 34, easeOutCubic(t / 2000));
-              else if (t < 3800) pct = lerp(34, 72, easeInOutCubic((t - 2000) / 1800));
-              else if (t < 5200) pct = lerp(72, 92, easeInOutCubic((t - 3800) / 1400));
-              else if (t < CONFIG.duration) pct = lerp(92, 100, easeOutCubic((t - 5200) / (CONFIG.duration - 5200)));
-              else pct = 100;
-              el.hudPct.textContent = Math.round(pct) + '%';
-              el.progress.style.width = pct + '%';
-              if (t < 2000) el.hudText.textContent = '載入緩存...'; else if (t < 3800) el.hudText.textContent = '鼠標覆蓋...'; else if (t < 5200) el.hudText.textContent = '載入模型...'; else el.hudText.textContent = '載入量化參數組合...';
-            }
+              overlay = document.getElementById('editorOverlay');
+              if (!overlay) {
+                overlay = document.createElementNS(NS, 'g');
+                overlay.setAttribute('id', 'editorOverlay');
+                overlay.setAttribute('opacity', '0');
+                overlay.setAttribute('pointer-events', 'none'); 
 
-            function update(t, dt) {
-              const { tApproach0, tApproach1, tGrab0, tGrab1, tDrag0, tDrag1, tRelease, tLand, tSwallow0, tSwallow1, tShock0, tShock1, tGrid0, tGrid1 } = TL;
-              const pOff = { x: 1040, y: 80 }, pGrab = { x: 560, y: 220 }, pDrag = { x: 540, y: 418 }, pFlick = { x: 840, y: 250 };
+                bboxRect = document.createElementNS(NS, 'rect');
+                bboxRect.setAttribute('id', 'editorBBox');
+                bboxRect.setAttribute('fill', 'rgba(255,0,60,0.06)');
+                bboxRect.setAttribute('stroke', '#ff003c');
+                bboxRect.setAttribute('stroke-width', '2');
+                bboxRect.setAttribute('rx', '10');
+                bboxRect.setAttribute('filter', 'url(#glowRed)');
 
-              if (t < tApproach0) { cursorPos = { ...pOff }; cursorOpacity = 0; }
-              else if (t < tApproach1) { const u = easeOutCubic(seg(t, tApproach0, tApproach1)); cursorPos = bez3(pOff, { x: 900, y: 120 }, { x: 700, y: 110 }, pGrab, u); cursorOpacity = u; }
-              else if (t < tDrag1) { const dragU = easeInOutCubic(seg(t, tDrag0, tDrag1)), grabHold = easeInOutCubic(seg(t, tGrab0, tGrab1)), pHold = mix2(pGrab, { x: 548, y: 232 }, grabHold * 0.35); cursorPos = bez3(pHold, { x: 740, y: 280 }, { x: 620, y: 360 }, pDrag, dragU); cursorOpacity = 1; }
-              else { const u = easeOutCubic(seg(t, tRelease, tRelease + 700)); cursorPos = bez3(pDrag, { x: 620, y: 410 }, { x: 760, y: 300 }, pFlick, u); cursorOpacity = 1 - u; }
+                pivotDot = document.createElementNS(NS, 'circle');
+                pivotDot.setAttribute('id', 'editorPivot');
+                pivotDot.setAttribute('r', '4');
+                pivotDot.setAttribute('fill', 'rgba(247,147,26,0.95)');
+                pivotDot.setAttribute('filter', 'url(#glowOrange)');
 
-              const clickEase = easeInOutCubic(seg(t, tGrab0 + 80, tGrab1 - 120)); cursorScale = 1.1 - 0.22 * clickEase;
-              const squeezeFromHit = (t < tGrab0) ? (0.10 * Math.max(0, hitPulse)) : 0;
-              const handSX = 1 - clamp(((t >= tGrab0 && t < tRelease) ? (0.14 * clickEase) : 0) + squeezeFromHit, 0, 0.18);
-              const handSY = 1 + clamp((((t >= tGrab0 && t < tRelease) ? (0.14 * clickEase) : 0) * 0.35) + (squeezeFromHit * 0.25), 0, 0.10);
-              el.handInner.setAttribute('transform', `scale(${handSX.toFixed(3)} ${handSY.toFixed(3)})`);
-              el.cursor.setAttribute('transform', `translate(${cursorPos.x.toFixed(2)} ${cursorPos.y.toFixed(2)}) scale(${cursorScale.toFixed(3)})`);
-              setOpacity(el.cursor, cursorOpacity);
+                overlay.appendChild(bboxRect);
+                overlay.appendChild(pivotDot);
+                svg.appendChild(overlay);
+              } else {
+                bboxRect = document.getElementById('editorBBox');
+                pivotDot = document.getElementById('editorPivot');
+              }
+            };
 
-              if (t < 2400) { trashOpacity = 0; trashScale = 0.1; }
-              else { const u = easeOutBack(seg(t, 2400, 3050)); trashOpacity = clamp(u, 0, 1); trashScale = lerp(0.2, 1.0, u); }
-              el.trash.setAttribute('transform', `translate(${geom.trash.x} ${geom.trash.y}) scale(${trashScale.toFixed(3)})`); setOpacity(el.trash, trashOpacity);
-              el.portalRing.setAttribute('transform', `rotate(${((t * 0.22) % 360).toFixed(2)})`);
-              setOpacity(el.select, clamp(easeOutCubic(seg(t, tGrab0, tGrab1)) * (1 - easeOutCubic(seg(t, tRelease, tRelease + 260))), 0, 1));
+            const svgPoint = (evt) => {
+              const pt = svg.createSVGPoint();
+              pt.x = evt.clientX;
+              pt.y = evt.clientY;
+              const m = svg.getScreenCTM();
+              hardAssert(m, 'getScreenCTM() returned null (SVG not in DOM?)');
+              const p = pt.matrixTransform(m.inverse());
+              return { x: p.x, y: p.y };
+            };
 
-              let armAngle = -40;
-              if (t < tGrab0) {
-                groupPos = { x: geom.base.x + Math.sin(t * 0.003) * 2, y: geom.base.y + Math.sin(t * 0.006) * 3 }; groupVel = { x: 0, y: 0 }; groupScale = 1; groupOpacity = 1; groupRot = Math.sin(t * 0.003) * 2;
-                const phase = (t % 520) / 520, ci = Math.floor(t / 520); armAngle = miningArmAngle(phase);
-                if (ci !== lastCycle) { lastCycle = ci; impactedThisCycle = false; }
-                if (!impactedThisCycle && phase >= 0.58) { impactedThisCycle = true; hitPulse = 1; shake = Math.max(shake, 0.65); spawnSparks(groupPos.x + (geom.coinLocal.x - geom.coinR + 3), groupPos.y + geom.coinLocal.y, 0.9); }
-              } else if (t >= tGrab0 && t < tRelease) {
-                const grip = easeInOutCubic(seg(t, tGrab0, tGrab1)), target = { x: cursorPos.x + geom.grabOffset.x, y: cursorPos.y + geom.grabOffset.y }, k = lerp(0, 52, grip), damp = lerp(18, 12, grip);
-                groupVel.x += (target.x - groupPos.x) * k * dt; groupVel.y += (target.y - groupPos.y) * k * dt; const decay = Math.exp(-damp * dt); groupVel.x *= decay; groupVel.y *= decay; groupPos.x += groupVel.x * dt; groupPos.y += groupVel.y * dt;
-                groupRot = clamp((-groupVel.x * 0.015) + (groupVel.y * 0.010), -18, 18); groupScale = lerp(1.0, 0.92, grip); groupOpacity = 1; armAngle = lerp(7, -18, grip) + clamp(-groupVel.x * 0.03, -14, 14);
-              } else if (t >= tRelease && t < tLand) {
-                if (!releaseInit) { releaseInit = true; landed = false; const dtFlight = (tLand - tRelease) / 1000; groupVel.x = (geom.trash.x - groupPos.x) / dtFlight; groupVel.y = (geom.trash.y + geom.mouthLocal.y - groupPos.y - 0.5 * 2400 * dtFlight * dtFlight) / dtFlight; }
-                groupVel.y += 2400 * dt; groupPos.x += groupVel.x * dt; groupPos.y += groupVel.y * dt; groupRot += clamp(groupVel.x * 0.0009, -1.2, 1.2) * 180 * dt; groupScale = 0.92; groupOpacity = 1; armAngle = -10 + clamp(groupVel.y * 0.01, -25, 25);
-              } else if (t >= tSwallow0 && t < tSwallow1) {
-                if (!landed) { landed = true; shake = Math.max(shake, 1.2); spawnSparks(geom.trash.x, geom.trash.y - 10, 1.6); }
-                groupPos = { x: geom.trash.x, y: geom.trash.y + geom.mouthLocal.y }; const u = easeInBack(seg(t, tSwallow0, tSwallow1)); groupScale = lerp(0.92, 0.02, u); groupRot = lerp(groupRot, 540, easeOutCubic(u)); groupOpacity = 1 - u; armAngle = lerp(-10, 25, easeInOutCubic(seg(t, tSwallow0, (tSwallow0 + tSwallow1) / 2)));
-              } else { groupOpacity = 0; groupScale = 0.02; }
+            const parseTransform = (s) => {
+              const out = { tx: 0, ty: 0, r: 0, sx: 1, sy: 1 };
+              if (!s || typeof s !== 'string') return out;
 
-              hitPulse = Math.max(0, hitPulse - dt * 3.2);
-              el.coin.setAttribute('transform', `translate(${geom.coinLocal.x} ${geom.coinLocal.y}) rotate(${(((t * 0.35) % 360) + Math.sin(t * 0.01) * 6 + hitPulse * 18).toFixed(2)}) scale(${(1 + hitPulse * 0.08).toFixed(3)})`);
-              el.stickRoot.setAttribute('transform', `translate(${geom.stick.x} ${geom.stick.y}) rotate(${((t < tGrab0) ? Math.sin(t * 0.012) * 1.2 : clamp(groupVel.x * -0.04, -4, 4)).toFixed(2)})`);
-              el.armRot.setAttribute('transform', `rotate(${armAngle.toFixed(2)})`);
-              setTransform(el.group, groupPos.x, groupPos.y, groupRot, groupScale); setOpacity(el.group, groupOpacity);
+              const t = /translate\(\s*([-\d.]+)(?:[ ,]+([-\d.]+))?\s*\)/.exec(s);
+              if (t) { out.tx = parseFloat(t[1]); out.ty = parseFloat(t[2] ?? '0'); }
 
-              if (t < tShock0) { shockOpacity = 0; shockScale = 0; } else { const u = seg(t, tShock0, tShock1); shockOpacity = 1 - u; shockScale = lerp(0.2, 46, easeOutCubic(u)); }
-              el.shock.setAttribute('transform', `translate(500 470) scale(${shockScale.toFixed(3)})`); setOpacity(el.shock, shockOpacity);
+              const r = /rotate\(\s*([-\d.]+)\s*(?:[ ,]+([-\d.]+)[ ,]+([-\d.]+))?\s*\)/.exec(s);
+              if (r) { out.r = parseFloat(r[1]); }
 
-              loader.style.setProperty('--gridA', easeOutCubic(seg(t, tGrid0, tGrid1)).toFixed(3));
-              loader.style.setProperty('--flash', ((t >= tShock0 && t <= tShock0 + 220) ? (1 - seg(t, tShock0, tShock0 + 220)) : 0).toFixed(3));
-              shake = Math.max(0, shake - dt * 2.6); svg.style.transform = `translate(${((Math.random() * 2 - 1) * shake * 6).toFixed(2)}px, ${((Math.random() * 2 - 1) * shake * 5).toFixed(2)}px)`;
+              const sc = /scale\(\s*([-\d.]+)(?:[ ,]+([-\d.]+))?\s*\)/.exec(s);
+              if (sc) {
+                out.sx = parseFloat(sc[1]);
+                out.sy = parseFloat(sc[2] ?? sc[1]);
+              }
+              try {
+                const presetForReload = {
+                  deleted_ids: (typeof getDeletedTotalIds === 'function') ? getDeletedTotalIds() : [],
+                  transforms: out,
+                  created_svg: drawLayer ? drawLayer.innerHTML : '',
+                };
+                if (typeof saveCalibPreset === 'function') {
+                  saveCalibPreset(presetForReload);
+                }
+              } catch (e) {
+                hardErr('Persist preset failed', e);
+              }
 
-              updateHUD(t); if (!reduceMotion) drawParticles(dt);
-              if (CONFIG.autoRemove && t >= CONFIG.duration) window.LoaderAnim.finish();
-            }
+              return out;
+            };
 
-            function loop(now) {
-              if (!running) return;
-              const t = now - start, dt = Math.min(0.033, Math.max(0.001, (now - last) / 1000));
-              last = now;
+            const fmtTransform = (tr) => {
+              const tx = Number.isFinite(tr.tx) ? tr.tx : 0;
+              const ty = Number.isFinite(tr.ty) ? tr.ty : 0;
+              const r  = Number.isFinite(tr.r) ? tr.r : 0;
+              const sx = Number.isFinite(tr.sx) ? tr.sx : 1;
+              const sy = Number.isFinite(tr.sy) ? tr.sy : 1;
+              return `translate(${tx.toFixed(2)} ${ty.toFixed(2)}) rotate(${r.toFixed(2)}) scale(${sx.toFixed(4)} ${sy.toFixed(4)})`;
+            };
 
-              if (reduceMotion) {
-                updateHUD(Math.min(t, CONFIG.duration)); loader.style.setProperty('--gridA', '1'); el.cursor.setAttribute('opacity', '0'); el.trash.setAttribute('opacity', '1'); el.trash.setAttribute('transform', `translate(${geom.trash.x} ${geom.trash.y}) scale(1)`);
-                setTransform(el.group, geom.base.x, geom.base.y, 0, 1); setOpacity(el.group, 1); el.armRot.setAttribute('transform', `rotate(7)`);
-                if (t >= CONFIG.duration && CONFIG.autoRemove) window.LoaderAnim.finish();
+            const isUserNode = (n) => !!(n && n.getAttribute && n.getAttribute('data-user') === '1');
+
+            const pickEditable = (target) => {
+              let n = target;
+              while (n && n !== svg) {
+                if (n.closest && n.closest('#editorOverlay')) return null;
+                if (n.closest && n.closest('defs')) return null;
+
+                const tag = (n.tagName || '').toLowerCase();
+                if (tag === 'g') { n = n.parentNode; continue; }
+
+                if (isUserNode(n)) return n;
+
+                if (isCoreDrawable(n) && n.id && EDIT_NODE_BY_ID.has(n.id)) return n;
+
+                n = n.parentNode;
+              }
+              return null;
+            };
+
+            const setSelected = (n) => {
+              selected = n;
+              const selEl = document.getElementById('edSel');
+              if (selEl) selEl.textContent = selected ? (selected.id || '(no-id)') : 'none';
+              updateOverlay();
+            };
+
+            const bboxInSvg = (node) => {
+              const bb = node.getBBox();
+              const m = node.getCTM();
+              hardAssert(m, 'getCTM() returned null (node not renderable?)', node);
+
+              const pts = [
+                new DOMPoint(bb.x, bb.y),
+                new DOMPoint(bb.x + bb.width, bb.y),
+                new DOMPoint(bb.x, bb.y + bb.height),
+                new DOMPoint(bb.x + bb.width, bb.y + bb.height),
+              ].map(p => p.matrixTransform(m));
+
+              let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+              for (const p of pts) {
+                minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+                maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
+              }
+              return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+            };
+
+            const updateOverlay = () => {
+              if (!overlay || !bboxRect || !pivotDot) return;
+              if (!selected) {
+                overlay.setAttribute('opacity', '0');
+                return;
+              }
+              try {
+                const bb = bboxInSvg(selected);
+                bboxRect.setAttribute('x', bb.x.toFixed(2));
+                bboxRect.setAttribute('y', bb.y.toFixed(2));
+                bboxRect.setAttribute('width', Math.max(0, bb.w).toFixed(2));
+                bboxRect.setAttribute('height', Math.max(0, bb.h).toFixed(2));
+
+                const tr = parseTransform(selected.getAttribute('transform'));
+                const px = tr.tx || (bb.x + bb.w / 2);
+                const py = tr.ty || (bb.y + bb.h / 2);
+                pivotDot.setAttribute('cx', px.toFixed(2));
+                pivotDot.setAttribute('cy', py.toFixed(2));
+
+                overlay.setAttribute('opacity', '1');
+              } catch (e) {
+                hardErr('updateOverlay failed', e);
+                overlay.setAttribute('opacity', '0');
+              }
+            };
+
+            const uid = (prefix) => `${prefix}_${(++uidSeq)}_${Date.now().toString(36)}`;
+
+            const makeEl = (tag, attrs) => {
+              const n = document.createElementNS(NS, tag);
+              for (const [k,v] of Object.entries(attrs || {})) n.setAttribute(k, String(v));
+              n.setAttribute('data-user', '1');
+              if (!n.id) n.id = uid(tag);
+              return n;
+            };
+
+            const addStickman = (p) => {
+              const g = makeEl('g', { transform: `translate(${p.x.toFixed(2)} ${p.y.toFixed(2)}) rotate(0) scale(1 1)` });
+              g.id = uid('stick');
+              g.appendChild(makeEl('circle', { cx: 0, cy: -32, r: 10, fill: 'rgba(0,0,0,0.55)', stroke: '#ff003c', 'stroke-width': 4, filter: 'url(#glowRed)' }));
+              g.appendChild(makeEl('line', { x1: 0, y1: -22, x2: 0, y2: 16, stroke: '#ff003c', 'stroke-width': 4, 'stroke-linecap':'round', filter:'url(#glowRed)' }));
+              g.appendChild(makeEl('line', { x1: 0, y1: -8, x2: -18, y2: 6, stroke: '#ff003c', 'stroke-width': 4, 'stroke-linecap':'round', filter:'url(#glowRed)' }));
+              g.appendChild(makeEl('line', { x1: 0, y1: -8, x2: 18, y2: 6, stroke: '#ff003c', 'stroke-width': 4, 'stroke-linecap':'round', filter:'url(#glowRed)' }));
+              g.appendChild(makeEl('line', { x1: 0, y1: 16, x2: -12, y2: 38, stroke: '#ff003c', 'stroke-width': 4, 'stroke-linecap':'round', filter:'url(#glowRed)' }));
+              g.appendChild(makeEl('line', { x1: 0, y1: 16, x2: 12, y2: 38, stroke: '#ff003c', 'stroke-width': 4, 'stroke-linecap':'round', filter:'url(#glowRed)' }));
+              drawLayer.appendChild(g);
+              setSelected(g);
+            };
+
+            const addBitcoin = (p) => {
+              const g = makeEl('g', { transform: `translate(${p.x.toFixed(2)} ${p.y.toFixed(2)}) rotate(0) scale(1 1)` });
+              g.id = uid('btc');
+              g.appendChild(makeEl('circle', { r: 22, fill: 'url(#btcGrad)', stroke: '#f7931a', 'stroke-width': 4, filter: 'url(#glowOrange)' }));
+              g.appendChild(makeEl('text', { x: 0, y: 10, 'text-anchor':'middle', 'font-size': 26, 'font-weight': 900, fill:'#fff', style:'paint-order:stroke; stroke: rgba(0,0,0,0.35); stroke-width:3' })).textContent = '₿';
+              drawLayer.appendChild(g);
+              setSelected(g);
+            };
+
+            const addPickaxe = (p) => {
+              const g = makeEl('g', { transform: `translate(${p.x.toFixed(2)} ${p.y.toFixed(2)}) rotate(0) scale(1 1)` });
+              g.id = uid('pickaxe');
+              g.appendChild(makeEl('line', { x1: 0, y1: 0, x2: 54, y2: 0, stroke: 'url(#metalGrad)', 'stroke-width': 10, 'stroke-linecap':'round' }));
+              g.appendChild(makeEl('rect', { x: 52, y: -9, width: 10, height: 18, rx: 4, fill:'#111', filter:'url(#glowRed)' }));
+              g.appendChild(makeEl('line', { x1: 57, y1: -20, x2: 57, y2: 20, stroke:'#111', 'stroke-width': 12, 'stroke-linecap':'round' }));
+              g.appendChild(makeEl('path', { d:'M57 -6 H82', fill:'none', stroke:'#ff003c', 'stroke-width': 6, 'stroke-linecap':'round', filter:'url(#glowRed)' }));
+              g.appendChild(makeEl('path', { d:'M57 7 L80 15', fill:'none', stroke:'#ff003c', 'stroke-width': 6, 'stroke-linecap':'round', filter:'url(#glowRed)' }));
+              drawLayer.appendChild(g);
+              setSelected(g);
+            };
+
+            const addLine = (a, b) => {
+              const ln = makeEl('line', {
+                x1: a.x.toFixed(2), y1: a.y.toFixed(2),
+                x2: b.x.toFixed(2), y2: b.y.toFixed(2),
+                stroke: '#ff003c', 'stroke-width': 6, 'stroke-linecap':'round', filter:'url(#glowRed)'
+              });
+              ln.id = uid('line');
+              drawLayer.appendChild(ln);
+              setSelected(ln);
+            };
+
+            const toParentLocalDelta = (node, dGlobal) => {
+              try {
+                const parent = node && node.parentNode;
+                if (!parent || !parent.getCTM) return dGlobal;
+                const pm = parent.getCTM();
+                if (!pm) return dGlobal;
+
+                const inv = pm.inverse();
+                const p0 = new DOMPoint(0, 0).matrixTransform(inv);
+                const p1 = new DOMPoint(dGlobal.x, dGlobal.y).matrixTransform(inv);
+                return { x: p1.x - p0.x, y: p1.y - p0.y };
+              } catch (e) {
+                hardErr('toParentLocalDelta failed; fallback to global delta', e);
+                return dGlobal;
+              }
+            };
+
+            const beginDrag = (evt, node) => {
+              const p = svgPoint(evt);
+              lastP = p;
+
+              const base = parseTransform(node.getAttribute('transform'));
+              drag = {
+                node,
+                startP: p,
+                start: { ...base },
+                mode: evt.altKey ? 'scale' : (evt.shiftKey ? 'rotate' : 'move'),
+              };
+
+              if (drag.mode === 'rotate') {
+                const bb = bboxInSvg(node);
+                drag.px = bb.x + bb.w / 2;
+                drag.py = bb.y + bb.h / 2;
+                drag.a0 = Math.atan2(p.y - drag.py, p.x - drag.px);
+              }
+
+              evt.preventDefault();
+              evt.stopPropagation();
+            };
+
+            const moveDrag = (evt) => {
+              if (!drag || !drag.node) return;
+              const p = svgPoint(evt);
+              lastP = p;
+
+              const dG = { x: p.x - drag.startP.x, y: p.y - drag.startP.y };
+              const d = toParentLocalDelta(drag.node, dG);
+              const tr = { ...drag.start };
+
+              if (drag.mode === 'move') {
+                tr.tx = drag.start.tx + d.x;
+                tr.ty = drag.start.ty + d.y;
+              } else if (drag.mode === 'rotate') {
+                const a1 = Math.atan2(p.y - drag.py, p.x - drag.px);
+                const da = (a1 - drag.a0) * 180 / Math.PI;
+                tr.r = drag.start.r + da;
+              } else if (drag.mode === 'scale') {
+                const s = 1 + (dG.x - dG.y) / 260;
+                tr.sx = Math.max(0.05, drag.start.sx * s);
+                tr.sy = Math.max(0.05, drag.start.sy * s);
+              }
+
+              drag.node.setAttribute('transform', fmtTransform(tr));
+              updateOverlay();
+              evt.preventDefault();
+              evt.stopPropagation();
+            };
+
+            const endDrag = () => {
+              drag = null;
+            };
+
+            const onPointerDown = (evt) => {
+              if (!editMode) return;
+              try {
+                const p = svgPoint(evt);
+                lastP = p;
+
+                if (lineMode) {
+                  if (!lineStart) {
+                    lineStart = p;
+                  } else {
+                    addLine(lineStart, p);
+                    lineStart = null;
+                    lineMode = false;
+                  }
+                  evt.preventDefault();
+                  evt.stopPropagation();
+                  return;
+                }
+
+                const n = pickEditable(evt.target);
+                if (!n) return;
+                setSelected(n);
+                beginDrag(evt, n);
+              } catch (e) {
+                hardErr('pointerdown failed', e);
+              }
+            };
+
+            const onPointerMove = (evt) => {
+              if (!editMode) return;
+              if (drag) moveDrag(evt);
+              else {
+                try { lastP = svgPoint(evt); } catch {}
+              }
+            };
+
+            const onPointerUp = () => {
+              if (!editMode) return;
+              endDrag();
+            };
+
+            const deleteSelected = (forceCore = false) => {
+              if (!selected) return;
+
+              const id = selected.id || '(no-id)';
+              const isCore = !isUserNode(selected);
+
+              if (isCore && !forceCore) {
+                hardErr('Refuse deleting core node (hold Shift+Delete if you insist):', id);
                 return;
               }
 
-              update(t, dt);
-              if (t >= CONFIG.duration && !CONFIG.idleAfter) running = false;
-              requestAnimationFrame(loop);
-            }
+              if (id && id !== '(no-id)') deletedIds.add(id);
 
-            window.LoaderAnim = {
-              finish({ immediate = false } = {}) {
-                if (immediate) {
-                  running = false; loader.remove();
-                  if (window.frameElement) window.frameElement.style.display = 'none';
-                  return;
-                }
-                loader.classList.add('is-fading'); running = false;
-                setTimeout(() => {
-                    loader.remove();
-                    if (window.frameElement) window.frameElement.style.display = 'none';
-                }, 430);
-              }
+              selected.remove();
+
+              if (typeof EDIT_NODE_BY_ID?.delete === 'function') EDIT_NODE_BY_ID.delete(id);
+              if (Array.isArray(EDIT_NODES)) EDIT_NODES = EDIT_NODES.filter(n => n && n.isConnected);
+
+              setSelected(null);
             };
 
-            requestAnimationFrame(loop);
+            const duplicateSelected = () => {
+              if (!selected) return;
+              if (!isUserNode(selected)) {
+                return;
+              }
+              const clone = selected.cloneNode(true);
+              clone.id = uid((selected.id || 'dup').replace(/\W+/g,'_'));
+              clone.setAttribute('data-user', '1');
+
+              const tr = parseTransform(clone.getAttribute('transform'));
+              tr.tx += 14; tr.ty += 14;
+              clone.setAttribute('transform', fmtTransform(tr));
+
+              drawLayer.appendChild(clone);
+              setSelected(clone);
+            };
+
+            const dumpParams = () => {
+              const transforms = {};
+              let moved = 0;
+
+              const liveNodes = Array.isArray(EDIT_NODES) ? EDIT_NODES.filter(n => n && n.isConnected) : [];
+              for (const n of liveNodes) {
+                const tr = n.getAttribute('transform') || '';
+                transforms[n.id] = tr;
+                if (tr) moved++;
+              }
+
+              const created_svg = drawLayer ? drawLayer.innerHTML : '';
+
+              const out = {
+                ts: new Date().toISOString(),
+                moved_count: moved,
+                total_count: liveNodes.length,
+                deleted_ids: Array.from(deletedIds),
+                transforms,
+                created_svg,
+              };
+
+              const raw = JSON.stringify(out, null, 2);
+
+              const braceEscape = (s) => {
+                if (typeof s.replaceAll === 'function') return s.replaceAll('{', '{{').replaceAll('}', '}}');
+                return s.split('{').join('{{').split('}').join('}}');
+              };
+              const escaped = braceEscape(raw);
+
+              window.__LOADER_EDITOR_RAW__ = raw;
+              window.__LOADER_EDITOR_ESCAPED__ = escaped;
+
+              if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(escaped).catch(e => hardErr('Clipboard copy failed', e));
+              }
+
+              return out;
+            };
+
+            const validateBeforeExit = () => {
+              const required = ['miningGroup','stickRoot','armRRot','coin','trash','cursor'];
+              const missing = required.filter(id => !document.getElementById(id));
+              if (missing.length) {
+                hardErr('Missing required core elements:', missing);
+                return false;
+              }
+              return true;
+            };
+
+            const enter = () => {
+              ensureHud();
+              ensureSvgLayers();
+              indexEditableNodes(); 
+
+              body.classList.add('edit-mode');
+              overlay.setAttribute('opacity','0');
+              setSelected(null);
+
+              svg.addEventListener('pointerdown', onPointerDown, true);
+              window.addEventListener('pointermove', onPointerMove, true);
+              window.addEventListener('pointerup', onPointerUp, true);
+
+              deletedIds = new Set(); 
+            };
+
+            const exit = () => {
+              if (!validateBeforeExit()) return false;
+
+              body.classList.remove('edit-mode');
+              lineMode = false;
+              lineStart = null;
+              endDrag();
+
+              svg.removeEventListener('pointerdown', onPointerDown, true);
+              window.removeEventListener('pointermove', onPointerMove, true);
+              window.removeEventListener('pointerup', onPointerUp, true);
+
+              overlay.setAttribute('opacity','0');
+              setSelected(null);
+
+              dumpParams();
+              return true;
+            };
+
+            const key = (evt) => {
+              if (!editMode) return false;
+              const k = evt.key.toLowerCase();
+
+              if (k === 'l') { lineMode = !lineMode; lineStart = null; evt.preventDefault(); return true; }
+              if (k === 's') { addStickman(lastP); evt.preventDefault(); return true; }
+              if (k === 'p') { addPickaxe(lastP); evt.preventDefault(); return true; }
+              if (k === 'b') { addBitcoin(lastP); evt.preventDefault(); return true; }
+
+              if (k === 'delete' || k === 'backspace') {
+                deleteSelected(evt.shiftKey); 
+                evt.preventDefault();
+                return true;
+              }
+
+              if ((evt.ctrlKey || evt.metaKey) && k === 'd') {
+                duplicateSelected();
+                evt.preventDefault();
+                return true;
+              }
+
+              return false;
+            };
+
+            return { enter, exit, key, dumpParams };
+          })();
+
+          window.addEventListener('keydown', (e) => {
+            if (e.repeat) return; 
+            const k = e.key.toLowerCase();
+
+            if (k === 'f') {
+              e.preventDefault();
+              e.stopPropagation();
+
+              if (!editMode) {
+                pausedTms = performance.now() - start;
+                running = false;
+                editMode = true;
+                try { Editor.enter(); } catch (err) { console.error(err); }
+              } else {
+                let ok = false;
+                try { ok = Editor.exit(); } catch (err) { console.error(err); }
+                if (!ok) return; 
+
+                editMode = false;
+                start = performance.now() - pausedTms;
+                last = performance.now();
+                running = true;
+                requestAnimationFrame(loop);
+              }
+              return;
+            }
+
+            if (editMode) {
+              const consumed = Editor.key(e);
+              if (consumed) return;
+            }
+
+            if (k === 'r') window.LoaderAnim.replay();
+            if (k === 'x') window.LoaderAnim.finish();
+          }, true);
+
+          requestAnimationFrame(loop);
         })();
         </script>
         </body>
