@@ -5003,13 +5003,7 @@ def _page_home(user: Optional[Dict[str, Any]] = None) -> None:
     if "_home_iframe_nonce" not in st.session_state:
         st.session_state["_home_iframe_nonce"] = random.randint(100000, 999999)
 
-    colx, coly = st.columns([1.0, 1.0])
-    with colx:
-        if st.button("重新載入主頁元素", key="home_force_remount", type="secondary", use_container_width=True):
-            st.session_state["_home_iframe_nonce"] = random.randint(100000, 999999)
-            st.rerun()
-    with coly:
-        st.markdown('<div class="small-muted">若你看到只有背景但沒有主頁卡片，按左側按鈕即可強制修復。</div>', unsafe_allow_html=True)
+    # home remount ui removed
     st.components.v1.html(
         """
         <!DOCTYPE html>
@@ -5196,10 +5190,9 @@ def _page_home(user: Optional[Dict[str, Any]] = None) -> None:
             </script>
         </body>
         </html>
-        """,
+        """ + f"\n<!-- home_nonce:{int(st.session_state.get('_home_iframe_nonce') or 0)} -->\n",
         height=280,
-        scrolling=False,
-        key=f"home_iframe_{int(st.session_state.get('_home_iframe_nonce') or 0)}"
+        scrolling=False
     )
 
 def _page_tutorial(user: Optional[Dict[str, Any]] = None) -> None:
@@ -7872,6 +7865,11 @@ def main() -> None:
     except Exception:
         pass    
     _perf_emit_payload()    
+    # 終極保險：確保任何頁面最後都把紅網格蓋回來（避免切頁後變黑底）
+    try:
+        _force_red_bg_every_rerun()
+    except Exception:
+        pass  
     return
 
 
