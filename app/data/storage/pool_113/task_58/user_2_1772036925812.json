@@ -1,0 +1,26 @@
+{
+  "task_info": {
+    "id": 58,
+    "user_id": 2,
+    "pool_id": 113,
+    "cycle_id": 1,
+    "partition_idx": 0,
+    "num_partitions": 24,
+    "status": "queued",
+    "progress_json": "{\"phase\": \"queued\", \"phase_msg\": \"收回並重新置入分配池\", \"combos_done\": 0, \"combos_total\": 0, \"updated_at\": \"2026-02-25T16:06:08.761371+00:00\"}",
+    "last_heartbeat": "2026-02-25T16:06:08.764611+00:00",
+    "created_at": "2026-02-25T16:05:55.066960+00:00",
+    "updated_at": "2026-02-25T16:06:08.764601+00:00",
+    "family": "PPO_Cross",
+    "symbol": "BTC_USDT",
+    "timeframe_min": 1,
+    "years": 1,
+    "grid_spec_json": "{\"fast_min\": 6, \"fast_max\": 12, \"fast_step\": 2, \"slow_min\": 18, \"slow_max\": 30, \"slow_step\": 3, \"sig_min\": 6, \"sig_max\": 12, \"sig_step\": 2}",
+    "risk_spec_json": "{\"tp_min\": 0.3, \"tp_max\": 1.2, \"tp_step\": 0.3, \"sl_min\": 0.4, \"sl_max\": 1.6, \"sl_step\": 0.4, \"max_hold_min\": 30, \"max_hold_max\": 720, \"max_hold_step\": 30, \"fee_side\": 0.0002, \"slippage\": 0.0, \"worst_case\": true, \"reverse_mode\": false}",
+    "seed": 1402398660,
+    "pool_name": "PPO_Cross | BTC_USDT | 1m [BTC_USDT_1m]"
+  },
+  "timestamp": "2026-02-25T16:28:45.812173+00:00",
+  "best_pass_count": 0,
+  "candidates": []
+}

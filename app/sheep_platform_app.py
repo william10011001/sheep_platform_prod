@@ -83,7 +83,7 @@ from sheep_platform_security import (
 from sheep_platform_jobs import JOB_MANAGER, JobManager
 from sheep_platform_audit import audit_candidate
 
-APP_TITLE = "OpenNode"
+APP_TITLE = "羊肉爐團隊 挖礦系統"
 
 # 品牌 WebM：優先吃環境變數，其次走固定且「容器最穩」的 data/ 路徑，最後才退回 static/ 的中文檔名。
 # 現實：中文檔名在容器/部署/掛載時最容易失蹤或編碼出事，所以不要只靠它。
@@ -321,14 +321,14 @@ header[data-testid="stHeader"] * {{
 
 #sheepBrandHdr .name .sheep {{
   font-weight: 950;
-  background: linear-gradient(135deg, #78b4ff 0%, #50f0dc 100%);
+  background: linear-gradient(135deg, #ff4b4b 0%, #ff003c 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
 }}
 
 #sheepBrandHdr .brandWrap:hover {{
-  background: rgba(15, 21, 32, 0.95);
-  border-color: rgba(120, 180, 255, 0.3);
+  background: rgba(20, 5, 10, 0.95);
+  border-color: rgba(255, 0, 60, 0.3);
 }}
 #sheepBrandHdr .brandWrap:hover .name {{
   filter: brightness(1.15);
@@ -340,7 +340,7 @@ header[data-testid="stHeader"] * {{
 
 @keyframes ringPulse {{
   0%   {{ box-shadow: 0 8px 32px rgba(0,0,0,0.6); border-color: rgba(255,255,255,0.08); }}
-  50%  {{ box-shadow: 0 12px 48px rgba(0,0,0,0.8), 0 0 20px rgba(120,180,255,0.15); border-color: rgba(120,180,255,0.4); }}
+  50%  {{ box-shadow: 0 12px 48px rgba(0,0,0,0.8), 0 0 20px rgba(255,0,60,0.15); border-color: rgba(255,0,60,0.4); }}
   100% {{ box-shadow: 0 8px 32px rgba(0,0,0,0.6); border-color: rgba(255,255,255,0.08); }}
 }}
 
@@ -1397,40 +1397,242 @@ def _style() -> None:
             display: none !important;
         }
 
-        /* 新手教學按鈕專屬樣式 (微橘色+毛玻璃漸層) */
-        .tutorial-glass-btn {
+        /* 主頁按鈕專屬樣式 (極度顯眼的紅色脈衝效果) */
+        .home-core-btn {
+            background: linear-gradient(135deg, #FF003C 0%, #8A0020 100%) !important;
+            color: #ffffff !important;
+            border: 2px solid #FF003C !important;
+            box-shadow: 0 0 15px rgba(255, 0, 60, 0.6), inset 0 0 10px rgba(255, 255, 255, 0.2) !important;
+            font-weight: 900 !important;
+            letter-spacing: 3px !important;
+            animation: pulseHomeBtn 2s cubic-bezier(0.4, 0, 0.6, 1) infinite !important;
+            transition: all 0.3s ease !important;
+        }
+        .home-core-btn:hover {
+            background: linear-gradient(135deg, #ff1a53 0%, #a30026 100%) !important;
+            box-shadow: 0 0 25px rgba(255, 0, 60, 0.9), inset 0 0 15px rgba(255, 255, 255, 0.4) !important;
+            transform: translateY(-2px) scale(1.02) !important;
+            color: #ffffff !important;
+        }
+        @keyframes pulseHomeBtn {
+            0%, 100% { box-shadow: 0 0 15px rgba(255, 0, 60, 0.6), inset 0 0 10px rgba(255, 255, 255, 0.2); }
+            50% { box-shadow: 0 0 30px rgba(255, 0, 60, 0.95), inset 0 0 15px rgba(255, 255, 255, 0.4); }
+        }
+
+/* --- [純 CSS 綁定側邊欄按鈕特效與圖示] --- */
+        /* 隱藏所有的定位錨點容器，避免撐開側邊欄間距 */
+        div[data-testid="stSidebar"] div.element-container:has(.sidebar-anchor) {
+            display: none !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+
+        /* 側邊欄按鈕內容排版對齊 (為 ICON 預留空間) */
+        div[data-testid="stSidebar"] .stButton button p {
+            display: flex !important;
+            align-items: center !important;
+            justify-content: flex-start !important;
+            padding-left: 20px !important;
+            margin: 0 auto !important;
+            width: 100% !important;
+            box-sizing: border-box !important;
+        }
+        
+        div[data-testid="stSidebar"] .stButton button p::before {
+            content: '' !important;
+            display: inline-block !important;
+            margin-right: 14px !important;
+            flex-shrink: 0 !important;
+        }
+
+        /* 1. 主頁按鈕特效與圖示 (Home) */
+        div.element-container:has(.nav-anchor-主頁) + div.element-container .stButton button {
+            background: linear-gradient(135deg, #FF003C 0%, #8A0020 100%) !important;
+            color: #ffffff !important;
+            border: 2px solid #FF003C !important;
+            box-shadow: 0 0 15px rgba(255, 0, 60, 0.6), inset 0 0 10px rgba(255, 255, 255, 0.2) !important;
+            font-weight: 900 !important;
+            letter-spacing: 3px !important;
+            animation: pulseHomeBtn 2s cubic-bezier(0.4, 0, 0.6, 1) infinite !important;
+            transition: all 0.3s ease !important;
+        }
+        div.element-container:has(.nav-anchor-主頁) + div.element-container .stButton button:hover {
+            background: linear-gradient(135deg, #ff1a53 0%, #a30026 100%) !important;
+            box-shadow: 0 0 25px rgba(255, 0, 60, 0.9), inset 0 0 15px rgba(255, 255, 255, 0.4) !important;
+            transform: translateY(-2px) scale(1.02) !important;
+        }
+        div.element-container:has(.nav-anchor-主頁) + div.element-container .stButton button p { color: #ffffff !important; justify-content: center !important; padding-left: 0 !important; }
+        div.element-container:has(.nav-anchor-主頁) + div.element-container .stButton button p::before {
+            width: 16px !important; height: 16px !important;
+            background-color: currentColor !important;
+            clip-path: polygon(50% 0%, 100% 45%, 80% 45%, 80% 100%, 20% 100%, 20% 45%, 0% 45%) !important;
+        }
+        @keyframes pulseHomeBtn {
+            0%, 100% { box-shadow: 0 0 15px rgba(255, 0, 60, 0.6), inset 0 0 10px rgba(255, 255, 255, 0.2); }
+            50% { box-shadow: 0 0 30px rgba(255, 0, 60, 0.95), inset 0 0 15px rgba(255, 255, 255, 0.4); }
+        }
+
+        /* 2. 控制台圖示 (Dashboard 2x2 Grid) */
+        div.element-container:has(.nav-anchor-控制台) + div.element-container .stButton button p::before {
+            width: 16px !important; height: 16px !important;
+            background-image: 
+                linear-gradient(currentColor, currentColor),
+                linear-gradient(currentColor, currentColor),
+                linear-gradient(currentColor, currentColor),
+                linear-gradient(currentColor, currentColor) !important;
+            background-position: 0 0, 100% 0, 0 100%, 100% 100% !important;
+            background-size: 7px 7px !important;
+            background-repeat: no-repeat !important;
+            background-color: transparent !important;
+        }
+
+        /* 3. 排行榜圖示 (Leaderboard Bar Chart) */
+        div.element-container:has(.nav-anchor-排行榜) + div.element-container .stButton button p::before {
+            width: 16px !important; height: 16px !important;
+            background-image: 
+                linear-gradient(currentColor, currentColor),
+                linear-gradient(currentColor, currentColor),
+                linear-gradient(currentColor, currentColor) !important;
+            background-position: 0 100%, 50% 100%, 100% 100% !important;
+            background-size: 4px 8px, 4px 16px, 4px 12px !important;
+            background-repeat: no-repeat !important;
+            background-color: transparent !important;
+        }
+
+        /* 4. 任務圖示 (Tasks Checklist) */
+        div.element-container:has(.nav-anchor-任務) + div.element-container .stButton button p::before {
+            width: 16px !important; height: 16px !important;
+            background-image: 
+                linear-gradient(currentColor, currentColor),
+                linear-gradient(currentColor, currentColor),
+                linear-gradient(currentColor, currentColor),
+                linear-gradient(currentColor, currentColor),
+                linear-gradient(currentColor, currentColor),
+                linear-gradient(currentColor, currentColor) !important;
+            background-position: 
+                0 2px, 0 7px, 0 12px,
+                6px 2px, 6px 7px, 6px 12px !important;
+            background-size: 
+                4px 4px, 4px 4px, 4px 4px,
+                10px 4px, 10px 4px, 10px 4px !important;
+            background-repeat: no-repeat !important;
+            background-color: transparent !important;
+        }
+
+        /* 5. 提交圖示 (Submit Up Arrow) */
+        div.element-container:has(.nav-anchor-提交) + div.element-container .stButton button p::before {
+            width: 16px !important; height: 16px !important;
+            background-color: currentColor !important;
+            clip-path: polygon(50% 0%, 100% 40%, 70% 40%, 70% 100%, 30% 100%, 30% 40%, 0% 40%) !important;
+        }
+
+        /* 6. 結算圖示 (Settle/Rewards Coin) */
+        div.element-container:has(.nav-anchor-結算) + div.element-container .stButton button p::before {
+            width: 16px !important; height: 16px !important;
+            border-radius: 50% !important;
+            border: 2px solid currentColor !important;
+            background-color: transparent !important;
+            background-image: radial-gradient(circle at center, currentColor 35%, transparent 40%) !important;
+            box-sizing: border-box !important;
+        }
+
+        /* 7. 管理圖示 (Admin Shield) */
+        div.element-container:has(.nav-anchor-管理) + div.element-container .stButton button p::before {
+            width: 16px !important; height: 16px !important;
+            background-color: currentColor !important;
+            clip-path: polygon(0 0, 100% 0, 100% 60%, 50% 100%, 0 60%) !important;
+        }
+
+        /* 8. 新手教學按鈕特效與圖示 (Info) */
+        div.element-container:has(.nav-anchor-新手教學) + div.element-container .stButton button {
             background: linear-gradient(135deg, rgba(251, 146, 60, 0.15) 0%, rgba(234, 88, 12, 0.05) 100%) !important;
             backdrop-filter: blur(12px) !important;
-            -webkit-backdrop-filter: blur(12px) !important;
             border: 1px solid rgba(251, 146, 60, 0.3) !important;
-            color: #fed7aa !important;
             box-shadow: 0 4px 16px rgba(251, 146, 60, 0.05) !important;
             transition: all 0.3s ease !important;
         }
-        .tutorial-glass-btn:hover {
+        div.element-container:has(.nav-anchor-新手教學) + div.element-container .stButton button:hover {
             background: linear-gradient(135deg, rgba(251, 146, 60, 0.25) 0%, rgba(234, 88, 12, 0.1) 100%) !important;
             border-color: rgba(251, 146, 60, 0.5) !important;
-            color: #ffffff !important;
             box-shadow: 0 6px 20px rgba(251, 146, 60, 0.15) !important;
             transform: translateY(-1px);
         }
-        .tutorial-glass-btn[kind="primary"] {
-            background: linear-gradient(135deg, rgba(255, 0, 60, 0.35) 0%, rgba(120, 0, 20, 0.15) 100%) !important;
-            border: 1px solid rgba(255, 0, 60, 0.6) !important;
-            color: #ffffff !important;
-            box-shadow: 0 4px 20px rgba(255, 0, 60, 0.25) !important;
+        div.element-container:has(.nav-anchor-新手教學) + div.element-container .stButton button p { color: #fed7aa !important; justify-content: center !important; padding-left: 0 !important; }
+        div.element-container:has(.nav-anchor-新手教學) + div.element-container .stButton button:hover p { color: #ffffff !important; }
+        div.element-container:has(.nav-anchor-新手教學) + div.element-container .stButton button p::before {
+            width: 16px !important; height: 16px !important;
+            border-radius: 50% !important;
+            border: 2px solid currentColor !important;
+            background-color: transparent !important;
+            background-image: 
+                linear-gradient(currentColor, currentColor),
+                linear-gradient(currentColor, currentColor) !important;
+            background-position: center 2px, center 6px !important;
+            background-size: 2px 2px, 2px 5px !important;
+            background-repeat: no-repeat !important;
+            box-sizing: border-box !important;
         }
-        
+
+        /* 9. 登出按鈕特效與圖示 (Exit Arrow) */
+        div.element-container:has(.nav-anchor-登出) + div.element-container .stButton button {
+            background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%) !important;
+            border: 1px solid #ef4444 !important;
+            font-weight: 800 !important;
+            letter-spacing: 2px !important;
+            box-shadow: 0 4px 15px rgba(220, 38, 38, 0.4) !important;
+            transition: all 0.3s ease !important;
+        }
+        div.element-container:has(.nav-anchor-登出) + div.element-container .stButton button:hover {
+            background: linear-gradient(135deg, #ef4444 0%, #b91c1c 100%) !important;
+            border-color: #f87171 !important;
+            box-shadow: 0 6px 20px rgba(239, 68, 68, 0.6) !important;
+            transform: translateY(-2px) !important;
+        }
+        div.element-container:has(.nav-anchor-登出) + div.element-container .stButton button p { color: #ffffff !important; justify-content: center !important; padding-left: 0 !important; }
+        div.element-container:has(.nav-anchor-登出) + div.element-container .stButton button p::before {
+            width: 16px !important; height: 16px !important;
+            background-color: currentColor !important;
+            clip-path: polygon(0 20%, 50% 20%, 50% 0, 100% 50%, 50% 100%, 50% 80%, 0 80%) !important;
+        }
+    div.element-container:has(.nav-anchor-登出) + div.element-container .stButton button p::before {
+        width: 14px; height: 14px;
+        background-color: currentColor;
+        clip-path: polygon(0 20%, 50% 20%, 50% 0, 100% 50%, 50% 100%, 50% 80%, 0 80%);
+    }
+
         /* 終極紅色量化主題覆蓋 */
         :root {
-            --bg: transparent !important;
-            --card: rgba(15, 2, 5, 0.85) !important;
-            --card-border: rgba(255, 0, 60, 0.35) !important;
-            --text-primary: #f8fafc !important;
-            --text-secondary: #ff8a9f !important;
-            --accent: #FF003C !important;
-        }
-        .stApp, .main { background: transparent !important; }
+        --bg: #050007 !important;
+        --card: rgba(18, 2, 5, 0.85) !important;
+        --card-border: rgba(255, 0, 60, 0.5) !important;
+        --text-primary: #f8fafc !important;
+        --text-secondary: #ff8a9f !important;
+        --accent: #FF003C !important;
+        --accent-glow: rgba(255, 0, 60, 0.8) !important;
+    }
+    .stApp {
+        background-color: #050007 !important;
+        background-image: 
+            radial-gradient(circle at 50% 20%, rgba(255,0,60,0.2) 0%, transparent 60%),
+            linear-gradient(rgba(255,0,60,0.12) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255,0,60,0.12) 1px, transparent 1px) !important;
+        background-size: 100% 100%, 40px 40px, 40px 40px !important;
+        background-attachment: fixed !important;
+        animation: cyberpunkGrid 15s linear infinite !important;
+    }
+    .stApp::before {
+        content: "";
+        position: fixed;
+        top: 0; left: 0; width: 100vw; height: 100vh;
+        background: repeating-linear-gradient(to bottom, transparent 0px, rgba(255,0,60,0.03) 1px, transparent 3px);
+        pointer-events: none;
+        z-index: 2147483645;
+    }
+    @keyframes cyberpunkGrid {
+        0% { background-position: 0 0, 0 0, 0 0; }
+        100% { background-position: 0 0, 0 40px, 40px 0; }
+    }
+    .main { background: transparent !important; }
         section[data-testid="stSidebar"] {
             background: rgba(8, 0, 2, 0.95) !important;
             border-right: 1px solid rgba(255, 0, 60, 0.4) !important;
@@ -1801,6 +2003,7 @@ def _style() -> None:
           try {
             if (window.parent.__sheep_loader_played) {
               if (window.frameElement) window.frameElement.style.display = 'none';
+              try { window.parent.__sheep_loader_finished = true; } catch(e) {}
               return;
             }
             window.parent.__sheep_loader_played = true;
@@ -2461,6 +2664,7 @@ def _style() -> None:
                 running = false;
                 loader.remove();
                 if (window.frameElement) window.frameElement.style.display = 'none';
+                try { if(window.parent) window.parent.__sheep_loader_finished = true; } catch(e){}
                 return;
               }
               loader.classList.add('is-fading');
@@ -2468,6 +2672,7 @@ def _style() -> None:
               setTimeout(() => {
                   loader.remove();
                   if (window.frameElement) window.frameElement.style.display = 'none';
+                  try { if(window.parent) window.parent.__sheep_loader_finished = true; } catch(e){}
               }, 430);
             }
           };
@@ -3182,37 +3387,19 @@ def _style() -> None:
                 } catch (err) {}
             }
 
-            function styleSidebarBtns() {
-                try {
-                    const btns = doc.querySelectorAll('div[data-testid="stSidebar"] button p');
-                    btns.forEach(p => {
-                        const btn = p.closest('button');
-                        if (!btn) return;
-                        
-                        if (p.textContent && p.textContent.trim() === '主頁') {
-                            if (!btn.classList.contains('home-core-btn')) {
-                                btn.classList.add('home-core-btn');
-                                btn.style.background = 'linear-gradient(135deg, rgba(255,0,60,0.8) 0%, rgba(100,0,20,0.9) 100%)';
-                                btn.style.color = '#fff';
-                                btn.style.border = '1px solid #FF003C';
-                                btn.style.boxShadow = '0 0 15px rgba(255,0,60,0.5)';
-                                btn.style.fontWeight = '900';
-                                btn.style.letterSpacing = '2px';
-                            }
-                        } else if (p.textContent && p.textContent.trim() === '新手教學') {
-                            if (!btn.classList.contains('tutorial-glass-btn')) {
-                                btn.classList.add('tutorial-glass-btn');
-                            }
-                        }
-                    });
-                } catch (err) {}
-            }
-
-            const observer = new MutationObserver(() => { injectMenuButton(); styleSidebarBtns(); });
+            // [專家級修正] 徹底拔除消耗資源的 JS 樣式渲染與屬性監聽器，消除卡頓
+            let layoutTimer = null;
+            const observer = new MutationObserver(() => { 
+                if (layoutTimer) return;
+                layoutTimer = setTimeout(() => {
+                    injectMenuButton(); 
+                    layoutTimer = null;
+                }, 150); // 節流
+            });
             if (doc.body) {
-                observer.observe(doc.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
+                observer.observe(doc.body, { childList: true, subtree: true });
             }
-            setInterval(() => { injectMenuButton(); styleSidebarBtns(); }, 800);
+            setInterval(injectMenuButton, 1000);
             
             if (doc.defaultView) {
                 doc.defaultView.addEventListener('resize', injectMenuButton);
@@ -4544,13 +4731,13 @@ def _page_home(user: Optional[Dict[str, Any]] = None) -> None:
             letter-spacing: -2px; position: relative; display: inline-block;
             text-shadow: 0 0 15px rgba(255,255,255,0.1); transition: transform 0.1s;
         }
-        .glitch-title:hover {
+        .glitch-title:hover, .glitch-title.force-glitch {
             cursor: crosshair; transform: skewX(-6deg);
             text-shadow: 4px 0 #FF003C, -4px 0 #00FFCC;
             animation: shake 0.2s infinite;
         }
         .g-dot { color: #FF003C; transition: text-shadow 0.2s; }
-        .glitch-title:hover .g-dot { text-shadow: 0 0 20px #FF003C, 0 0 40px #FF003C; }
+        .glitch-title:hover .g-dot, .glitch-title.force-glitch .g-dot { text-shadow: 0 0 20px #FF003C, 0 0 40px #FF003C; }
         @keyframes shake {
             0%, 100% { transform: translate(0,0) skewX(-6deg); }
             25% { transform: translate(-2px,1px) skewX(-6deg); }
@@ -4601,7 +4788,7 @@ def _page_home(user: Optional[Dict[str, Any]] = None) -> None:
                 <div class="code-float c3">df['RSI'] = ta.momentum.rsi(window=14)</div>
                 
                 <div class="content">
-                    <div class="glitch-title">OpenNode<span class="g-dot">.</span></div>
+                    <div class="glitch-title">量化挖礦系統<span class="g-dot">.</span></div>
                     <div class="row">
                         <div class="flip-box">
                             <div class="flip-inner">
@@ -4637,6 +4824,57 @@ def _page_home(user: Optional[Dict[str, Any]] = None) -> None:
                 hero.addEventListener('mouseleave', () => {
                     spot.style.background = `radial-gradient(circle 0px at 50% 50%, rgba(255,0,60,0.15) 0%, transparent 100%)`;
                 });
+
+                function startAutoAnimation() {
+                    const title = document.querySelector('.glitch-title');
+                    const inners = document.querySelectorAll('.flip-inner');
+                    
+                    if(title) title.classList.add('force-glitch');
+                    
+                    inners.forEach(el => {
+                        el.style.transition = 'transform 1.2s cubic-bezier(0.2, 0.8, 0.2, 1)';
+                        // 1260deg 代表旋轉三圈半，會剛好停在反面(中文)
+                        el.style.transform = 'rotateX(1260deg)';
+                    });
+
+                    setTimeout(() => {
+                        if(title) title.classList.remove('force-glitch');
+                        inners.forEach(el => {
+                            el.style.transition = 'transform 0.6s cubic-bezier(0.34, 1.56, 0.64, 1)';
+                            // 1440deg 代表完整四圈，轉回正面(英文)
+                            el.style.transform = 'rotateX(1440deg)';
+                        });
+                        
+                        // 等待動畫結束後，清空行內屬性恢復原本的 hover CSS 互動
+                        setTimeout(() => {
+                            inners.forEach(el => {
+                                el.style.transition = 'none';
+                                el.style.transform = 'rotateX(0deg)';
+                                void el.offsetHeight;
+                                el.style.transition = '';
+                                el.style.transform = '';
+                            });
+                        }, 600);
+                    }, 2000);
+                }
+
+                const w = window.parent || window;
+                if (w.__sheep_loader_finished) {
+                    if (!w.__sheep_home_anim_played) {
+                        w.__sheep_home_anim_played = true;
+                        setTimeout(startAutoAnimation, 300);
+                    }
+                } else {
+                    let pollTimer = setInterval(() => {
+                        if (w.__sheep_loader_finished) {
+                            clearInterval(pollTimer);
+                            if (!w.__sheep_home_anim_played) {
+                                w.__sheep_home_anim_played = true;
+                                setTimeout(startAutoAnimation, 100);
+                            }
+                        }
+                    }, 500);
+                }
             </script>
         </body>
         </html>
@@ -7081,13 +7319,24 @@ def main() -> None:
     # [新增] 主頁分離與排行榜頁面入口
     pages = ["主頁", "控制台", "排行榜", "任務", "提交", "結算", "新手教學"] + (["管理"] if role == "admin" else [])
 
-    # 利用 URL 查詢參數持久化當前頁面狀態
-    try:
-        q_page = st.query_params.get("page", "")
-        if q_page in pages:
-            st.session_state["nav_page"] = q_page
-    except Exception:
-        pass
+    # [新增] 強制重新載入(動畫播放前)回到主頁，避免停留在其他頁面
+    if "_sheep_fresh_load" not in st.session_state:
+        st.session_state["_sheep_fresh_load"] = True
+        st.session_state["nav_page"] = "主頁"
+        try:
+            st.query_params["page"] = "主頁"
+        except Exception as query_err:
+            import traceback
+            print(f"[WARN] 無法寫入 query params: {query_err}\n{traceback.format_exc()}")
+    else:
+        # 利用 URL 查詢參數持久化當前頁面狀態
+        try:
+            q_page = st.query_params.get("page", "")
+            if q_page in pages:
+                st.session_state["nav_page"] = q_page
+        except Exception as query_err:
+            import traceback
+            print(f"[WARN] 無法讀取 query params: {query_err}\n{traceback.format_exc()}")
 
     if "nav_page_pending" in st.session_state:
         try:
@@ -7118,6 +7367,8 @@ def main() -> None:
         for p in pages:
             is_active = (p == current_page)
             btn_type = "primary" if is_active else "secondary"
+            # 插入隱藏的定位錨點，讓 CSS 透過 :has() 找到對應的按鈕
+            st.markdown(f'<div class="sidebar-anchor nav-anchor-{p}"></div>', unsafe_allow_html=True)
             if st.button(p, key=f"nav_btn_{p}", type=btn_type, use_container_width=True):
                 st.session_state["nav_page"] = p
                 try:
@@ -7128,26 +7379,8 @@ def main() -> None:
 
         st.markdown('<div style="height: 10px"></div>', unsafe_allow_html=True)
 
-        st.markdown(
-            """
-            <style>
-            /* 針對側邊欄最後一個按鈕 (登出) 獨立設定紅色樣式 */
-            div[data-testid="stSidebar"] .stButton:last-of-type button {
-                background: rgba(239, 68, 68, 0.15) !important;
-                border: 1px solid rgba(239, 68, 68, 0.4) !important;
-                color: #f87171 !important;
-            }
-            div[data-testid="stSidebar"] .stButton:last-of-type button:hover {
-                background: rgba(239, 68, 68, 0.25) !important;
-                border-color: rgba(239, 68, 68, 0.6) !important;
-                color: #fca5a5 !important;
-                transform: translateY(-1px);
-            }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
-
+        # 插入隱藏的定位錨點，讓 CSS 透過 :has() 找到對應的按鈕
+        st.markdown('<div class="sidebar-anchor nav-anchor-登出"></div>', unsafe_allow_html=True)
         if st.button("登出", key="logout_btn", type="secondary", use_container_width=True):
             _logout()
             st.rerun()
