@@ -331,9 +331,29 @@ class JobManager:
                         cleared = db.clean_zombie_tasks(timeout_minutes=15)
                         if cleared > 0:
                             print(f"[SYSTEM] 偵測到斷線，已重置 {cleared} 個無回應任務。")
+                        
+                        # [主動防護] 揪出並放生卡死的執行緒，釋放 max_concurrent_jobs 名額
+                        with self._lock:
+                            to_orphan = []
+                            for tid, th in self._threads.items():
+                                if not th.is_alive():
+                                    continue
+                                trow = db.get_task(int(tid))
+                                if not trow or trow.get("status") not in ("running", "queued"):
+                                    to_orphan.append(tid)
+                            
+                            if to_orphan:
+                                print(f"[SYSTEM] 偵測到 {len(to_orphan)} 個卡死的執行緒，執行強制放生。")
+                                for tid in to_orphan:
+                                    self._threads.pop(tid, None)
+                                    flag = self._stop_flags.pop(tid, None)
+                                    if flag:
+                                        flag.set()
+
                         self._auto_enqueue_orphans()
-                    except Exception:
-                        pass
+                    except Exception as clean_err:
+                        import traceback
+                        print(f"[SYSTEM] 清理過期任務時發生錯誤: {clean_err}\n{traceback.format_exc()}")
 
                 conn = db._conn()
                 try:
@@ -409,6 +429,9 @@ class JobManager:
 
         try:
             if not db.claim_task_for_run(task_id):
+                with self._lock:
+                    self._threads.pop(task_id, None)
+                    self._stop_flags.pop(task_id, None)
                 return
 
             user_id = int(task["user_id"])
@@ -759,6 +782,10 @@ class JobManager:
             
             import gc
             gc.collect()
+            
+            with self._lock:
+                self._threads.pop(task_id, None)
+                self._stop_flags.pop(task_id, None)
 
         except BaseException as e:
             # [系統級防護] 捕捉 BaseException (含 SystemExit, KeyboardInterrupt) 確保狀態重置
@@ -793,10 +820,8 @@ class JobManager:
                 print(f"[CRITICAL] 錯誤處理器本身發生異常: {nested_err}\n{traceback.format_exc()}", file=sys.stderr)
             finally:
                 with self._lock:
-                    if task_id in self._threads:
-                        self._threads.pop(task_id, None)
-                    if task_id in self._stop_flags:
-                        self._stop_flags.pop(task_id, None)
+                    self._threads.pop(task_id, None)
+                    self._stop_flags.pop(task_id, None)
 
 
 JOB_MANAGER = JobManager()

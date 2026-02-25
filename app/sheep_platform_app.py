@@ -1419,185 +1419,194 @@ def _style() -> None:
             50% { box-shadow: 0 0 30px rgba(255, 0, 60, 0.95), inset 0 0 15px rgba(255, 255, 255, 0.4); }
         }
 
-/* --- [純 CSS 綁定側邊欄按鈕特效與圖示] --- */
-        /* 隱藏所有的定位錨點容器，避免撐開側邊欄間距 */
-        div[data-testid="stSidebar"] div.element-container:has(.sidebar-anchor) {
-            display: none !important;
-            margin: 0 !important;
-            padding: 0 !important;
-        }
+/* --- [純 CSS 綁定側邊欄按鈕特效與圖示] --- /
+/ [終極除錯與修復] 徹底隱藏錨點，避免影響 DOM 流與觸發 :has() 失效 */
+div[data-testid="stSidebar"] div.element-container:has(.sidebar-anchor) {
+position: absolute !important;
+width: 0 !important;
+height: 0 !important;
+opacity: 0 !important;
+margin: 0 !important;
+padding: 0 !important;
+pointer-events: none !important;
+visibility: hidden !important;
+}
 
-        /* 側邊欄按鈕內容排版對齊 (為 ICON 預留空間) */
-        div[data-testid="stSidebar"] .stButton button p {
-            display: flex !important;
-            align-items: center !important;
-            justify-content: flex-start !important;
-            padding-left: 20px !important;
-            margin: 0 auto !important;
-            width: 100% !important;
-            box-sizing: border-box !important;
-        }
-        
-        div[data-testid="stSidebar"] .stButton button p::before {
-            content: '' !important;
-            display: inline-block !important;
-            margin-right: 14px !important;
-            flex-shrink: 0 !important;
-        }
+    /* [核心修復] 將按鈕內容容器轉為極度穩定的絕對定位基準點 */
+    div[data-testid=&quot;stSidebar&quot;] .stButton button {
+        position: relative !important;
+        overflow: visible !important;
+    }
 
-        /* 1. 主頁按鈕特效與圖示 (Home) */
-        div.element-container:has(.nav-anchor-主頁) + div.element-container .stButton button {
-            background: linear-gradient(135deg, #FF003C 0%, #8A0020 100%) !important;
-            color: #ffffff !important;
-            border: 2px solid #FF003C !important;
-            box-shadow: 0 0 15px rgba(255, 0, 60, 0.6), inset 0 0 10px rgba(255, 255, 255, 0.2) !important;
-            font-weight: 900 !important;
-            letter-spacing: 3px !important;
-            animation: pulseHomeBtn 2s cubic-bezier(0.4, 0, 0.6, 1) infinite !important;
-            transition: all 0.3s ease !important;
-        }
-        div.element-container:has(.nav-anchor-主頁) + div.element-container .stButton button:hover {
-            background: linear-gradient(135deg, #ff1a53 0%, #a30026 100%) !important;
-            box-shadow: 0 0 25px rgba(255, 0, 60, 0.9), inset 0 0 15px rgba(255, 255, 255, 0.4) !important;
-            transform: translateY(-2px) scale(1.02) !important;
-        }
-        div.element-container:has(.nav-anchor-主頁) + div.element-container .stButton button p { color: #ffffff !important; justify-content: center !important; padding-left: 0 !important; }
-        div.element-container:has(.nav-anchor-主頁) + div.element-container .stButton button p::before {
-            width: 16px !important; height: 16px !important;
-            background-color: currentColor !important;
-            clip-path: polygon(50% 0%, 100% 45%, 80% 45%, 80% 100%, 20% 100%, 20% 45%, 0% 45%) !important;
-        }
-        @keyframes pulseHomeBtn {
-            0%, 100% { box-shadow: 0 0 15px rgba(255, 0, 60, 0.6), inset 0 0 10px rgba(255, 255, 255, 0.2); }
-            50% { box-shadow: 0 0 30px rgba(255, 0, 60, 0.95), inset 0 0 15px rgba(255, 255, 255, 0.4); }
-        }
+    div[data-testid=&quot;stSidebar&quot;] .stButton button div[data-testid=&quot;stMarkdownContainer&quot;] {
+        width: 100% !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: flex-start !important;
+    }
 
-        /* 2. 控制台圖示 (Dashboard 2x2 Grid) */
-        div.element-container:has(.nav-anchor-控制台) + div.element-container .stButton button p::before {
-            width: 16px !important; height: 16px !important;
-            background-image: 
-                linear-gradient(currentColor, currentColor),
-                linear-gradient(currentColor, currentColor),
-                linear-gradient(currentColor, currentColor),
-                linear-gradient(currentColor, currentColor) !important;
-            background-position: 0 0, 100% 0, 0 100%, 100% 100% !important;
-            background-size: 7px 7px !important;
-            background-repeat: no-repeat !important;
-            background-color: transparent !important;
-        }
+    /* 統一按鈕文字與圖示間距，徹底拋棄會因視窗寬度跑版的 calc(50%) 置中對齊 */
+    div[data-testid=&quot;stSidebar&quot;] .stButton button p {
+        position: relative !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: flex-start !important;
+        width: 100% !important;
+        margin: 0 !important;
+        padding-left: 36px !important; /* 強制預留左側 ICON 空間 */
+        font-size: 15px !important;
+        font-weight: 600 !important;
+        letter-spacing: 0.5px !important;
+    }
+    
+    /* 統一設定偽類 ICON 基礎屬性，絕對定位在文字左方，完全避免被擠壓消失 */
+    div[data-testid=&quot;stSidebar&quot;] .stButton button p::before {
+        content: &#39;&#39; !important;
+        position: absolute !important;
+        left: 4px !important; /* 絕對固定在文字左側 4px 處 */
+        top: 50% !important;
+        transform: translateY(-50%) !important;
+        width: 18px !important; 
+        height: 18px !important;
+        display: block !important;
+        flex-shrink: 0 !important;
+        transition: all 0.2s ease !important;
+        background-color: transparent !important;
+        background-image: none !important;
+        border: none !important;
+        clip-path: none !important;
+        box-sizing: border-box !important;
+    }
 
-        /* 3. 排行榜圖示 (Leaderboard Bar Chart) */
-        div.element-container:has(.nav-anchor-排行榜) + div.element-container .stButton button p::before {
-            width: 16px !important; height: 16px !important;
-            background-image: 
-                linear-gradient(currentColor, currentColor),
-                linear-gradient(currentColor, currentColor),
-                linear-gradient(currentColor, currentColor) !important;
-            background-position: 0 100%, 50% 100%, 100% 100% !important;
-            background-size: 4px 8px, 4px 16px, 4px 12px !important;
-            background-repeat: no-repeat !important;
-            background-color: transparent !important;
-        }
+    /* ------------------ 極簡高階純CSS幾何圖示定義 (完全 currentColor，無 Emoji) ------------------ */
 
-        /* 4. 任務圖示 (Tasks Checklist) */
-        div.element-container:has(.nav-anchor-任務) + div.element-container .stButton button p::before {
-            width: 16px !important; height: 16px !important;
-            background-image: 
-                linear-gradient(currentColor, currentColor),
-                linear-gradient(currentColor, currentColor),
-                linear-gradient(currentColor, currentColor),
-                linear-gradient(currentColor, currentColor),
-                linear-gradient(currentColor, currentColor),
-                linear-gradient(currentColor, currentColor) !important;
-            background-position: 
-                0 2px, 0 7px, 0 12px,
-                6px 2px, 6px 7px, 6px 12px !important;
-            background-size: 
-                4px 4px, 4px 4px, 4px 4px,
-                10px 4px, 10px 4px, 10px 4px !important;
-            background-repeat: no-repeat !important;
-            background-color: transparent !important;
-        }
+    /* 1. 主頁按鈕 (Home - 現代幾何房屋) */
+    div.element-container:has(.nav-anchor-主頁) + div.element-container .stButton button {
+        background: linear-gradient(135deg, #FF003C 0%, #8A0020 100%) !important;
+        border: 2px solid #FF003C !important;
+        box-shadow: 0 0 15px rgba(255, 0, 60, 0.6), inset 0 0 10px rgba(255, 255, 255, 0.2) !important;
+        animation: pulseHomeBtn 2s cubic-bezier(0.4, 0, 0.6, 1) infinite !important;
+        transition: all 0.3s ease !important;
+    }
+    div.element-container:has(.nav-anchor-主頁) + div.element-container .stButton button p { color: #ffffff !important; }
+    div.element-container:has(.nav-anchor-主頁) + div.element-container .stButton button:hover {
+        background: linear-gradient(135deg, #ff1a53 0%, #a30026 100%) !important;
+        box-shadow: 0 0 25px rgba(255, 0, 60, 0.9), inset 0 0 15px rgba(255, 255, 255, 0.4) !important;
+        transform: translateY(-2px) scale(1.02) !important;
+    }
+    div.element-container:has(.nav-anchor-主頁) + div.element-container .stButton button p::before {
+        background-color: currentColor !important;
+        clip-path: polygon(50% 0%, 100% 45%, 85% 45%, 85% 100%, 15% 100%, 15% 45%, 0% 45%) !important;
+    }
+    @keyframes pulseHomeBtn {
+        0%, 100% { box-shadow: 0 0 15px rgba(255, 0, 60, 0.6), inset 0 0 10px rgba(255, 255, 255, 0.2); }
+        50% { box-shadow: 0 0 30px rgba(255, 0, 60, 0.95), inset 0 0 15px rgba(255, 255, 255, 0.4); }
+    }
 
-        /* 5. 提交圖示 (Submit Up Arrow) */
-        div.element-container:has(.nav-anchor-提交) + div.element-container .stButton button p::before {
-            width: 16px !important; height: 16px !important;
-            background-color: currentColor !important;
-            clip-path: polygon(50% 0%, 100% 40%, 70% 40%, 70% 100%, 30% 100%, 30% 40%, 0% 40%) !important;
-        }
+    /* 2. 控制台 (Dashboard - 科技感 2x2 方塊網格) */
+    div.element-container:has(.nav-anchor-控制台) + div.element-container .stButton button p::before {
+        background-image: 
+            linear-gradient(currentColor, currentColor), linear-gradient(currentColor, currentColor),
+            linear-gradient(currentColor, currentColor), linear-gradient(currentColor, currentColor) !important;
+        background-position: 0 0, 100% 0, 0 100%, 100% 100% !important;
+        background-size: 7px 7px !important;
+        background-repeat: no-repeat !important;
+    }
 
-        /* 6. 結算圖示 (Settle/Rewards Coin) */
-        div.element-container:has(.nav-anchor-結算) + div.element-container .stButton button p::before {
-            width: 16px !important; height: 16px !important;
-            border-radius: 50% !important;
-            border: 2px solid currentColor !important;
-            background-color: transparent !important;
-            background-image: radial-gradient(circle at center, currentColor 35%, transparent 40%) !important;
-            box-sizing: border-box !important;
-        }
+    /* 3. 排行榜 (Leaderboard - 數據長條圖) */
+    div.element-container:has(.nav-anchor-排行榜) + div.element-container .stButton button p::before {
+        background-image: 
+            linear-gradient(currentColor, currentColor),
+            linear-gradient(currentColor, currentColor),
+            linear-gradient(currentColor, currentColor) !important;
+        background-position: 0 100%, 50% 100%, 100% 100% !important;
+        background-size: 4px 10px, 4px 18px, 4px 14px !important;
+        background-repeat: no-repeat !important;
+    }
 
-        /* 7. 管理圖示 (Admin Shield) */
-        div.element-container:has(.nav-anchor-管理) + div.element-container .stButton button p::before {
-            width: 16px !important; height: 16px !important;
-            background-color: currentColor !important;
-            clip-path: polygon(0 0, 100% 0, 100% 60%, 50% 100%, 0 60%) !important;
-        }
+    /* 4. 任務 (Tasks - 任務清單線條) */
+    div.element-container:has(.nav-anchor-任務) + div.element-container .stButton button p::before {
+        background-image: 
+            linear-gradient(currentColor, currentColor), linear-gradient(currentColor, currentColor),
+            linear-gradient(currentColor, currentColor), linear-gradient(currentColor, currentColor),
+            linear-gradient(currentColor, currentColor), linear-gradient(currentColor, currentColor) !important;
+        background-position: 
+            0 2px, 0 8px, 0 14px,
+            6px 2px, 6px 8px, 6px 14px !important;
+        background-size: 
+            4px 3px, 4px 3px, 4px 3px,
+            12px 3px, 12px 3px, 12px 3px !important;
+        background-repeat: no-repeat !important;
+    }
 
-        /* 8. 新手教學按鈕特效與圖示 (Info) */
-        div.element-container:has(.nav-anchor-新手教學) + div.element-container .stButton button {
-            background: linear-gradient(135deg, rgba(251, 146, 60, 0.15) 0%, rgba(234, 88, 12, 0.05) 100%) !important;
-            backdrop-filter: blur(12px) !important;
-            border: 1px solid rgba(251, 146, 60, 0.3) !important;
-            box-shadow: 0 4px 16px rgba(251, 146, 60, 0.05) !important;
-            transition: all 0.3s ease !important;
-        }
-        div.element-container:has(.nav-anchor-新手教學) + div.element-container .stButton button:hover {
-            background: linear-gradient(135deg, rgba(251, 146, 60, 0.25) 0%, rgba(234, 88, 12, 0.1) 100%) !important;
-            border-color: rgba(251, 146, 60, 0.5) !important;
-            box-shadow: 0 6px 20px rgba(251, 146, 60, 0.15) !important;
-            transform: translateY(-1px);
-        }
-        div.element-container:has(.nav-anchor-新手教學) + div.element-container .stButton button p { color: #fed7aa !important; justify-content: center !important; padding-left: 0 !important; }
-        div.element-container:has(.nav-anchor-新手教學) + div.element-container .stButton button:hover p { color: #ffffff !important; }
-        div.element-container:has(.nav-anchor-新手教學) + div.element-container .stButton button p::before {
-            width: 16px !important; height: 16px !important;
-            border-radius: 50% !important;
-            border: 2px solid currentColor !important;
-            background-color: transparent !important;
-            background-image: 
-                linear-gradient(currentColor, currentColor),
-                linear-gradient(currentColor, currentColor) !important;
-            background-position: center 2px, center 6px !important;
-            background-size: 2px 2px, 2px 5px !important;
-            background-repeat: no-repeat !important;
-            box-sizing: border-box !important;
-        }
+    /* 5. 提交 (Submit - 上傳/提交箭頭) */
+    div.element-container:has(.nav-anchor-提交) + div.element-container .stButton button p::before {
+        background-color: currentColor !important;
+        clip-path: polygon(50% 0%, 100% 45%, 70% 45%, 70% 100%, 30% 100%, 30% 45%, 0% 45%) !important;
+    }
 
-        /* 9. 登出按鈕特效與圖示 (Exit Arrow) */
-        div.element-container:has(.nav-anchor-登出) + div.element-container .stButton button {
-            background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%) !important;
-            border: 1px solid #ef4444 !important;
-            font-weight: 800 !important;
-            letter-spacing: 2px !important;
-            box-shadow: 0 4px 15px rgba(220, 38, 38, 0.4) !important;
-            transition: all 0.3s ease !important;
-        }
-        div.element-container:has(.nav-anchor-登出) + div.element-container .stButton button:hover {
-            background: linear-gradient(135deg, #ef4444 0%, #b91c1c 100%) !important;
-            border-color: #f87171 !important;
-            box-shadow: 0 6px 20px rgba(239, 68, 68, 0.6) !important;
-            transform: translateY(-2px) !important;
-        }
-        div.element-container:has(.nav-anchor-登出) + div.element-container .stButton button p { color: #ffffff !important; justify-content: center !important; padding-left: 0 !important; }
-        div.element-container:has(.nav-anchor-登出) + div.element-container .stButton button p::before {
-            width: 16px !important; height: 16px !important;
-            background-color: currentColor !important;
-            clip-path: polygon(0 20%, 50% 20%, 50% 0, 100% 50%, 50% 100%, 50% 80%, 0 80%) !important;
-        }
+    /* 6. 結算 (Rewards - 錢幣/代幣) */
+    div.element-container:has(.nav-anchor-結算) + div.element-container .stButton button p::before {
+        border: 2px solid currentColor !important;
+        border-radius: 50% !important;
+        background-image: radial-gradient(circle at center, currentColor 35%, transparent 40%) !important;
+    }
+
+    /* 7. 管理 (Admin - 權限盾牌) */
+    div.element-container:has(.nav-anchor-管理) + div.element-container .stButton button p::before {
+        background-color: currentColor !important;
+        clip-path: polygon(50% 0%, 100% 20%, 100% 60%, 50% 100%, 0% 60%, 0% 20%) !important;
+    }
+
+    /* 8. 新手教學 (Tutorial - 資訊 &#39;i&#39; 標誌) */
+    div.element-container:has(.nav-anchor-新手教學) + div.element-container .stButton button {
+        background: linear-gradient(135deg, rgba(251, 146, 60, 0.15) 0%, rgba(234, 88, 12, 0.05) 100%) !important;
+        backdrop-filter: blur(12px) !important;
+        border: 1px solid rgba(251, 146, 60, 0.3) !important;
+        box-shadow: 0 4px 16px rgba(251, 146, 60, 0.05) !important;
+        transition: all 0.3s ease !important;
+    }
+    div.element-container:has(.nav-anchor-新手教學) + div.element-container .stButton button p { color: #fed7aa !important; }
+    div.element-container:has(.nav-anchor-新手教學) + div.element-container .stButton button:hover {
+        background: linear-gradient(135deg, rgba(251, 146, 60, 0.25) 0%, rgba(234, 88, 12, 0.1) 100%) !important;
+        border-color: rgba(251, 146, 60, 0.5) !important;
+        box-shadow: 0 6px 20px rgba(251, 146, 60, 0.15) !important;
+        transform: translateY(-1px);
+    }
+    div.element-container:has(.nav-anchor-新手教學) + div.element-container .stButton button:hover p { color: #ffffff !important; }
+    div.element-container:has(.nav-anchor-新手教學) + div.element-container .stButton button p::before {
+        border: 2px solid currentColor !important;
+        border-radius: 50% !important;
+        background-image: 
+            linear-gradient(currentColor, currentColor),
+            linear-gradient(currentColor, currentColor) !important;
+        background-position: center 3px, center 8px !important;
+        background-size: 3px 3px, 3px 6px !important;
+        background-repeat: no-repeat !important;
+    }
+
+    /* 9. 登出 (Logout - 電源/退出標誌) */
+    div.element-container:has(.nav-anchor-登出) + div.element-container .stButton button {
+        background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%) !important;
+        border: 1px solid #ef4444 !important;
+        box-shadow: 0 4px 15px rgba(220, 38, 38, 0.4) !important;
+        transition: all 0.3s ease !important;
+    }
+    div.element-container:has(.nav-anchor-登出) + div.element-container .stButton button p { color: #ffffff !important; }
+    div.element-container:has(.nav-anchor-登出) + div.element-container .stButton button:hover {
+        background: linear-gradient(135deg, #ef4444 0%, #b91c1c 100%) !important;
+        border-color: #f87171 !important;
+        box-shadow: 0 6px 20px rgba(239, 68, 68, 0.6) !important;
+        transform: translateY(-2px) !important;
+    }
     div.element-container:has(.nav-anchor-登出) + div.element-container .stButton button p::before {
-        width: 14px; height: 14px;
-        background-color: currentColor;
-        clip-path: polygon(0 20%, 50% 20%, 50% 0, 100% 50%, 50% 100%, 50% 80%, 0 80%);
+        border: 2px solid currentColor !important;
+        border-top-color: transparent !important;
+        border-radius: 50% !important;
+        background-image: linear-gradient(currentColor, currentColor) !important;
+        background-position: center top !important;
+        background-size: 2px 8px !important;
+        background-repeat: no-repeat !important;
     }
 
         /* 終極紅色量化主題覆蓋 */
@@ -5259,15 +5268,16 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
     col_a, col_b = st.columns([1.2, 2.0])
 
     if exec_mode == "server":
+        run_enabled = db.get_user_run_enabled(int(user["id"]))
         run_key = f"server_run_all_{int(user['id'])}"
-        if run_key not in st.session_state:
-            st.session_state[run_key] = False
-        run_all = bool(st.session_state.get(run_key, False))
+        run_all = bool(run_enabled)
+        st.session_state[run_key] = run_all
 
         with col_a:
             if not run_all:
                 # [UI 強化] 使用 primary 顏色突顯開始按鈕
                 if st.button("開始挖礦", key="start_all", type="primary"):
+                    db.set_user_run_enabled(int(user["id"]), True)
                     st.session_state[run_key] = True
                     run_all = True
                     to_queue: List[int] = []
@@ -5329,6 +5339,7 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                     st.rerun()
             else:
                 if st.button("中斷全域運算配置", key="stop_all"):
+                    db.set_user_run_enabled(int(user["id"]), False)
                     st.session_state[run_key] = False
                     run_all = False
                     job_mgr.stop_all_for_user(int(user["id"]))
