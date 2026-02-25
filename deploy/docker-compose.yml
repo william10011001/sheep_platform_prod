@@ -38,6 +38,7 @@ services:
       SHEEP_API_ROOT_PATH: /api
       SHEEP_GIT_SHA: ${SHEEP_GIT_SHA}
       SHEEP_RUN_SCHEDULER: "0"
+      SHEEP_RUN_SCHEDULER: "0"
 
     depends_on:
       migrate:
@@ -63,6 +64,7 @@ services:
       SHEEP_CAPTCHA_MIN_S: "0.8"
       SHEEP_ROLLOVER_CHECK_S: "30"
       SHEEP_GIT_SHA: ${SHEEP_GIT_SHA}
+      SHEEP_RUN_SCHEDULER: "0"
 
     depends_on:
       migrate:
@@ -94,6 +96,27 @@ services:
       - app_data:/app/data
     restart: always
     entrypoint: ["python", "-u", "sheep_worker_daemon.py"]
+
+  compute:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.api
+    environment:
+      SHEEP_DB_URL: postgresql://sheep:${POSTGRES_PASSWORD}@db:5432/sheep
+      SHEEP_COMPUTE_API_URL: http://api:8000
+      SHEEP_COMPUTE_USER: ${SHEEP_BOOTSTRAP_ADMIN_USER}
+      SHEEP_COMPUTE_PASS: ${SHEEP_BOOTSTRAP_ADMIN_PASS}
+      SHEEP_COMPUTE_TTL_SECONDS: "2592000"
+      SHEEP_COMPUTE_IDLE_S: "0.20"
+      SHEEP_COMPUTE_COMMIT_EVERY: "50"
+      SHEEP_COMPUTE_FLAG_POLL_S: "1.0"
+    depends_on:
+      api:
+        condition: service_healthy
+    volumes:
+      - app_data:/app/data
+    restart: always
+    command: ["python", "-u", "sheep_compute_daemon.py"]
 
   nginx:
     image: nginx:1.25-alpine

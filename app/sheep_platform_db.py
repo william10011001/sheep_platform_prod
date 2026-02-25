@@ -585,9 +585,40 @@ def init_db() -> None:
             pass
         try:
             conn.execute("ALTER TABLE users ADD COLUMN nickname TEXT DEFAULT ''")
+            
         except Exception:
             pass
-        
+        # mining_tasks lease columns (compute worker 必備)
+        try:
+            if getattr(conn, "kind", "sqlite") == "postgres":
+                conn.execute("ALTER TABLE mining_tasks ADD COLUMN IF NOT EXISTS lease_id TEXT")
+                conn.execute("ALTER TABLE mining_tasks ADD COLUMN IF NOT EXISTS lease_worker_id TEXT")
+                conn.execute("ALTER TABLE mining_tasks ADD COLUMN IF NOT EXISTS lease_expires_at TEXT")
+                conn.execute("ALTER TABLE mining_tasks ADD COLUMN IF NOT EXISTS attempt INTEGER DEFAULT 0")
+            else:
+                conn.execute("ALTER TABLE mining_tasks ADD COLUMN lease_id TEXT")
+        except Exception:
+            pass
+        try:
+            if getattr(conn, "kind", "sqlite") != "postgres":
+                conn.execute("ALTER TABLE mining_tasks ADD COLUMN lease_worker_id TEXT")
+        except Exception:
+            pass
+        try:
+            if getattr(conn, "kind", "sqlite") != "postgres":
+                conn.execute("ALTER TABLE mining_tasks ADD COLUMN lease_expires_at TEXT")
+        except Exception:
+            pass
+        try:
+            if getattr(conn, "kind", "sqlite") != "postgres":
+                conn.execute("ALTER TABLE mining_tasks ADD COLUMN attempt INTEGER DEFAULT 0")
+        except Exception:
+            pass
+
+        try:
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_mining_tasks_status_lease ON mining_tasks(status, lease_expires_at)")
+        except Exception:
+            pass        
         try:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_mining_tasks_updated_status ON mining_tasks(updated_at, status)")
@@ -2180,5 +2211,386 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
     except Exception as e:
         print(f"[DB ERROR] get_leaderboard_stats: {e}")
         return {"combos": [], "score": [], "time": [], "points": []}
+    finally:
+        conn.close()
+import uuid as _uuid
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+def _iso_add_seconds(sec: int) -> str:
+    return (datetime.now(timezone.utc) + timedelta(seconds=int(sec))).isoformat()
+
+def _lease_seconds_default() -> int:
+    try:
+        return int(os.environ.get("SHEEP_TASK_LEASE_S", "120") or "120")
+    except Exception:
+        return 120
+
+def _lease_extend_seconds() -> int:
+    try:
+        return int(os.environ.get("SHEEP_TASK_LEASE_EXTEND_S", "120") or "120")
+    except Exception:
+        return 120
+
+def _reap_expired_running(conn: _DBConn) -> int:
+    now = _utc_now_iso()
+    try:
+        cur = conn.execute(
+            """
+            UPDATE mining_tasks
+            SET status='assigned', lease_id=NULL, lease_worker_id=NULL, lease_expires_at=NULL, updated_at=?
+            WHERE status='running' AND lease_expires_at IS NOT NULL AND lease_expires_at < ?
+            """,
+            (now, now),
+        )
+        return int(cur.rowcount or 0)
+    except Exception:
+        return 0
+
+def claim_next_task_any(worker_id: str) -> Optional[dict]:
+    # compute token 專用：跨用戶派工（只派給 run_enabled=1）
+    wid = str(worker_id or "").strip()
+    if not wid:
+        return None
+
+    lease_s = _lease_seconds_default()
+    lease_id = _uuid.uuid4().hex
+    now = _utc_now_iso()
+    exp = _iso_add_seconds(lease_s)
+
+    conn = _conn()
+    try:
+        _reap_expired_running(conn)
+
+        if getattr(conn, "kind", "sqlite") == "postgres":
+            row = conn.execute(
+                """
+                SELECT t.id
+                FROM mining_tasks t
+                JOIN users u ON u.id = t.user_id
+                JOIN factor_pools p ON p.id = t.pool_id
+                WHERE t.status IN ('assigned','queued')
+                  AND COALESCE(u.disabled,0)=0
+                  AND COALESCE(u.run_enabled,1)=1
+                  AND COALESCE(p.active,1)=1
+                ORDER BY COALESCE(t.updated_at, t.created_at) ASC, t.id ASC
+                FOR UPDATE SKIP LOCKED
+                LIMIT 1
+                """
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """
+                SELECT t.id
+                FROM mining_tasks t
+                JOIN users u ON u.id = t.user_id
+                JOIN factor_pools p ON p.id = t.pool_id
+                WHERE t.status IN ('assigned','queued')
+                  AND COALESCE(u.disabled,0)=0
+                  AND COALESCE(u.run_enabled,1)=1
+                  AND COALESCE(p.active,1)=1
+                ORDER BY COALESCE(t.updated_at, t.created_at) ASC, t.id ASC
+                LIMIT 1
+                """
+            ).fetchone()
+
+        if not row:
+            conn.commit()
+            return None
+
+        tid = int(row.get("id") or 0)
+        if tid <= 0:
+            conn.commit()
+            return None
+
+        cur = conn.execute(
+            """
+            UPDATE mining_tasks
+            SET status='running',
+                lease_id=?,
+                lease_worker_id=?,
+                lease_expires_at=?,
+                last_heartbeat=?,
+                updated_at=?,
+                attempt=COALESCE(attempt,0)+1
+            WHERE id=? AND status IN ('assigned','queued')
+            """,
+            (lease_id, wid, exp, now, now, tid),
+        )
+        if int(cur.rowcount or 0) <= 0:
+            conn.commit()
+            return None
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
+    t = get_task(int(tid))
+    if not t:
+        return None
+    t["lease_id"] = str(lease_id)
+    t["lease_worker_id"] = str(wid)
+    t["lease_expires_at"] = str(exp)
+    return t
+
+def claim_next_task(user_id: int, worker_id: str) -> Optional[dict]:
+    # 原本 worker token：只領自己的任務（保留）
+    uid = int(user_id or 0)
+    wid = str(worker_id or "").strip()
+    if uid <= 0 or not wid:
+        return None
+
+    lease_s = _lease_seconds_default()
+    lease_id = _uuid.uuid4().hex
+    now = _utc_now_iso()
+    exp = _iso_add_seconds(lease_s)
+
+    conn = _conn()
+    try:
+        _reap_expired_running(conn)
+
+        if getattr(conn, "kind", "sqlite") == "postgres":
+            row = conn.execute(
+                """
+                SELECT t.id
+                FROM mining_tasks t
+                JOIN users u ON u.id = t.user_id
+                JOIN factor_pools p ON p.id = t.pool_id
+                WHERE t.user_id=?
+                  AND t.status IN ('assigned','queued')
+                  AND COALESCE(u.disabled,0)=0
+                  AND COALESCE(u.run_enabled,1)=1
+                  AND COALESCE(p.active,1)=1
+                ORDER BY COALESCE(t.updated_at, t.created_at) ASC, t.id ASC
+                FOR UPDATE SKIP LOCKED
+                LIMIT 1
+                """,
+                (uid,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """
+                SELECT t.id
+                FROM mining_tasks t
+                JOIN users u ON u.id = t.user_id
+                JOIN factor_pools p ON p.id = t.pool_id
+                WHERE t.user_id=?
+                  AND t.status IN ('assigned','queued')
+                  AND COALESCE(u.disabled,0)=0
+                  AND COALESCE(u.run_enabled,1)=1
+                  AND COALESCE(p.active,1)=1
+                ORDER BY COALESCE(t.updated_at, t.created_at) ASC, t.id ASC
+                LIMIT 1
+                """,
+                (uid,),
+            ).fetchone()
+
+        if not row:
+            conn.commit()
+            return None
+
+        tid = int(row.get("id") or 0)
+        if tid <= 0:
+            conn.commit()
+            return None
+
+        cur = conn.execute(
+            """
+            UPDATE mining_tasks
+            SET status='running',
+                lease_id=?,
+                lease_worker_id=?,
+                lease_expires_at=?,
+                last_heartbeat=?,
+                updated_at=?,
+                attempt=COALESCE(attempt,0)+1
+            WHERE id=? AND user_id=? AND status IN ('assigned','queued')
+            """,
+            (lease_id, wid, exp, now, now, tid, uid),
+        )
+        if int(cur.rowcount or 0) <= 0:
+            conn.commit()
+            return None
+
+        conn.commit()
+
+    finally:
+        conn.close()
+
+    t = get_task(int(tid))
+    if not t:
+        return None
+    t["lease_id"] = str(lease_id)
+    t["lease_worker_id"] = str(wid)
+    t["lease_expires_at"] = str(exp)
+    return t
+
+def update_task_progress_with_lease(task_id: int, user_id: int, worker_id: str, lease_id: str, progress: dict, allow_cross_user: bool = False) -> bool:
+    tid = int(task_id or 0)
+    wid = str(worker_id or "").strip()
+    lid = str(lease_id or "").strip()
+    if tid <= 0 or not wid or not lid:
+        return False
+
+    now = _utc_now_iso()
+    new_exp = _iso_add_seconds(_lease_extend_seconds())
+
+    conn = _conn()
+    try:
+        if bool(allow_cross_user):
+            cur = conn.execute(
+                """
+                UPDATE mining_tasks
+                SET progress_json=?, updated_at=?, last_heartbeat=?, lease_expires_at=?
+                WHERE id=? AND status='running' AND lease_id=? AND lease_worker_id=?
+                """,
+                (json.dumps(progress or {}, ensure_ascii=False), now, now, new_exp, tid, lid, wid),
+            )
+        else:
+            cur = conn.execute(
+                """
+                UPDATE mining_tasks
+                SET progress_json=?, updated_at=?, last_heartbeat=?, lease_expires_at=?
+                WHERE id=? AND user_id=? AND status='running' AND lease_id=? AND lease_worker_id=?
+                """,
+                (json.dumps(progress or {}, ensure_ascii=False), now, now, new_exp, tid, int(user_id or 0), lid, wid),
+            )
+        conn.commit()
+        return int(cur.rowcount or 0) > 0
+    except Exception:
+        return False
+    finally:
+        conn.close()
+
+def release_task_with_lease(task_id: int, user_id: int, worker_id: str, lease_id: str, progress: dict, allow_cross_user: bool = False) -> bool:
+    tid = int(task_id or 0)
+    wid = str(worker_id or "").strip()
+    lid = str(lease_id or "").strip()
+    if tid <= 0 or not wid or not lid:
+        return False
+
+    now = _utc_now_iso()
+
+    conn = _conn()
+    try:
+        if bool(allow_cross_user):
+            cur = conn.execute(
+                """
+                UPDATE mining_tasks
+                SET status='assigned', progress_json=?, updated_at=?, lease_id=NULL, lease_worker_id=NULL, lease_expires_at=NULL
+                WHERE id=? AND status='running' AND lease_id=? AND lease_worker_id=?
+                """,
+                (json.dumps(progress or {}, ensure_ascii=False), now, tid, lid, wid),
+            )
+        else:
+            cur = conn.execute(
+                """
+                UPDATE mining_tasks
+                SET status='assigned', progress_json=?, updated_at=?, lease_id=NULL, lease_worker_id=NULL, lease_expires_at=NULL
+                WHERE id=? AND user_id=? AND status='running' AND lease_id=? AND lease_worker_id=?
+                """,
+                (json.dumps(progress or {}, ensure_ascii=False), now, tid, int(user_id or 0), lid, wid),
+            )
+        conn.commit()
+        return int(cur.rowcount or 0) > 0
+    except Exception:
+        return False
+    finally:
+        conn.close()
+
+def finish_task_with_lease(task_id: int, user_id: int, worker_id: str, lease_id: str, candidates: list, final_progress: dict, allow_cross_user: bool = False) -> Optional[int]:
+    tid = int(task_id or 0)
+    wid = str(worker_id or "").strip()
+    lid = str(lease_id or "").strip()
+    if tid <= 0 or not wid or not lid:
+        return None
+
+    now = _utc_now_iso()
+
+    conn = _conn()
+    try:
+        if bool(allow_cross_user):
+            trow = conn.execute(
+                "SELECT id, user_id, pool_id FROM mining_tasks WHERE id=? AND status='running' AND lease_id=? AND lease_worker_id=? LIMIT 1",
+                (tid, lid, wid),
+            ).fetchone()
+        else:
+            trow = conn.execute(
+                "SELECT id, user_id, pool_id FROM mining_tasks WHERE id=? AND user_id=? AND status='running' AND lease_id=? AND lease_worker_id=? LIMIT 1",
+                (tid, int(user_id or 0), lid, wid),
+            ).fetchone()
+
+        if not trow:
+            conn.commit()
+            return None
+
+        owner_id = int(trow.get("user_id") or 0)
+        pool_id = int(trow.get("pool_id") or 0)
+
+        cur = conn.execute(
+            """
+            UPDATE mining_tasks
+            SET status='completed', progress_json=?, updated_at=?, last_heartbeat=?,
+                lease_id=NULL, lease_worker_id=NULL, lease_expires_at=NULL
+            WHERE id=? AND status='running' AND lease_id=? AND lease_worker_id=?
+            """,
+            (json.dumps(final_progress or {}, ensure_ascii=False), now, now, tid, lid, wid),
+        )
+        if int(cur.rowcount or 0) <= 0:
+            conn.commit()
+            return None
+
+        best_candidate_id = None
+        for c in list(candidates or []):
+            if not isinstance(c, dict):
+                continue
+            sc = float(c.get("score") or 0.0)
+            pr = c.get("params") or c.get("params_json") or {}
+            me = c.get("metrics") or {}
+            row = conn.execute(
+                "INSERT INTO candidates (task_id, user_id, pool_id, params_json, metrics_json, score, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id"
+                if getattr(conn, "kind", "sqlite") == "postgres"
+                else "INSERT INTO candidates (task_id, user_id, pool_id, params_json, metrics_json, score, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (tid, owner_id, pool_id, json.dumps(pr, ensure_ascii=False), json.dumps(me, ensure_ascii=False), sc, now),
+            )
+            if best_candidate_id is None:
+                if getattr(conn, "kind", "sqlite") == "postgres":
+                    rid = (row.fetchone() or {}).get("id")
+                    best_candidate_id = int(rid or 0) if rid else None
+                else:
+                    best_candidate_id = int(getattr(row, "lastrowid", 0) or 0)
+
+        conn.commit()
+        return best_candidate_id
+    except Exception:
+        try:
+            conn.commit()
+        except Exception:
+            pass
+        return None
+    finally:
+        conn.close()
+
+# 停用 run_enabled 時，直接回收該 user 的 running 任務（避免浪費算力）
+def set_user_run_enabled(user_id: int, enabled: bool) -> None:
+    conn = _conn()
+    try:
+        conn.execute("UPDATE users SET run_enabled = ? WHERE id = ?", (1 if enabled else 0, int(user_id)))
+        if not bool(enabled):
+            now = _utc_now_iso()
+            # 回收 lease，讓 compute worker 立刻停手（progress 會 409 然後 release）
+            conn.execute(
+                """
+                UPDATE mining_tasks
+                SET status='assigned',
+                    lease_id=NULL, lease_worker_id=NULL, lease_expires_at=NULL,
+                    updated_at=?
+                WHERE user_id=? AND status='running'
+                """,
+                (now, int(user_id)),
+            )
+        conn.commit()
     finally:
         conn.close()

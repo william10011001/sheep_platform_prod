@@ -4283,7 +4283,167 @@ def _page_auth() -> None:
         _render_auth_onboarding_dialog()
     elif dlg_name == "tos":
         _render_tos_dialog()
+def _perf_init() -> None:
+    if "_perf_ms" not in st.session_state or not isinstance(st.session_state.get("_perf_ms"), dict):
+        st.session_state["_perf_ms"] = {}
+    st.session_state["_perf_t0"] = time.perf_counter()
 
+def _perf_mark(name: str) -> float:
+    try:
+        return float(time.perf_counter())
+    except Exception:
+        return 0.0
+
+def _perf_add(name: str, t0: float) -> None:
+    try:
+        ms = (time.perf_counter() - float(t0)) * 1000.0
+        st.session_state["_perf_ms"][str(name)] = round(float(ms), 3)
+    except Exception:
+        pass
+
+def _perf_emit_payload() -> None:
+    try:
+        pm = st.session_state.get("_perf_ms") or {}
+        pm["server_rerun_ms"] = round((time.perf_counter() - float(st.session_state.get("_perf_t0") or time.perf_counter())) * 1000.0, 3)
+        payload = json.dumps(pm, ensure_ascii=False)
+        st.components.v1.html(
+            f"""
+<script>
+(function() {{
+  const w = window.parent || window;
+  try {{
+    w.__sheep_perf_payload = {payload};
+    w.__sheep_perf_payload_ts = Date.now();
+  }} catch(e) {{}}
+}})();
+</script>
+            """,
+            height=0,
+        )
+    except Exception:
+        pass
+
+def _perf_hud_bootstrap_once() -> None:
+    st.components.v1.html(
+        """
+<script>
+(function() {
+  const w = window.parent || window;
+  const d = w.document || document;
+
+  if (w.__sheep_perf_hud_inited) return;
+  w.__sheep_perf_hud_inited = true;
+
+  const style = d.createElement('style');
+  style.textContent = `
+#sheepPerfHud{
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  z-index: 2147483647;
+  background: rgba(0,0,0,0.56);
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 12px;
+  padding: 10px 12px;
+  color: rgba(255,255,255,0.86);
+  font-size: 12px;
+  line-height: 1.55;
+  max-width: 360px;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.55);
+  opacity: 0.30;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  user-select: none;
+}
+#sheepPerfHud:hover{
+  opacity: 1.0;
+  transform: translateY(-2px);
+}
+#sheepPerfHud .t{
+  font-weight: 900;
+  letter-spacing: 0.6px;
+  margin-bottom: 8px;
+  color: rgba(255,255,255,0.92);
+}
+#sheepPerfHud .r{
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  color: rgba(255,255,255,0.88);
+  white-space: pre-line;
+}
+#sheepPerfHud .sep{
+  height: 1px;
+  background: rgba(255,255,255,0.10);
+  margin: 8px 0;
+}
+`;
+  d.head.appendChild(style);
+
+  const el = d.createElement('div');
+  el.id = 'sheepPerfHud';
+  el.innerHTML = `<div class="t">PERF</div><div class="r" id="sheepPerfHudBody">boot...</div>`;
+  d.body.appendChild(el);
+
+  // client-side nav timings
+  function navTimings() {
+    try {
+      const nav = performance.getEntriesByType('navigation')[0];
+      if (!nav) return null;
+      return {
+        ttfb: nav.responseStart,
+        dom: nav.domContentLoadedEventEnd,
+        load: nav.loadEventEnd
+      };
+    } catch(e) { return null; }
+  }
+
+  // longtask monitoring
+  let longMax = 0;
+  try {
+    if (w.PerformanceObserver) {
+      const obs = new PerformanceObserver((list) => {
+        for (const e of list.getEntries()) {
+          longMax = Math.max(longMax, e.duration || 0);
+        }
+      });
+      obs.observe({ entryTypes: ['longtask'] });
+    }
+  } catch(e) {}
+
+  setInterval(() => {
+    try {
+      const p = w.__sheep_perf_payload || {};
+      const nav = navTimings();
+
+      const lines = [];
+      if (nav) {
+        lines.push(`nav_ttfb_ms: ${nav.ttfb.toFixed(1)}`);
+        lines.push(`nav_dom_ms:  ${nav.dom.toFixed(1)}`);
+        lines.push(`nav_load_ms: ${nav.load.toFixed(1)}`);
+      }
+
+      if (longMax > 0) {
+        lines.push(`longtask_max_ms: ${longMax.toFixed(1)}`);
+      }
+
+      // server metrics (sorted)
+      const keys = Object.keys(p || {}).sort();
+      if (keys.length) {
+        lines.push('');
+        for (const k of keys) {
+          lines.push(`${k}: ${p[k]}`);
+        }
+      }
+
+      const body = d.getElementById('sheepPerfHudBody');
+      if (body) body.textContent = lines.join('\\n') || '...';
+    } catch(e) {}
+  }, 500);
+})();
+</script>
+        """,
+        height=0,
+    )
 def _help_icon_html(text: str) -> str:
     t = str(text or "").strip()
     if not t:
@@ -5072,7 +5232,9 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
                 st.code(traceback.format_exc(), language="python")
             return
 
+        _tq0 = _perf_mark("tasks_query_ms")
         tasks = db.list_tasks_for_user(int(user["id"]), cycle_id=int(cycle["id"]))
+        _perf_add("tasks_query_ms", _tq0)
         strategies = db.list_strategies(user_id=int(user["id"]), limit=200)
         payouts = db.list_payouts(user_id=int(user["id"]), limit=200)
 
@@ -5215,7 +5377,9 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
             db.assign_tasks_for_user(int(user["id"]), cycle_id=int(cycle["id"]), min_tasks=int(min_tasks), max_tasks=int(max_tasks))
             st.session_state[_task_assign_key] = _now
 
+    _tq0 = _perf_mark("tasks_live_query_ms")
     tasks = db.list_tasks_for_user(int(user["id"]), cycle_id=int(cycle["id"]))
+    _perf_add("tasks_live_query_ms", _tq0)
     if sel_family != "全部策略" and allowed_pool_ids:
         tasks = [t for t in tasks if int(t.get("pool_id") or 0) in set(allowed_pool_ids)]
 
@@ -7347,6 +7511,8 @@ def _render_user_hud(user: Dict[str, Any]) -> None:
 
 
 def main() -> None:
+    _perf_init()
+    _perf_hud_bootstrap_once()
     st.set_page_config(page_title=APP_TITLE, layout="wide", initial_sidebar_state="expanded")
     _render_entry_overlay_once()
     _style()
@@ -7539,7 +7705,7 @@ def main() -> None:
             )
     except Exception:
         pass    
-    
+    _perf_emit_payload()    
     return
 
 

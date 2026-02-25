@@ -171,7 +171,15 @@ def _auth_ctx(req: Request, authorization: Optional[str]) -> Dict[str, Any]:
 
     return {"user": user, "token": tok}
 
-
+def _is_compute_token(ctx: Dict[str, Any]) -> bool:
+    try:
+        u = ctx.get("user") or {}
+        t = ctx.get("token") or {}
+        role = str(u.get("role") or "")
+        name = str(t.get("name") or "")
+        return (role == "admin") and (name == "compute")
+    except Exception:
+        return False
 def _require_worker(
     req: Request,
     ctx: Dict[str, Any],
@@ -573,11 +581,23 @@ def flags(
     x_worker_id: Optional[str] = Header(None),
     x_worker_version: Optional[str] = Header(None),
     x_worker_protocol: Optional[int] = Header(None),
+    x_current_task_id: Optional[int] = Header(None),
 ):
     ctx = _auth_ctx(request, authorization)
     _require_worker(request, ctx, x_worker_id, x_worker_version, x_worker_protocol)
-    user_id = int(ctx["user"]["id"])
 
+    # compute token：依「當前任務 owner」決定是否停
+    if _is_compute_token(ctx):
+        tid = int(x_current_task_id or 0)
+        if tid > 0:
+            t = db.get_task(int(tid)) or {}
+            owner_id = int(t.get("user_id") or 0)
+            if owner_id > 0:
+                return {"run_enabled": bool(db.get_user_run_enabled(owner_id))}
+        return {"run_enabled": True}
+
+    # normal token：只看自己
+    user_id = int(ctx["user"]["id"])
     return {"run_enabled": bool(db.get_user_run_enabled(user_id))}
 
 
@@ -658,11 +678,14 @@ def claim_task(
     ctx = _auth_ctx(request, authorization)
     w = _require_worker(request, ctx, x_worker_id, x_worker_version, x_worker_protocol)
 
-    user_id = int(ctx["user"]["id"])
-    if not db.get_user_run_enabled(user_id):
-        return None
-
-    task = db.claim_next_task(user_id, w["worker_id"])
+    # compute token：跨用戶派工（只派給 run_enabled=1 的 user）
+    if _is_compute_token(ctx):
+        task = db.claim_next_task_any(w["worker_id"])
+    else:
+        user_id = int(ctx["user"]["id"])
+        if not db.get_user_run_enabled(user_id):
+            return None
+        task = db.claim_next_task(user_id, w["worker_id"])
     if not task:
         return None
 
@@ -762,6 +785,7 @@ def update_progress(
         worker_id=w["worker_id"],
         lease_id=str(body.lease_id),
         progress=body.progress,
+        allow_cross_user=bool(_is_compute_token(ctx)),
     )
     if not ok:
         raise HTTPException(status_code=409, detail="lease_mismatch_or_task_not_running")
@@ -787,6 +811,7 @@ def release_task(
         worker_id=w["worker_id"],
         lease_id=str(body.lease_id),
         progress=body.progress,
+        allow_cross_user=bool(_is_compute_token(ctx)),
     )
     if not ok:
         raise HTTPException(status_code=409, detail="lease_mismatch_or_task_not_running")
@@ -817,7 +842,7 @@ def finish_task(
     # Cheap consistency check before doing any heavy server-side verification.
     if str(task_row.get("status") or "") != "running":
         raise HTTPException(status_code=409, detail="task_not_running")
-    if int(task_row.get("user_id") or 0) != int(user_id):
+    if (not _is_compute_token(ctx)) and (int(task_row.get("user_id") or 0) != int(user_id)):
         raise HTTPException(status_code=409, detail="task_not_owned")
     if str(task_row.get("lease_id") or "") != lease_id:
         raise HTTPException(status_code=409, detail="lease_mismatch")
@@ -1026,6 +1051,7 @@ def finish_task(
         lease_id=str(lease_id),
         candidates=verified_candidates,
         final_progress=dict(body.final_progress or {}),
+        allow_cross_user=bool(_is_compute_token(ctx)),
     )
 
     if best_id is None and verified_candidates:

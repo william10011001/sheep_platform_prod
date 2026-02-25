@@ -111,12 +111,25 @@ class ApiClient:
         self._session = requests.Session()
 
     def _headers(self) -> Dict[str, str]:
-        return {
+        h = {
             "Authorization": f"Bearer {self.token}",
             "X-Worker-Id": self.worker_id,
             "X-Worker-Version": WORKER_VERSION,
             "X-Worker-Protocol": str(WORKER_PROTOCOL),
         }
+        try:
+            cur_tid = getattr(self, "_current_task_id", None)
+            if cur_tid is not None:
+                h["X-Current-Task-Id"] = str(int(cur_tid))
+        except Exception:
+            pass
+        return h
+
+    def set_current_task_id(self, task_id: Optional[int]) -> None:
+        try:
+            self._current_task_id = int(task_id) if task_id is not None else None
+        except Exception:
+            self._current_task_id = None
 
     def _request(self, method: str, path: str, *, json_body: Optional[Dict[str, Any]] = None, timeout_s: float = 30.0):
         url = self.base_url + path
@@ -273,6 +286,10 @@ def _score(metrics: Dict[str, Any]) -> float:
 
 def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s: float, commit_every: int) -> None:
     task_id = int(task["task_id"])
+    try:
+        api.set_current_task_id(int(task_id))
+    except Exception:
+        pass
     lease_id = str(task.get("lease_id") or "")
     if not lease_id:
         raise RuntimeError("missing_lease_id")
@@ -637,6 +654,10 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
             api.release(task_id, lease_id, progress)
         except Exception:
             pass
+    try:
+        api.set_current_task_id(None)
+    except Exception:
+        pass
         return
 
 

@@ -1,0 +1,26 @@
+{
+  "task_info": {
+    "id": 69,
+    "user_id": 2,
+    "pool_id": 56,
+    "cycle_id": 1,
+    "partition_idx": 10,
+    "num_partitions": 16,
+    "status": "queued",
+    "progress_json": "{\"phase\": \"queued\", \"phase_msg\": \"持續性部署：程序已掛載至等待序列...\", \"updated_at\": \"2026-02-25T21:16:38.478914+00:00\"}",
+    "last_heartbeat": "2026-02-25T21:16:38.480786+00:00",
+    "created_at": "2026-02-25T21:16:38.431329+00:00",
+    "updated_at": "2026-02-25T21:16:38.480775+00:00",
+    "family": "HMA_Cross",
+    "symbol": "ETH_USDT",
+    "timeframe_min": 1440,
+    "years": 1,
+    "grid_spec_json": "{\"fast_min\": 5, \"fast_max\": 30, \"fast_step\": 5, \"slow_min\": 20, \"slow_max\": 120, \"slow_step\": 10}",
+    "risk_spec_json": "{\"tp_min\": 0.3, \"tp_max\": 1.2, \"tp_step\": 0.3, \"sl_min\": 0.4, \"sl_max\": 1.6, \"sl_step\": 0.4, \"max_hold_min\": 30, \"max_hold_max\": 720, \"max_hold_step\": 30, \"fee_side\": 0.0002, \"slippage\": 0.0, \"worst_case\": true, \"reverse_mode\": false}",
+    "seed": 599713201,
+    "pool_name": "HMA_Cross | BTC_USDT | 1m [ETH_USDT_1440m]"
+  },
+  "timestamp": "2026-02-25T21:16:46.724214+00:00",
+  "best_pass_count": 0,
+  "candidates": []
+}
