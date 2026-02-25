@@ -3332,7 +3332,15 @@ visibility: hidden !important;
         """
         <script>
         (function() {
-            const doc = window.parent && window.parent.document ? window.parent.document : document;
+            const w = window.parent || window;
+
+            // 終極防線：Streamlit rerun 會重複注入這段 JS，沒有 guard 會造成 interval/observer 疊加，第二次開始直接爆慢
+            if (w.__sheep_sys_menu_injected) {
+                return;
+            }
+            w.__sheep_sys_menu_injected = true;
+
+            const doc = w.document ? w.document : document;
             
             function isSidebarOpen() {
                 try {
@@ -4478,11 +4486,15 @@ def _partition_map_html(tasks: List[Dict[str, Any]], num_partitions: int, system
 
 
 def _render_global_progress(cycle_id: int) -> None:
+    # Perf HUD：記錄全域快照耗時（ms）
+    if "_perf_ms" not in st.session_state:
+        st.session_state["_perf_ms"] = {}
+
+    _t0 = time.perf_counter()
     try:
         snap = _cached_global_progress_snapshot(int(cycle_id))
-    except Exception as e:
-        st.warning(f"全域進度暫時無法讀取：{e}")
-        return
+    finally:
+        st.session_state["_perf_ms"]["global_snapshot_ms"] = round((time.perf_counter() - _t0) * 1000.0, 3)
 
     system_uid = int(snap.get("system_user_id") or 0)
     pools_all = list(snap.get("pools") or [])
@@ -5316,13 +5328,19 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                         for qid in to_queue:
                             try:
                                 db.update_task_status(qid, "queued")
-                                db.update_task_progress(qid, {
-                                    "phase": "queued",
-                                    "phase_msg": "調度器：已寫入佇列等待運算資源分配...",
-                                    "combos_done": 0,
-                                    "combos_total": 0,
-                                    "updated_at": _iso(_utc_now())
-                                })
+                                trow = db.get_task(int(qid)) or {}
+                                try:
+                                    prog0 = json.loads(trow.get("progress_json") or "{}")
+                                except Exception:
+                                    prog0 = {}
+                                if not isinstance(prog0, dict):
+                                    prog0 = {}
+
+                                prog0["phase"] = "queued"
+                                prog0["phase_msg"] = "調度器：已寫入佇列等待運算資源分配..."
+                                prog0["updated_at"] = _iso(_utc_now())
+
+                                db.update_task_progress(qid, prog0)
                             except Exception:
                                 pass
                         
@@ -5459,13 +5477,19 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                     for qid in to_queue2:
                         try:
                             db.update_task_status(qid, "queued")
-                            db.update_task_progress(qid, {
-                                "phase": "queued",
-                                "phase_msg": "持續性部署：程序已掛載至等待序列...",
-                                "combos_done": 0,
-                                "combos_total": 0,
-                                "updated_at": _iso(_utc_now())
-                            })
+                            trow = db.get_task(int(qid)) or {}
+                            try:
+                                prog0 = json.loads(trow.get("progress_json") or "{}")
+                            except Exception:
+                                prog0 = {}
+                            if not isinstance(prog0, dict):
+                                prog0 = {}
+
+                            prog0["phase"] = "queued"
+                            prog0["phase_msg"] = "持續性部署：程序已掛載至等待序列..."
+                            prog0["updated_at"] = _iso(_utc_now())
+
+                            db.update_task_progress(qid, prog0)
                         except Exception:
                             pass
                     db.write_audit_log(
@@ -5809,8 +5833,30 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
 
     @fragment_decorator
     def _render_active_tasks_live():
-        if active_tasks:
-            for t_obj, v_stat in active_tasks:
+        # 關鍵修復：fragment 不能用外層算好的 active_tasks（那是第一次的快照）
+        # 必須每次 run 都重抓 DB，否則你看到的 combos_total/combos_done 永遠不會變，逼你整頁 reload
+        live_tasks2 = db.list_tasks_for_user(int(user["id"]), cycle_id=int(cycle["id"]))
+        if sel_family != "全部策略" and allowed_pool_ids:
+            live_tasks2 = [t for t in live_tasks2 if int(t.get("pool_id") or 0) in set(allowed_pool_ids)]
+
+        live_tasks2 = sorted(live_tasks2, key=_sort_task_priority)
+
+        active2 = []
+        for t in live_tasks2:
+            st_raw = str(t.get("status") or "")
+            _tid = int(t["id"])
+            view_status = st_raw
+            if exec_mode == "server":
+                if job_mgr.is_running(_tid):
+                    view_status = "running"
+                elif job_mgr.is_queued(int(user["id"]), _tid) and st_raw == "assigned":
+                    view_status = "queued"
+
+            if view_status in ("running", "queued", "assigned"):
+                active2.append((t, view_status))
+
+        if active2:
+            for t_obj, v_stat in active2:
                 _render_single_task(t_obj, v_stat, True)
         else:
             st.markdown("""
@@ -7436,6 +7482,64 @@ def main() -> None:
         st.info(f"錯誤追蹤代碼：{err_id}")
         with st.expander("展開查看詳細錯誤堆疊資訊 (Traceback)", expanded=True):
             st.code(tb, language="python")
+    # ---- Perf HUD (fixed, tiny, no layout impact) ----
+    try:
+        pm = st.session_state.get("_perf_ms") or {}
+        hud_items = []
+        for k in ["global_snapshot_ms"]:
+            if k in pm:
+                hud_items.append(f"{k}: {pm[k]} ms")
+
+        if hud_items:
+            st.markdown(
+                """
+<style>
+#sheepPerfHud{
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  z-index: 2147483647;
+  background: rgba(0,0,0,0.55);
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 12px;
+  padding: 8px 10px;
+  color: rgba(255,255,255,0.85);
+  font-size: 12px;
+  line-height: 1.5;
+  max-width: 320px;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.55);
+  opacity: 0.35;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+#sheepPerfHud:hover{
+  opacity: 1.0;
+  transform: translateY(-2px);
+}
+#sheepPerfHud .t{
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  color: rgba(255,255,255,0.92);
+  margin-bottom: 6px;
+}
+#sheepPerfHud .r{
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  color: rgba(255,255,255,0.85);
+}
+</style>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                "<div id='sheepPerfHud'><div class='t'>PERF</div><div class='r'>"
+                + "<br>".join([html.escape(x) for x in hud_items])
+                + "</div></div>",
+                unsafe_allow_html=True,
+            )
+    except Exception:
+        pass    
+    
     return
 
 

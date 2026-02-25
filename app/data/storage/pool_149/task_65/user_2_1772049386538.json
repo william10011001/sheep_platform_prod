@@ -1,0 +1,26 @@
+{
+  "task_info": {
+    "id": 65,
+    "user_id": 2,
+    "pool_id": 149,
+    "cycle_id": 1,
+    "partition_idx": 2,
+    "num_partitions": 8,
+    "status": "queued",
+    "progress_json": "{\"phase\": \"queued\", \"phase_msg\": \"收回並重新置入分配池\", \"combos_done\": 0, \"combos_total\": 0, \"updated_at\": \"2026-02-25T19:46:31.146089+00:00\"}",
+    "last_heartbeat": "2026-02-25T19:46:31.204480+00:00",
+    "created_at": "2026-02-25T19:45:56.198251+00:00",
+    "updated_at": "2026-02-25T19:46:31.204467+00:00",
+    "family": "Bollinger_Touch",
+    "symbol": "ETH_USDT",
+    "timeframe_min": 5,
+    "years": 1,
+    "grid_spec_json": "{\"bb_p_min\": 10, \"bb_p_max\": 30, \"bb_p_step\": 5, \"bb_n_min\": 1.5, \"bb_n_max\": 2.5, \"bb_n_step\": 0.25}",
+    "risk_spec_json": "{\"tp_min\": 0.3, \"tp_max\": 1.2, \"tp_step\": 0.3, \"sl_min\": 0.4, \"sl_max\": 1.6, \"sl_step\": 0.4, \"max_hold_min\": 30, \"max_hold_max\": 720, \"max_hold_step\": 30, \"fee_side\": 0.0002, \"slippage\": 0.0, \"worst_case\": true, \"reverse_mode\": false}",
+    "seed": 136928016,
+    "pool_name": "Bollinger_Touch | BTC_USDT | 1m [ETH_USDT_5m]"
+  },
+  "timestamp": "2026-02-25T19:56:26.537374+00:00",
+  "best_pass_count": 0,
+  "candidates": []
+}

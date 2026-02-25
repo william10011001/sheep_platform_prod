@@ -1,0 +1,26 @@
+{
+  "task_info": {
+    "id": 65,
+    "user_id": 2,
+    "pool_id": 149,
+    "cycle_id": 1,
+    "partition_idx": 2,
+    "num_partitions": 8,
+    "status": "queued",
+    "progress_json": "{\"phase\": \"build_grid\", \"phase_msg\": \"指標計算中:    Bollinger_Touch 訊號快取命中 (Skip Calculation)\", \"combos_done\": 271, \"combos_total\": 1152, \"updated_at\": \"2026-02-25T19:48:07.526121+00:00\", \"best_score\": null, \"best_candidate_id\": null, \"best_any_score\": -136.05884, \"best_any_metrics\": {\"total_return_pct\": -72.7577, \"max_drawdown_pct\": 74.1819, \"sharpe\": -3.7584, \"trades\": 2570, \"win_rate_pct\": 30.1167}, \"best_any_params\": {\"family\": \"Bollinger_Touch\", \"family_params\": {\"period\": 15, \"nstd\": 2.25}, \"tp\": 0.009000000000000001, \"sl\": 0.004, \"max_hold\": 450}, \"best_any_passed\": false, \"phase_progress\": 0.0, \"last_error\": null, \"elapsed_s\": 95.798, \"speed_cps\": 2.828882, \"eta_s\": 311.43}",
+    "last_heartbeat": "2026-02-25T19:48:07.694320+00:00",
+    "created_at": "2026-02-25T19:45:56.198251+00:00",
+    "updated_at": "2026-02-25T19:48:07.694311+00:00",
+    "family": "Bollinger_Touch",
+    "symbol": "ETH_USDT",
+    "timeframe_min": 5,
+    "years": 1,
+    "grid_spec_json": "{\"bb_p_min\": 10, \"bb_p_max\": 30, \"bb_p_step\": 5, \"bb_n_min\": 1.5, \"bb_n_max\": 2.5, \"bb_n_step\": 0.25}",
+    "risk_spec_json": "{\"tp_min\": 0.3, \"tp_max\": 1.2, \"tp_step\": 0.3, \"sl_min\": 0.4, \"sl_max\": 1.6, \"sl_step\": 0.4, \"max_hold_min\": 30, \"max_hold_max\": 720, \"max_hold_step\": 30, \"fee_side\": 0.0002, \"slippage\": 0.0, \"worst_case\": true, \"reverse_mode\": false}",
+    "seed": 136928016,
+    "pool_name": "Bollinger_Touch | BTC_USDT | 1m [ETH_USDT_5m]"
+  },
+  "timestamp": "2026-02-25T19:57:58.665988+00:00",
+  "best_pass_count": 0,
+  "candidates": []
+}

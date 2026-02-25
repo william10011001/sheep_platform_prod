@@ -21,13 +21,32 @@ from sheep_platform_security import (
     get_fernet,
 )
 # ─────────────────────────────────────────────────────────────────────────────
-# DB API (sqlite) — minimal set required for Auth + Admin bootstrap
+# DB API (sqlite/postgres) — production: Postgres via SHEEP_DB_URL
 # ─────────────────────────────────────────────────────────────────────────────
 import sqlite3
+import threading
+
+try:
+    import psycopg2
+    import psycopg2.pool
+    import psycopg2.extras
+except Exception:
+    psycopg2 = None
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _db_url() -> str:
+    return str(os.environ.get("SHEEP_DB_URL", "") or "").strip()
+
+
+def _db_kind() -> str:
+    u = _db_url().lower()
+    if u.startswith("postgresql://") or u.startswith("postgres://"):
+        return "postgres"
+    return "sqlite"
 
 
 def _db_path() -> str:
@@ -47,7 +66,172 @@ def _db_path() -> str:
     return os.path.join(base_dir, "data", "sheep.db")
 
 
-def _conn() -> sqlite3.Connection:
+class _DBResult:
+    def __init__(self, cur, rowcount: int = 0, lastrowid: int = 0):
+        self._cur = cur
+        self.rowcount = int(rowcount or 0)
+        self.lastrowid = int(lastrowid or 0)
+
+    def fetchone(self):
+        if self._cur is None:
+            return None
+        try:
+            r = self._cur.fetchone()
+            return dict(r) if r else None
+        finally:
+            try:
+                self._cur.close()
+            except Exception:
+                pass
+            self._cur = None
+
+    def fetchall(self):
+        if self._cur is None:
+            return []
+        try:
+            rows = self._cur.fetchall()
+            return [dict(x) for x in rows] if rows else []
+        finally:
+            try:
+                self._cur.close()
+            except Exception:
+                pass
+            self._cur = None
+
+
+class _DBConn:
+    _is_db_conn = True
+
+    def __init__(self, kind: str, raw):
+        self.kind = str(kind)
+        self._raw = raw
+        self._closed = False
+
+    def executescript(self, script: str) -> None:
+        s = str(script or "")
+        stmts = [x.strip() for x in s.split(";") if x.strip()]
+        for st in stmts:
+            self.execute(st)
+
+    def execute(self, sql: str, params=None) -> _DBResult:
+        q = str(sql or "")
+        p = params
+
+        if self.kind == "postgres":
+            if psycopg2 is None:
+                raise RuntimeError("psycopg2 not available but postgres URL is set")
+            cur = self._raw.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            try:
+                if p is None:
+                    cur.execute(q)
+                else:
+                    # sqlite style '?' -> psycopg2 '%s'
+                    q2 = q.replace("?", "%s")
+                    cur.execute(q2, tuple(p))
+                if cur.description is None:
+                    rc = int(cur.rowcount or 0)
+                    try:
+                        cur.close()
+                    except Exception:
+                        pass
+                    return _DBResult(None, rowcount=rc, lastrowid=0)
+                return _DBResult(cur, rowcount=int(cur.rowcount or 0), lastrowid=0)
+            except Exception:
+                try:
+                    cur.close()
+                except Exception:
+                    pass
+                raise
+
+        # sqlite
+        cur = self._raw.cursor()
+        try:
+            if p is None:
+                cur.execute(q)
+            else:
+                cur.execute(q, tuple(p))
+            if cur.description is None:
+                rc = int(cur.rowcount or 0)
+                lr = int(getattr(cur, "lastrowid", 0) or 0)
+                try:
+                    cur.close()
+                except Exception:
+                    pass
+                return _DBResult(None, rowcount=rc, lastrowid=lr)
+            return _DBResult(cur, rowcount=int(cur.rowcount or 0), lastrowid=int(getattr(cur, "lastrowid", 0) or 0))
+        except Exception:
+            try:
+                cur.close()
+            except Exception:
+                pass
+            raise
+
+    def commit(self) -> None:
+        self._raw.commit()
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        _release_conn(self.kind, self._raw)
+
+
+_PG_POOL = None
+_PG_POOL_LOCK = threading.Lock()
+
+
+def _pg_pool():
+    global _PG_POOL
+    if _PG_POOL is not None:
+        return _PG_POOL
+    with _PG_POOL_LOCK:
+        if _PG_POOL is not None:
+            return _PG_POOL
+        url = _db_url()
+        if not url:
+            raise RuntimeError("SHEEP_DB_URL is empty but postgres backend requested")
+        maxconn = 30
+        try:
+            maxconn = int(os.environ.get("SHEEP_PG_MAXCONN", "30") or "30")
+        except Exception:
+            maxconn = 30
+        maxconn = max(5, min(200, int(maxconn)))
+        _PG_POOL = psycopg2.pool.ThreadedConnectionPool(
+            minconn=1,
+            maxconn=maxconn,
+            dsn=url,
+        )
+        return _PG_POOL
+
+
+def _release_conn(kind: str, raw) -> None:
+    if kind == "postgres":
+        try:
+            _pg_pool().putconn(raw)
+        except Exception:
+            try:
+                raw.close()
+            except Exception:
+                pass
+        return
+    try:
+        raw.close()
+    except Exception:
+        pass
+
+
+def _conn() -> _DBConn:
+    kind = _db_kind()
+
+    if kind == "postgres":
+        c = _pg_pool().getconn()
+        try:
+            c.autocommit = False
+        except Exception:
+            pass
+        return _DBConn("postgres", c)
+
+    # sqlite
     path = _db_path()
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -55,43 +239,196 @@ def _conn() -> sqlite3.Connection:
         import traceback
         print(f"[DB ERROR] 無法建立資料庫目錄 {path}, 錯誤詳情: {e}\n{traceback.format_exc()}")
 
-    conn = sqlite3.connect(path, timeout=30.0, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
+    raw = sqlite3.connect(path, timeout=30.0, check_same_thread=False)
+    raw.row_factory = sqlite3.Row
 
     try:
-        conn.execute("PRAGMA foreign_keys = ON;")
+        raw.execute("PRAGMA foreign_keys = ON;")
     except Exception:
         pass
     try:
-        conn.execute("PRAGMA journal_mode = WAL;")
+        raw.execute("PRAGMA journal_mode = WAL;")
     except Exception:
         pass
     try:
-        conn.execute("PRAGMA synchronous = NORMAL;")
+        raw.execute("PRAGMA synchronous = NORMAL;")
     except Exception:
         pass
     try:
-        conn.execute("PRAGMA busy_timeout = 60000;")
+        raw.execute("PRAGMA busy_timeout = 60000;")
     except Exception:
         pass
     try:
-        conn.execute("PRAGMA mmap_size = 268435456;")
+        raw.execute("PRAGMA mmap_size = 268435456;")
     except Exception:
         pass
     try:
-        conn.execute("PRAGMA cache_size = -20000;")
+        raw.execute("PRAGMA cache_size = -20000;")
     except Exception:
         pass
     try:
-        conn.execute("PRAGMA temp_store = MEMORY;")
+        raw.execute("PRAGMA temp_store = MEMORY;")
     except Exception:
         pass
 
-    return conn
+    return _DBConn("sqlite", raw)
 
 
 def init_db() -> None:
     conn = _conn()
+    if getattr(conn, "kind", "sqlite") == "postgres":
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS users (
+                    id BIGSERIAL PRIMARY KEY,
+                    username TEXT NOT NULL,
+                    username_norm TEXT NOT NULL UNIQUE,
+                    password_hash TEXT NOT NULL,
+                    role TEXT NOT NULL DEFAULT 'user',
+                    nickname TEXT DEFAULT '',
+                    disabled INTEGER NOT NULL DEFAULT 0,
+                    run_enabled INTEGER NOT NULL DEFAULT 1,
+                    wallet_address TEXT NOT NULL DEFAULT '',
+                    wallet_chain TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    last_login_at TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS audit_logs (
+                    id BIGSERIAL PRIMARY KEY,
+                    user_id BIGINT,
+                    action TEXT NOT NULL,
+                    payload_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS api_tokens (
+                    id BIGSERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
+                    token TEXT NOT NULL UNIQUE,
+                    name TEXT,
+                    expires_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS mining_cycles (
+                    id BIGSERIAL PRIMARY KEY,
+                    name TEXT,
+                    status TEXT,
+                    start_ts TEXT,
+                    end_ts TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS factor_pools (
+                    id BIGSERIAL PRIMARY KEY,
+                    cycle_id BIGINT,
+                    name TEXT,
+                    symbol TEXT,
+                    timeframe_min INTEGER,
+                    years INTEGER,
+                    family TEXT,
+                    grid_spec_json TEXT,
+                    risk_spec_json TEXT,
+                    num_partitions INTEGER,
+                    seed INTEGER,
+                    active INTEGER DEFAULT 1,
+                    created_at TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS mining_tasks (
+                    id BIGSERIAL PRIMARY KEY,
+                    user_id BIGINT,
+                    pool_id BIGINT,
+                    cycle_id BIGINT,
+                    partition_idx INTEGER,
+                    num_partitions INTEGER,
+                    status TEXT DEFAULT 'assigned',
+                    progress_json TEXT DEFAULT '{}',
+                    last_heartbeat TEXT,
+                    created_at TEXT,
+                    updated_at TEXT
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_mining_tasks_pool_cycle_part ON mining_tasks (pool_id, cycle_id, partition_idx);
+                CREATE INDEX IF NOT EXISTS idx_mining_tasks_cycle_status ON mining_tasks (cycle_id, status);
+                CREATE INDEX IF NOT EXISTS idx_mining_tasks_updated_status ON mining_tasks (updated_at, status);
+                CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at);
+
+                CREATE TABLE IF NOT EXISTS submissions (
+                    id BIGSERIAL PRIMARY KEY,
+                    candidate_id BIGINT,
+                    user_id BIGINT,
+                    pool_id BIGINT,
+                    status TEXT DEFAULT 'pending',
+                    audit_json TEXT DEFAULT '{}',
+                    submitted_at TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS candidates (
+                    id BIGSERIAL PRIMARY KEY,
+                    task_id BIGINT,
+                    user_id BIGINT,
+                    pool_id BIGINT,
+                    params_json TEXT,
+                    metrics_json TEXT,
+                    score DOUBLE PRECISION,
+                    is_submitted INTEGER DEFAULT 0,
+                    created_at TEXT
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_candidates_created_at ON candidates(created_at);
+
+                CREATE TABLE IF NOT EXISTS strategies (
+                    id BIGSERIAL PRIMARY KEY,
+                    submission_id BIGINT,
+                    user_id BIGINT,
+                    pool_id BIGINT,
+                    params_json TEXT,
+                    status TEXT DEFAULT 'active',
+                    allocation_pct DOUBLE PRECISION,
+                    note TEXT,
+                    created_at TEXT,
+                    expires_at TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS weekly_checks (
+                    id BIGSERIAL PRIMARY KEY,
+                    strategy_id BIGINT,
+                    week_start_ts TEXT,
+                    week_end_ts TEXT,
+                    return_pct DOUBLE PRECISION,
+                    max_drawdown_pct DOUBLE PRECISION,
+                    trades INTEGER,
+                    eligible INTEGER,
+                    checked_at TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS payouts (
+                    id BIGSERIAL PRIMARY KEY,
+                    strategy_id BIGINT,
+                    user_id BIGINT,
+                    week_start_ts TEXT,
+                    amount_usdt DOUBLE PRECISION,
+                    status TEXT DEFAULT 'unpaid',
+                    txid TEXT,
+                    created_at TEXT
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_payouts_created_at ON payouts(created_at);
+                """
+            )
+
+            conn.commit()
+            return
+        finally:
+            conn.close()
     try:
         conn.executescript(
             """
@@ -311,6 +648,18 @@ def create_user(
         
     conn = _conn()
     try:
+        if getattr(conn, "kind", "sqlite") == "postgres":
+            row = conn.execute(
+                """
+                INSERT INTO users (username, username_norm, password_hash, role, disabled, run_enabled, wallet_address, wallet_chain, created_at)
+                VALUES (?, ?, ?, ?, 0, 1, ?, ?, ?)
+                RETURNING id
+                """,
+                (uname, uname_norm, pw_str, str(role or "user"), str(wallet_address or ""), str(wallet_chain or ""), _now_iso()),
+            ).fetchone()
+            conn.commit()
+            return int((row or {}).get("id") or 0)
+
         cur = conn.execute(
             """
             INSERT INTO users (username, username_norm, password_hash, role, disabled, run_enabled, wallet_address, wallet_chain, created_at)
@@ -408,10 +757,19 @@ def set_wallet_address(user_id: int, wallet_address: str, wallet_chain: str = ""
 
 
 def get_setting(arg1: Any, arg2: Any = None, arg3: Any = None) -> Any:
-    import sqlite3
-    if isinstance(arg1, sqlite3.Connection):
+    if bool(getattr(arg1, "_is_db_conn", False)):
+        conn = arg1
         k = str(arg2 or "").strip()
         default = arg3
+        if not k:
+            return default
+        row = conn.execute("SELECT value FROM settings WHERE key = ? LIMIT 1", (k,)).fetchone()
+        if not row:
+            return default
+        try:
+            return json.loads(row.get("value"))
+        except Exception:
+            return row.get("value")
     else:
         k = str(arg1 or "").strip()
         default = arg2
@@ -424,9 +782,47 @@ def get_setting(arg1: Any, arg2: Any = None, arg3: Any = None) -> Any:
         if not row:
             return default
         try:
-            return json.loads(row["value"])
+            return json.loads(row.get("value"))
         except Exception:
-            return row["value"]
+            return row.get("value")
+    finally:
+        conn.close()
+
+
+def set_setting(arg1: Any, arg2: Any, arg3: Any = None) -> None:
+    if bool(getattr(arg1, "_is_db_conn", False)):
+        conn = arg1
+        k = str(arg2 or "").strip()
+        value = arg3
+        if not k:
+            return
+        v_json = json.dumps(value, ensure_ascii=False)
+        conn.execute(
+            """
+            INSERT INTO settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
+            """,
+            (k, v_json, _now_iso()),
+        )
+        return
+
+    k = str(arg1 or "").strip()
+    value = arg2
+    if not k:
+        return
+    v_json = json.dumps(value, ensure_ascii=False)
+    conn = _conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
+            """,
+            (k, v_json, _now_iso()),
+        )
+        conn.commit()
     finally:
         conn.close()
 
@@ -476,6 +872,14 @@ def create_api_token(user_id: int, ttl_seconds: int, name: str = "worker") -> di
     expires_at = (datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).isoformat()
     conn = _conn()
     try:
+        if getattr(conn, "kind", "sqlite") == "postgres":
+            row = conn.execute(
+                "INSERT INTO api_tokens (user_id, token, name, expires_at, created_at) VALUES (?, ?, ?, ?, ?) RETURNING id",
+                (user_id, token, name, expires_at, _now_iso())
+            ).fetchone()
+            conn.commit()
+            return {"token_id": int((row or {}).get("id") or 0), "token": token, "expires_at": expires_at, "issued_at": _now_iso()}
+
         cur = conn.execute(
             "INSERT INTO api_tokens (user_id, token, name, expires_at, created_at) VALUES (?, ?, ?, ?, ?)",
             (user_id, token, name, expires_at, _now_iso())
@@ -665,8 +1069,21 @@ def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, m
                         if pools:
                             import random
                             p = random.choice(pools)
-                            conn.execute("INSERT INTO mining_tasks (user_id, pool_id, cycle_id, partition_idx, num_partitions, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                                         (user_id, p["id"], cycle_id, random.randint(0, max(0, p["num_partitions"]-1)), p["num_partitions"], 'assigned', _now_iso()))
+                            part_idx = random.randint(0, max(0, int(p["num_partitions"]) - 1))
+                            # 避免同一個 user 在同一個 pool/cycle 反覆拿到同分割，減少重複與資料膨脹
+                            conn.execute(
+                                """
+                                INSERT INTO mining_tasks (user_id, pool_id, cycle_id, partition_idx, num_partitions, status, created_at, updated_at)
+                                SELECT ?, ?, ?, ?, ?, 'assigned', ?, ?
+                                WHERE NOT EXISTS (
+                                    SELECT 1 FROM mining_tasks
+                                    WHERE user_id = ? AND pool_id = ? AND cycle_id = ? AND partition_idx = ?
+                                    AND status IN ('assigned','queued','running')
+                                )
+                                """,
+                                (user_id, int(p["id"]), cycle_id, int(part_idx), int(p["num_partitions"]), _now_iso(), _now_iso(),
+                                 user_id, int(p["id"]), cycle_id, int(part_idx)),
+                            )
                     conn.commit()
                 break
             finally:
@@ -1408,8 +1825,18 @@ def insert_candidate(task_id: int, user_id: int, pool_id: int, params: dict, met
         try:
             conn = _conn()
             try:
-                cur = conn.execute("INSERT INTO candidates (task_id, user_id, pool_id, params_json, metrics_json, score, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                                   (task_id, user_id, pool_id, json.dumps(params, ensure_ascii=False), json.dumps(metrics, ensure_ascii=False), score, _now_iso()))
+                if getattr(conn, "kind", "sqlite") == "postgres":
+                    row = conn.execute(
+                        "INSERT INTO candidates (task_id, user_id, pool_id, params_json, metrics_json, score, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
+                        (task_id, user_id, pool_id, json.dumps(params, ensure_ascii=False), json.dumps(metrics, ensure_ascii=False), score, _now_iso())
+                    ).fetchone()
+                    conn.commit()
+                    return int((row or {}).get("id") or 0)
+
+                cur = conn.execute(
+                    "INSERT INTO candidates (task_id, user_id, pool_id, params_json, metrics_json, score, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (task_id, user_id, pool_id, json.dumps(params, ensure_ascii=False), json.dumps(metrics, ensure_ascii=False), score, _now_iso())
+                )
                 conn.commit()
                 return cur.lastrowid
             finally:
@@ -1670,16 +2097,28 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
         # 為了效能，我們只統計 status='completed' 或 'running'
         # 注意：SQLite JSON 函數需 json1 extension，大部分環境有。若無則退回計數。
         
-        sql_combos = """
-            SELECT u.username, u.nickname, COUNT(t.id) as task_count, 
-                   SUM(CAST(json_extract(t.progress_json, '$.combos_done') AS INTEGER)) as total_done
-            FROM mining_tasks t
-            JOIN users u ON t.user_id = u.id
-            WHERE t.updated_at >= ? AND t.updated_at <= ?
-            GROUP BY u.id
-            ORDER BY total_done DESC
-            LIMIT 50
-        """
+        if _db_kind() == "postgres":
+            sql_combos = """
+                SELECT u.username, u.nickname, COUNT(t.id) as task_count,
+                       SUM(COALESCE((t.progress_json::jsonb->>'combos_done')::bigint, 0)) as total_done
+                FROM mining_tasks t
+                JOIN users u ON t.user_id = u.id
+                WHERE t.updated_at >= ? AND t.updated_at <= ?
+                GROUP BY u.id, u.username, u.nickname
+                ORDER BY total_done DESC
+                LIMIT 50
+            """
+        else:
+            sql_combos = """
+                SELECT u.username, u.nickname, COUNT(t.id) as task_count, 
+                       SUM(CAST(json_extract(t.progress_json, '$.combos_done') AS INTEGER)) as total_done
+                FROM mining_tasks t
+                JOIN users u ON t.user_id = u.id
+                WHERE t.updated_at >= ? AND t.updated_at <= ?
+                GROUP BY u.id
+                ORDER BY total_done DESC
+                LIMIT 50
+            """
         
         try:
             rows = conn.execute(sql_combos, (cutoff_iso, _now_iso())).fetchall()
