@@ -85,9 +85,19 @@ from sheep_platform_audit import audit_candidate
 
 APP_TITLE = "OpenNode"
 
-_BRAND_WEBM_1 = os.environ.get("SHEEP_BRAND_WEBM_1", "static/羊LOGO影片(去背).webm")
-# 注意：舊版 Streamlit 的 st.components.v1.html 不支援 key=
-# 因此不使用 key，並改用更穩的 CSS selector 來固定 iframe
+# 品牌 WebM：優先吃環境變數，其次走固定且「容器最穩」的 data/ 路徑，最後才退回 static/ 的中文檔名。
+# 現實：中文檔名在容器/部署/掛載時最容易失蹤或編碼出事，所以不要只靠它。
+_BRAND_WEBM_1 = str(os.environ.get("SHEEP_BRAND_WEBM_1", "") or "").strip()
+_BRAND_WEBM_FALLBACKS = [
+    "data/brand.webm",
+    "data/logo.webm",
+    "static/brand.webm",
+    "static/logo.webm",
+    "static/羊LOGO影片(去背).webm",
+]
+
+# 入場 overlay（預設開啟；要關掉就設 SHEEP_ENTRY_OVERLAY=0）
+_ENTRY_OVERLAY_ENABLED = (str(os.environ.get("SHEEP_ENTRY_OVERLAY", "1") or "1").strip() != "0")
 
 
 def _mask_username(username: str, nickname: str = None) -> str:
@@ -129,289 +139,334 @@ def _abs_asset_path(p: str) -> str:
 
 @st.cache_data(show_spinner=False)
 def _read_file_b64(path_str: str) -> str:
+    ap = _abs_asset_path(path_str)
     try:
-        ap = _abs_asset_path(path_str)
         if not ap:
-            return ""
+            raise FileNotFoundError(f"empty path (input={path_str!r})")
         with open(ap, "rb") as f:
             raw = f.read()
         if not raw:
-            return ""
+            raise IOError(f"file is empty: {ap}")
         return base64.b64encode(raw).decode("ascii")
-    except Exception:
+    except Exception as e:
+        # 最大化顯示根因：印到 server log（你看 docker logs 就能直接定位）
+        try:
+            print(f"[ASSET ERROR] _read_file_b64 failed: input={path_str!r} abs={ap!r} err={e}", file=sys.stderr, flush=True)
+            print(traceback.format_exc(), file=sys.stderr, flush=True)
+        except Exception:
+            pass
         return ""
 
 
-def _render_brand_header(animate: bool, dim: bool = False) -> None:
-    v1 = _read_file_b64(_BRAND_WEBM_1)
-    dim_css = ""
+def _pick_brand_webm_path() -> str:
+    # 1) env 指定
+    if _BRAND_WEBM_1:
+        ap = _abs_asset_path(_BRAND_WEBM_1)
+        if ap and os.path.exists(ap):
+            return _BRAND_WEBM_1
+        try:
+            print(f"[ASSET WARN] SHEEP_BRAND_WEBM_1 set but not found: {_BRAND_WEBM_1} (abs={ap})", file=sys.stderr, flush=True)
+        except Exception:
+            pass
 
+    # 2) fallback 掃描
+    for p in _BRAND_WEBM_FALLBACKS:
+        ap = _abs_asset_path(p)
+        if ap and os.path.exists(ap):
+            return p
+
+    # 3) 都沒有：回傳最後一個，讓 log 有明確路徑可看
+    return _BRAND_WEBM_FALLBACKS[-1] if _BRAND_WEBM_FALLBACKS else ""
+
+
+def _render_brand_header(animate: bool, dim: bool = False) -> None:
+    # 現實防線：就算檔案不存在，也要留明確線索在 log
+    webm_path = _pick_brand_webm_path()
+    v1 = _read_file_b64(webm_path)
+    data_v1 = f"data:video/webm;base64,{v1}" if v1 else ""
+
+    # 可選： dim 模式（目前保留參數，不強制啟用）
+    dim_css = ""
+    if dim:
+        dim_css = """
+#sheepBrandHdr { filter: brightness(0.85) saturate(0.9); }
+"""
+
+    # 直接注入到主 DOM：避免 iframe sandbox/allow/autoplay 的不確定性
+    # 同時把定位固定，確保各裝置一致
     st.markdown(
         f"""
 <style>
-iframe[data-sheep-brand="1"],
-iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
+#sheepBrandHdr {{
   position: fixed !important;
   top: 0 !important;
-  left: 60px !important; 
+  left: 60px !important;
   width: 300px !important;
   height: 84px !important;
-  border: 0 !important;
   z-index: 500 !important;
   background: transparent !important;
-  pointer-events: none !important;
+  pointer-events: auto !important;
 }}
-
-div[data-testid="stSidebarCollapsedControl"],
-div[data-testid="collapsedControl"] {{
-    opacity: 0 !important;
-    position: absolute !important;
-    width: 1px !important;
-    height: 1px !important;
-    overflow: hidden !important;
-    z-index: -1 !important;
-}}
-
-section[data-testid="stSidebar"] button[kind="headerNoPadding"],
-section[data-testid="stSidebar"] button[aria-label="Close sidebar"],
-button[aria-label="Close sidebar"] {{
-    opacity: 0 !important;
-    position: absolute !important;
-    width: 1px !important;
-    height: 1px !important;
-    overflow: hidden !important;
-    z-index: -1 !important;
-}}
-
-header[data-testid="stHeader"] {{
-    background: transparent !important;
-    z-index: 99999 !important;
-    pointer-events: none !important;
-}}
-        
-        header[data-testid="stHeader"] * {{
-            pointer-events: auto !important;
-        }}
 
 @media (max-width: 720px) {{
-  iframe[data-sheep-brand="1"],
-  iframe[srcdoc*="SHEEP_BRAND_HDR_V3"] {{
+  #sheepBrandHdr {{
     width: 270px !important;
     height: 78px !important;
   }}
 }}
 
-div[data-testid="stAppViewContainer"] > .main {{
-  padding-top: 0 !important;
+div[data-testid="stSidebarCollapsedControl"],
+div[data-testid="collapsedControl"] {{
+  opacity: 0 !important;
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  overflow: hidden !important;
+  z-index: -1 !important;
+}}
+
+section[data-testid="stSidebar"] button[kind="headerNoPadding"],
+section[data-testid="stSidebar"] button[aria-label="Close sidebar"],
+button[aria-label="Close sidebar"] {{
+  opacity: 0 !important;
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  overflow: hidden !important;
+  z-index: -1 !important;
+}}
+
+header[data-testid="stHeader"] {{
+  background: transparent !important;
+  z-index: 99999 !important;
+  pointer-events: none !important;
+}}
+header[data-testid="stHeader"] * {{
+  pointer-events: auto !important;
 }}
 
 {dim_css}
+
+/* header UI */
+#sheepBrandHdr .brandWrap {{
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 16px 6px 6px;
+  border-radius: 9999px;
+  background: rgba(10, 14, 23, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition: background 0.3s ease, border-color 0.3s ease;
+}}
+
+#sheepBrandHdr .logoContainer {{
+  width: 72px;
+  height: 72px;
+  border-radius: 9999px;
+  background: transparent;
+  overflow: hidden;
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}}
+
+#sheepBrandHdr video {{
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scale(1.4);
+  display: block;
+  background: transparent;
+}}
+
+#sheepBrandHdr .fallback {{
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255,255,255,0.62);
+  font-weight: 800;
+  letter-spacing: 0.6px;
+  font-size: 14px;
+}}
+
+#sheepBrandHdr .name {{
+  font-size: 21px;
+  font-weight: 900;
+  letter-spacing: 0.5px;
+  line-height: 1;
+  color: #f8fbff;
+  text-shadow: 0 4px 12px rgba(0,0,0,0.8);
+  user-select: none;
+  white-space: nowrap;
+  transition: filter 0.3s ease;
+}}
+
+#sheepBrandHdr .name .souper {{
+  font-weight: 850;
+  background: linear-gradient(135deg, #ffffff 0%, #a0b4ce 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}}
+
+#sheepBrandHdr .name .sheep {{
+  font-weight: 950;
+  background: linear-gradient(135deg, #78b4ff 0%, #50f0dc 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}}
+
+#sheepBrandHdr .brandWrap:hover {{
+  background: rgba(15, 21, 32, 0.95);
+  border-color: rgba(120, 180, 255, 0.3);
+}}
+#sheepBrandHdr .brandWrap:hover .name {{
+  filter: brightness(1.15);
+}}
+
+#sheepBrandHdr.pulse .brandWrap {{
+  animation: ringPulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}}
+
+@keyframes ringPulse {{
+  0%   {{ box-shadow: 0 8px 32px rgba(0,0,0,0.6); border-color: rgba(255,255,255,0.08); }}
+  50%  {{ box-shadow: 0 12px 48px rgba(0,0,0,0.8), 0 0 20px rgba(120,180,255,0.15); border-color: rgba(120,180,255,0.4); }}
+  100% {{ box-shadow: 0 8px 32px rgba(0,0,0,0.6); border-color: rgba(255,255,255,0.08); }}
+}}
+
+@media (max-width: 720px) {{
+  #sheepBrandHdr .brandWrap {{ top: 6px; left: 6px; gap: 8px; padding: 4px 12px 4px 4px; }}
+  #sheepBrandHdr .logoContainer {{ width: 62px; height: 62px; }}
+  #sheepBrandHdr .name {{ font-size: 18px; }}
+}}
 </style>
+
+<div id="sheepBrandHdr" class="{ "pulse" if bool(animate) else "" }">
+  <div class="brandWrap" aria-label="Brand">
+    <div class="logoContainer" aria-hidden="true">
+      <video autoplay muted playsinline loop preload="auto" src="{data_v1}" style="display:{ "block" if data_v1 else "none" };"></video>
+      <div class="fallback" style="display:{ "none" if data_v1 else "flex" };">ON</div>
+    </div>
+    <div class="name" aria-label="OpenNode">
+      <span class="souper">Open</span><span class="sheep">Node</span>
+    </div>
+  </div>
+</div>
 """,
         unsafe_allow_html=True,
     )
 
-    data_v1 = f"data:video/webm;base64,{v1}" if v1 else ""
+    # 若讀不到就再補一次「很吵但有用」的 log（你要抓根因就靠這個）
+    if not data_v1:
+        ap = _abs_asset_path(webm_path)
+        try:
+            print(f"[ASSET WARN] brand webm missing => set SHEEP_BRAND_WEBM_1 or place file at one of: {_BRAND_WEBM_FALLBACKS}", file=sys.stderr, flush=True)
+            print(f"[ASSET WARN] chosen={webm_path!r} abs={ap!r}", file=sys.stderr, flush=True)
+        except Exception:
+            pass
 
-    html_block = f"""
-    <!doctype html>
-    <html>
-    <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <style>
-    html, body {{
-        height: 100%;
-        margin: 0;
-        background: transparent;
-        overflow: hidden;
-        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", Arial;
-    }}
 
-    .brandWrap {{
-        position: absolute;
-        top: 6px;
-        left: 6px;
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        padding: 6px 16px 6px 6px;
-        border-radius: 9999px;
-        background: rgba(10, 14, 23, 0.85);
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
-        backdrop-filter: blur(12px);
-        -webkit-backdrop-filter: blur(12px);
-        transition: background 0.3s ease, border-color 0.3s ease;
-    }}
+def _render_entry_overlay_once() -> None:
+    # 目標：在 Streamlit 內做「跟 deploy/nginx/html/index.html 視覺一致」的入場畫面。
+    # 做法：固定全螢幕 overlay + CSS 全部 scope 到 #sheepEntryOverlay，避免被全站 CSS 汙染而造成偏移。
+    if not bool(_ENTRY_OVERLAY_ENABLED):
+        return
+    if bool(st.session_state.get("_sheep_entry_overlay_done")):
+        return
+    st.session_state["_sheep_entry_overlay_done"] = True
 
-    .logoContainer {{
-        width: 72px;
-        height: 72px;
-        border-radius: 9999px;
-        background: transparent;
-        overflow: hidden;
-        position: relative;
-        flex: 0 0 auto;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    }}
+    st.markdown(
+        """
+<style>
+#sheepEntryOverlay{
+  position: fixed;
+  inset: 0;
+  z-index: 2147483646;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0B0E11;
+  overflow: hidden;
+  animation: sheepEntryHide 0.25s ease forwards;
+  animation-delay: 0.85s;
+}
 
-    video {{
-        position: absolute;
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-        transform: scale(1.4);
-        display: block;
-        background: transparent;
-    }}
+@keyframes sheepEntryHide {
+  to { opacity: 0; visibility: hidden; pointer-events: none; }
+}
 
-    .fallback {{
-        position: absolute;
-        inset: 0;
-        display: none;
-        align-items: center;
-        justify-content: center;
-        color: rgba(255,255,255,0.62);
-        font-weight: 800;
-        letter-spacing: 0.6px;
-        font-size: 14px;
-    }}
+#sheepEntryOverlay, #sheepEntryOverlay * { box-sizing: border-box; }
 
-    .name {{
-        font-size: 21px;
-        font-weight: 900;
-        letter-spacing: 0.5px;
-        line-height: 1;
-        color: #f8fbff;
-        text-shadow: 0 4px 12px rgba(0,0,0,0.8);
-        user-select: none;
-        white-space: nowrap;
-        transition: filter 0.3s ease;
-    }}
-    
-    .name .souper {{
-        font-weight: 850;
-        background: linear-gradient(135deg, #ffffff 0%, #a0b4ce 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-    }}
-    
-    .name .sheep {{
-        font-weight: 950;
-        background: linear-gradient(135deg, #78b4ff 0%, #50f0dc 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-    }}
+#sheepEntryOverlay .container{
+  width: 100%;
+  max-width: 420px;
+  padding: 40px;
+  background: #181A20;
+  border: 1px solid #2B3139;
+  border-radius: 4px;
+  text-align: center;
+  font-family: "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  color: #EAECEF;
+}
 
-    .brandWrap:hover {{
-        background: rgba(15, 21, 32, 0.95);
-        border-color: rgba(120, 180, 255, 0.3);
-    }}
-    
-    .brandWrap:hover .name {{
-        filter: brightness(1.15);
-    }}
+#sheepEntryOverlay .header { font-size: 20px; font-weight: 600; color: #EAECEF; margin-bottom: 8px; }
+#sheepEntryOverlay .status-text { font-size: 14px; color: #848E9C; line-height: 1.5; margin-bottom: 32px; }
 
-    .brandWrap.pulse {{
-        animation: ringPulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-    }}
-    
-    @keyframes ringPulse {{
-        0%   {{ box-shadow: 0 8px 32px rgba(0,0,0,0.6); border-color: rgba(255,255,255,0.08); }}
-        50%  {{ box-shadow: 0 12px 48px rgba(0,0,0,0.8), 0 0 20px rgba(120,180,255,0.15); border-color: rgba(120,180,255,0.4); }}
-        100% {{ box-shadow: 0 8px 32px rgba(0,0,0,0.6); border-color: rgba(255,255,255,0.08); }}
-    }}
+#sheepEntryOverlay .progress-bar-container{
+  width: 100%;
+  height: 4px;
+  background: #2B3139;
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 32px;
+}
 
-    @media (max-width: 720px) {{
-        .brandWrap {{ top: 6px; left: 6px; gap: 8px; padding: 4px 12px 4px 4px; }}
-        .logoContainer {{ width: 62px; height: 62px; }}
-        .name {{ font-size: 18px; }}
-    }}
+#sheepEntryOverlay .progress-bar{
+  height: 100%;
+  width: 0%;
+  background: #FCD535;
+  animation: loadProgress 0.8s ease-in-out forwards;
+}
 
-    @media (prefers-reduced-motion: reduce) {{
-        .brandWrap.pulse {{ animation: none; }}
-    }}
-    </style>
-    </head>
-    <body>
-    <div class="brandWrap" id="brand">
-        <div class="logoContainer" aria-hidden="true">
-        <video id="v1" muted playsinline loop preload="auto"></video>
-        <div id="fb" class="fallback">SS</div>
-        </div>
-        <div class="name" aria-label="SheepNode">
-        <span class="Sheep">Open</span><span class="sheep">Node</span>
-        </div>
-    </div>
+#sheepEntryOverlay .action-btn{
+  display: inline-block;
+  width: 100%;
+  padding: 12px 0;
+  background: #2B3139;
+  color: #EAECEF;
+  font-size: 14px;
+  font-weight: 500;
+  text-decoration: none;
+  border-radius: 4px;
+  transition: background 0.2s;
+}
 
-    <script>
-    (function() {{
-    try {{
-        if (window.frameElement) {{
-        window.frameElement.setAttribute("data-sheep-brand", "1");
-        }}
-    }} catch (e) {{}}
+#sheepEntryOverlay .action-btn:hover { background: #3B424C; }
 
-    const brand = document.getElementById("brand");
-    const v1 = document.getElementById("v1");
-    const fb = document.getElementById("fb");
+@keyframes loadProgress { to { width: 100%; } }
+</style>
 
-    const hasV1 = { "true" if v1 else "false" };
-
-    function showFallback() {{
-        fb.style.display = "flex";
-        try {{ v1.style.display = "none"; }} catch(e) {{}}
-    }}
-
-    function playSafe(v) {{
-        try {{
-        const p = v.play();
-        if (p && typeof p.catch === "function") p.catch(() => {{}});
-        }} catch(e) {{}}
-    }}
-
-    function setRate(r) {{
-        try {{ v1.playbackRate = r; }} catch(e) {{}}
-    }}
-
-    brand.addEventListener("mouseenter", () => setRate(1.15));
-    brand.addEventListener("mouseleave", () => setRate(1.00));
-    brand.addEventListener("click", () => {{
-        try {{
-            const d {{= window.parent.document;
-            const btns = Array.from(d.querySelectorAll('div[data-testid="stSidebar"] button'));
-            const homeBtn = btns.find(b => b.textContent && b.textContent.trim() === '主頁');
-            if (homeBtn) homeBtn.click();
-        }} catch(e) {{}}
-    }});
-    brand.style.cursor = "pointer";
-
-    window.addEventListener("message", (ev) => {{
-        try {{
-        const d = ev.data || {{}};
-        if (!d || d.type !== "SHEEP_HDR_PULSE") return;
-        if (d.on) brand.classList.add("pulse");
-        else brand.classList.remove("pulse");
-        }} catch(e) {{}}
-    }});
-
-    if (!hasV1) {{
-        showFallback();
-        return;
-    }}
-
-    v1.src = "{data_v1}";
-    setRate(1.00);
-    playSafe(v1);
-    }})();
-    </script>
-    </body>
-    </html>
-    """
-    st.components.v1.html(html_block, height=90, scrolling=False)
+<div id="sheepEntryOverlay" data-sheep-entry="SHEEP_ENTRY_V1">
+  <div class="container">
+    <div class="header">伺服器連線</div>
+    <div class="status-text">正在驗證安全憑證並路由至交易終端...</div>
+    <div class="progress-bar-container"><div class="progress-bar"></div></div>
+    <a class="action-btn" href="/app/">強制進入</a>
+  </div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
 _EXEC_MODE_LABEL = {
     "server": "伺服器",
     "worker": "工作端",
@@ -2851,29 +2906,32 @@ def _page_auth() -> None:
 <body>
 <script>
 (function() {
-  function findBrandIframe() {
-    const d = window.parent.document;
-    return d.querySelector('iframe[data-sheep-brand="1"]') || d.querySelector('iframe[data-sheep-brand="1"]') || d.querySelector('iframe[srcdoc*="SHEEP_BRAND_HDR_V3"]');
-  }
+  const d = window.parent && window.parent.document ? window.parent.document : document;
 
-  function postPulse(on) {
-    const f = findBrandIframe();
-    if (!f) return;
-    try { f.contentWindow.postMessage({ type: "SHEEP_HDR_PULSE", on: !!on }, "*"); } catch (e) {}
+  function findBrand() {
+    return d.getElementById("sheepBrandHdr");
   }
 
   function bind() {
-    const d = window.parent.document;
-    const cards = Array.from(d.querySelectorAll(".auth_scope .card"));
-    if (!cards.length) return;
+    const brand = findBrand();
+    if (!brand) return;
+
+    // Auth 頁面最穩的抓法：直接抓 stForm
+    let targets = Array.from(d.querySelectorAll(".auth_scope div[data-testid='stForm']"));
+    if (!targets.length) {
+      targets = Array.from(d.querySelectorAll("div[data-testid='stForm']"));
+    }
+    if (!targets.length) return;
 
     let hoverCount = 0;
-    function onEnter(){ hoverCount += 1; postPulse(true); }
-    function onLeave(){ hoverCount = Math.max(0, hoverCount - 1); if (hoverCount === 0) postPulse(false); }
+    function onEnter(){ hoverCount += 1; brand.classList.add("pulse"); }
+    function onLeave(){ hoverCount = Math.max(0, hoverCount - 1); if (hoverCount === 0) brand.classList.remove("pulse"); }
 
-    for (const c of cards) {
-      c.addEventListener("mouseenter", onEnter, { passive: true });
-      c.addEventListener("mouseleave", onLeave, { passive: true });
+    for (const t of targets) {
+      t.addEventListener("mouseenter", onEnter, { passive: true });
+      t.addEventListener("mouseleave", onLeave, { passive: true });
+      t.addEventListener("focusin", onEnter, { passive: true });
+      t.addEventListener("focusout", onLeave, { passive: true });
     }
   }
 
@@ -5867,6 +5925,7 @@ def _render_user_hud(user: Dict[str, Any]) -> None:
 
 def main() -> None:
     st.set_page_config(page_title=APP_TITLE, layout="wide", initial_sidebar_state="expanded")
+    _render_entry_overlay_once()
     _style()
     _bootstrap()
 
