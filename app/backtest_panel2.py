@@ -838,7 +838,7 @@ except Exception:
 
 # --- Ultra-fast RSI helpers (global, once) ---
 if NUMBA_OK:
-    @njit(cache=True, fastmath=True)
+    @njit(cache=True, fastmath=True, nogil=True)
     def _rsi_from_updown_nb(up: np.ndarray, dn: np.ndarray, period: int) -> np.ndarray:
         n = up.size
         out = np.empty(n, dtype=np.float64)
@@ -869,7 +869,7 @@ if NUMBA_OK:
                 out[i] = 100.0 - 100.0 / (1.0 + rs)
         return out
 
-    @njit(cache=True, fastmath=True)
+    @njit(cache=True, fastmath=True, nogil=True)
     def _calc_laguerre_rsi_nb(src: np.ndarray, gamma: float) -> np.ndarray:
         """John Ehlers Laguerre RSI (Numba Optimized)"""
         n = len(src)
@@ -904,7 +904,7 @@ if NUMBA_OK:
                 out[i] = 0.0
         return out
 
-    @njit(cache=True, fastmath=True)
+    @njit(cache=True, fastmath=True, nogil=True)
     def _rsi_nb(close: np.ndarray, period: int) -> np.ndarray:
         n = close.size
         up = np.empty(n, dtype=np.float64)
@@ -2062,7 +2062,7 @@ except Exception:
     pass  # 上面已設 NUMBA_OK
 
 if NUMBA_OK:
-    @njit(cache=True, fastmath=True)
+    @njit(cache=True, fastmath=True, nogil=True)
     def _rsi_wilder_nb(close, period):
         n = close.size
         out = np.empty(n, np.float64)
@@ -3209,7 +3209,7 @@ if NUMBA_OK:
                             
         return sig, (ob_top_arr, ob_bottom_arr, fvg_top_arr, fvg_bottom_arr, ob_idx_arr, highest_arr, lowest_arr)
 
-    @njit(cache=True, fastmath=True)
+    @njit(cache=True, fastmath=True, nogil=True)
     def _signal_from_smc_nb(o: np.ndarray, h: np.ndarray, l: np.ndarray, c: np.ndarray, v: np.ndarray,
                             param_len: int,
                             param_ob_limit: int,
@@ -5878,6 +5878,7 @@ def run_grid_gpu(df: pd.DataFrame,
                 _log(f"← 批次完成 dt={dt:.2f}s | done={done}/{total_local} | {spd:.1f} 組/s | ETA={eta:.1f}s")
 
                 progress.progress(min(1.0, done / max(1, total_jobs_count)))
+                time.sleep(0.005) # 批次間隔釋放 GIL
                 batch_sigs, batch_tp, batch_sl, batch_meta = [], [], [], []
             for i, prm in enumerate(plist):
                 sig = sig_cache[i]
@@ -5959,6 +5960,7 @@ def run_grid_gpu(df: pd.DataFrame,
             done += B
             progress.progress(min(1.0, done / max(1, total_jobs_count)))
             _log(f"進度：{done}/{total_jobs_count} 組")
+            time.sleep(0.005) # 批次間隔釋放 GIL
 
             batch_sigs, batch_tp, batch_sl, batch_meta = [], [], [], []
 
@@ -6085,6 +6087,7 @@ def run_grid_gpu(df: pd.DataFrame,
         done += B
         progress.progress(min(1.0, done / max(1, total_jobs_count)))
         _log(f"進度：{done}/{total_jobs_count} 組")
+        time.sleep(0.005) # 批次間隔釋放 GIL
 
         batch_sigs, batch_tp, batch_sl, batch_meta = [], [], [], []
 
@@ -6234,6 +6237,7 @@ def build_cache_for_family(df: pd.DataFrame,
             if now_t - last_t >= 0.5:
                 _log(f"   RSI 快取 {i}/{Np}（{i/Np*100:.1f}%）")
                 last_t = now_t
+                time.sleep(0.005) # 強制釋放 GIL，讓 Tornado 能處理其他用戶的 WebSocket 連線
 
     elif fam == "OB_FVG" and Np > 0:
         global OB_FVG_cache
@@ -6277,6 +6281,7 @@ def build_cache_for_family(df: pd.DataFrame,
             if now_t - last_t >= 0.5:
                 _log(f"   OB_FVG 快取 {i}/{Np}（{i/Np*100:.1f}%）")
                 last_t = now_t
+                time.sleep(0.005) # 強制釋放 GIL，讓 Tornado 能處理其他用戶的 WebSocket 連線
     else:
         # 其他所有家族 (包含 TEMA_RSI, Laguerre 等)
         for i, prm in enumerate(plist, start=1):
@@ -6299,6 +6304,7 @@ def build_cache_for_family(df: pd.DataFrame,
             if now_t - last_t >= 0.3:
                 _log(f"進度 {i}/{Np} ({i/Np*100:.1f}%)")
                 last_t = now_t
+                time.sleep(0.005) # 強制釋放 GIL，避免餓死 Tornado 伺服器
 
     _log(f"   {fam} 訊號快取完成，寫入全域快取...")
     # 寫入快取

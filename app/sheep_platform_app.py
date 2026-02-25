@@ -379,6 +379,15 @@ div[data-testid="stAppViewContainer"] > .main {{
 
     brand.addEventListener("mouseenter", () => setRate(1.15));
     brand.addEventListener("mouseleave", () => setRate(1.00));
+    brand.addEventListener("click", () => {{
+        try {{
+            const d {{= window.parent.document;
+            const btns = Array.from(d.querySelectorAll('div[data-testid="stSidebar"] button'));
+            const homeBtn = btns.find(b => b.textContent && b.textContent.trim() === '主頁');
+            if (homeBtn) homeBtn.click();
+        }} catch(e) {{}}
+    }});
+    brand.style.cursor = "pointer";
 
     window.addEventListener("message", (ev) => {{
         try {{
@@ -750,12 +759,6 @@ def _style() -> None:
             margin-bottom: 24px;
         }
 
-        /* 側邊欄 */
-        section[data-testid="stSidebar"] {
-            background-color: #0d1117;
-            border-right: 1px solid var(--card-border);
-        }
-
         /* 度量指標 */
         .metric {
             background-color: var(--card);
@@ -840,13 +843,6 @@ def _style() -> None:
         div[data-testid="stTextArea"] textarea::placeholder,
         div[data-testid="stPassword"] input::placeholder {
           color: var(--muted) !important;
-        }
-
-        div[data-testid="stSidebar"] {
-          background: rgba(10, 14, 20, 0.95);
-          border-right: 1px solid var(--border);
-          backdrop-filter: blur(10px);
-          -webkit-backdrop-filter: blur(10px);
         }
 
         .block-container {
@@ -1009,10 +1005,46 @@ def _style() -> None:
         .pm_cell.pm_reserved { background: #f59e0b; border-color: #d97706; }
         .pm_cell.pm_available { background: rgba(255,255,255,0.1); }
 
-        div[data-testid="stSidebarContent"] { padding-bottom: 40px !important; }
+        /* [專家級修正] 徹底解決側邊欄位移、滾動條跳動、頂部留白與按鈕間距問題 */
+        section[data-testid="stSidebar"] {
+            min-width: 260px !important;
+            max-width: 260px !important;
+            background: rgba(10, 14, 20, 0.95) !important;
+            border-right: 1px solid var(--border) !important;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+        }
+        
+        div[data-testid="stSidebarHeader"] {
+            display: none !important; /* 隱藏原生頂部區塊，消滅巨大留白與關閉按鈕造成的排版跳動 */
+        }
 
-        .help_wrap { display: inline-flex; position: relative; align-items: center; margin-left: 8px; z-index: 50; }
-        .help_icon {
+        div[data-testid="stSidebarUserContent"] {
+            padding-top: 0 !important; /* 防止 Streamlit 原生插入的多餘頂部間距 */
+        }
+
+        div[data-testid="stSidebarContent"] {
+            padding-top: 80px !important; /* 為左上角自訂懸浮選單按鈕留出絕對安全的空間 */
+            padding-bottom: 40px !important;
+            overflow-x: hidden !important; /* 絕對禁止水平卷軸導致的內容左右推擠位移 */
+            overflow-y: overlay !important;
+        }
+        
+        div[data-testid="stSidebarContent"]::-webkit-scrollbar {
+            width: 4px; /* 縮小垂直卷軸體積，避免擠壓導覽按鈕 */
+            background: transparent;
+        }
+        div[data-testid="stSidebarContent"]::-webkit-scrollbar-thumb {
+            background: rgba(255,255,255,0.1);
+            border-radius: 4px;
+        }
+
+        /* 消除選單按鈕之間的無規則外邊距，防止點擊或 Hover 時的上下跳動現象 */
+        div[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] > div.element-container {
+            margin-bottom: 2px !important;
+        }
+
+        .help_wrap { display: inline-flex; position: relative; align-items: center; margin-left: 8px; z-index: 50; }        .help_icon {
           width: 20px; height: 20px; border-radius: 50%;
           display: inline-flex; align-items: center; justify-content: center;
           font-size: 12px; font-weight: 700;
@@ -1310,18 +1342,6 @@ def _style() -> None:
             display: none !important;
         }
 
-        /* 專業全域載入動畫設定 */
-        @keyframes task-pulse {
-            0% { transform: scale(0.95); opacity: 0.5; box-shadow: 0 0 0 0 rgba(var(--color-rgb), 0.7); }
-            50% { transform: scale(1.05); opacity: 1; box-shadow: 0 0 0 4px rgba(var(--color-rgb), 0); }
-            100% { transform: scale(0.95); opacity: 0.5; box-shadow: 0 0 0 0 rgba(var(--color-rgb), 0); }
-        }
-        
-        .stSpinner > div > div {
-            border-color: #3b82f6 transparent #3b82f6 transparent !important;
-            animation: spin 1s linear infinite !important;
-        }
-        
         /* 新手教學按鈕專屬樣式 (微橘色+毛玻璃漸層) */
         .tutorial-glass-btn {
             background: linear-gradient(135deg, rgba(251, 146, 60, 0.15) 0%, rgba(234, 88, 12, 0.05) 100%) !important;
@@ -1340,16 +1360,544 @@ def _style() -> None:
             transform: translateY(-1px);
         }
         .tutorial-glass-btn[kind="primary"] {
-            background: linear-gradient(135deg, rgba(251, 146, 60, 0.35) 0%, rgba(234, 88, 12, 0.15) 100%) !important;
-            border: 1px solid rgba(251, 146, 60, 0.6) !important;
+            background: linear-gradient(135deg, rgba(255, 0, 60, 0.35) 0%, rgba(120, 0, 20, 0.15) 100%) !important;
+            border: 1px solid rgba(255, 0, 60, 0.6) !important;
             color: #ffffff !important;
-            box-shadow: 0 4px 20px rgba(251, 146, 60, 0.25) !important;
+            box-shadow: 0 4px 20px rgba(255, 0, 60, 0.25) !important;
         }
+        
+        /* 終極紅色量化主題覆蓋 */
+        :root {
+            --bg: transparent !important;
+            --card: rgba(15, 2, 5, 0.85) !important;
+            --card-border: rgba(255, 0, 60, 0.35) !important;
+            --text-primary: #f8fafc !important;
+            --text-secondary: #ff8a9f !important;
+            --accent: #FF003C !important;
+        }
+        .stApp, .main { background: transparent !important; }
+        section[data-testid="stSidebar"] {
+            background: rgba(8, 0, 2, 0.95) !important;
+            border-right: 1px solid rgba(255, 0, 60, 0.4) !important;
+        }
+        button[kind="primary"] {
+            background: rgba(255, 0, 60, 0.15) !important;
+            border: 1px solid #FF003C !important;
+            color: #FF003C !important;
+            text-shadow: 0 0 8px rgba(255, 0, 60, 0.5) !important;
+            box-shadow: inset 0 0 10px rgba(255,0,60,0.2) !important;
+        }
+        button[kind="primary"]:hover {
+            background: rgba(255, 0, 60, 0.3) !important;
+            box-shadow: 0 0 20px rgba(255,0,60,0.5) !important;
+            color: #fff !important;
+            text-shadow: 0 0 10px #fff !important;
+        }
+        div[data-testid="stTextInput"] input, div[data-testid="stNumberInput"] input, div[data-testid="stPassword"] input {
+            background: rgba(15, 0, 3, 0.8) !important;
+            border-color: rgba(255, 0, 60, 0.4) !important;
+        }
+        div[data-testid="stTextInput"] input:focus, div[data-testid="stNumberInput"] input:focus, div[data-testid="stPassword"] input:focus {
+            border-color: #FF003C !important;
+            box-shadow: 0 0 0 3px rgba(255, 0, 60, 0.3) !important;
+        }
+        .pill-ok { background: rgba(0, 255, 204, 0.15) !important; color: #00FFCC !important; border-color: rgba(0, 255, 204, 0.4) !important; }
+        .pill-warn { background: rgba(255, 153, 0, 0.15) !important; color: #ff9900 !important; border-color: rgba(255, 153, 0, 0.4) !important; }
+        .pill-bad { background: rgba(255, 0, 60, 0.15) !important; color: #FF003C !important; border-color: rgba(255, 0, 60, 0.4) !important; }
+        .pill-info { background: rgba(255, 51, 102, 0.15) !important; color: #ff3366 !important; border-color: rgba(255, 51, 102, 0.4) !important; }
         </style>
         """,
         unsafe_allow_html=True,
     )
 
+# [載入動畫] 完美整合 index.html 的載入動畫，並確保僅於系統初始載入時顯示一次，杜絕重複執行
+    st.components.v1.html(
+        """
+        <!doctype html>
+        <html lang="zh-Hant">
+        <head>
+          <meta charset="utf-8" />
+          <style>
+            :root{
+              --bg0:#050007;
+              --bg1:#12000a;
+              --ink:#e9e9ee;
+              --accent:#ff003c;
+              --accent2:#f7931a;
+              --gridA:0;
+              --flash:0;
+            }
+
+            html,body{height:100%;}
+            body{
+              margin:0;
+              background: radial-gradient(1200px 700px at 50% 45%, var(--bg1) 0%, var(--bg0) 60%, #020001 100%);
+              color:var(--ink);
+              font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+              overflow:hidden;
+            }
+
+            #loader{
+              position:fixed;
+              inset:0;
+              display:block;
+              isolation:isolate;
+              background: radial-gradient(900px 600px at 50% 45%, rgba(255,0,60,0.10) 0%, rgba(5,0,7,0.95) 65%, rgba(0,0,0,0.98) 100%);
+              --gridA: 0;
+              --flash: 0;
+            }
+
+            #loader::before{
+              content:"";
+              position:absolute;
+              inset:-2px;
+              background:
+                repeating-linear-gradient(
+                  to bottom,
+                  rgba(255,255,255,0.03) 0px,
+                  rgba(255,255,255,0.03) 1px,
+                  rgba(0,0,0,0) 3px,
+                  rgba(0,0,0,0) 6px
+                );
+              opacity:0.35;
+              mix-blend-mode: overlay;
+              pointer-events:none;
+              z-index:4;
+            }
+            #loader::after{
+              content:"";
+              position:absolute;
+              inset:0;
+              background: radial-gradient(closest-side at 50% 45%, rgba(255,255,255,0.06), rgba(0,0,0,0.55));
+              opacity: calc(0.65 + var(--flash) * 0.55);
+              pointer-events:none;
+              z-index:5;
+            }
+
+            .grid-layer{
+              position:absolute;
+              left:50%;
+              top:62%;
+              width:1800px;
+              height:1800px;
+              transform: translate(-50%,-50%) perspective(900px) rotateX(68deg) translateY(120px);
+              transform-origin:center;
+              background-image:
+                linear-gradient(rgba(255,0,60,0.30) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255,0,60,0.30) 1px, transparent 1px);
+              background-size: 72px 72px;
+              opacity: var(--gridA);
+              filter: drop-shadow(0 0 14px rgba(255,0,60,0.35));
+              animation: gridMove 1.1s linear infinite;
+              z-index:1;
+              pointer-events:none;
+            }
+            @keyframes gridMove{to{background-position:0 72px;}}
+
+            #fx{
+              position:absolute;
+              inset:0;
+              width:100%;
+              height:100%;
+              z-index:3;
+              pointer-events:none;
+            }
+
+            #scene{
+              position:absolute;
+              inset:0;
+              width:100%;
+              height:100%;
+              z-index:2;
+              overflow:visible;
+              pointer-events:none;
+              will-change: transform;
+            }
+
+            .hud{
+              position:absolute;
+              left:26px;
+              bottom:22px;
+              z-index:6;
+              display:flex;
+              flex-direction:column;
+              gap:10px;
+              user-select:none;
+              pointer-events:none;
+            }
+            .hud .row{display:flex; align-items:baseline; gap:10px; letter-spacing:0.06em;}
+            .hud .label{color: rgba(255,0,60,0.95); text-shadow: 0 0 10px rgba(255,0,60,0.45); font-weight:700; font-size:12px;}
+            .hud .pct{font-weight:800; font-size:14px; color: rgba(255,255,255,0.92); text-shadow: 0 0 12px rgba(255,255,255,0.22);}
+            .hud .bar{
+              width:min(360px, calc(100vw - 52px));
+              height:10px;
+              border:1px solid rgba(255,0,60,0.55);
+              border-radius:999px;
+              overflow:hidden;
+              background: rgba(0,0,0,0.22);
+              box-shadow: 0 0 18px rgba(255,0,60,0.18);
+            }
+            .hud .bar > i{
+              display:block;
+              height:100%;
+              width:0%;
+              background: linear-gradient(90deg, rgba(255,0,60,0.15), rgba(255,0,60,0.95), rgba(247,147,26,0.85));
+              box-shadow: inset 0 0 10px rgba(255,255,255,0.15);
+            }
+            .hud .hint{font-size:11px; opacity:0.65; color: rgba(255,255,255,0.75);}
+
+            #loader.is-fading{animation: fadeOut 420ms ease forwards;}
+            @keyframes fadeOut{to{opacity:0; transform:scale(1.01);}}
+
+            @media (prefers-reduced-motion: reduce){
+              .grid-layer{animation:none;}
+              #loader::before{opacity:0.10;}
+            }
+          </style>
+        </head>
+        <body>
+        <div id="loader" data-auto-remove="true" aria-label="Loading" role="status">
+          <div class="grid-layer" aria-hidden="true"></div>
+          <canvas id="fx" aria-hidden="true"></canvas>
+          <svg id="scene" viewBox="0 0 1000 600" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+            <defs>
+              <filter id="glowRed" x="-50%" y="-50%" width="200%" height="200%">
+                <feGaussianBlur stdDeviation="2.8" result="b"/>
+                <feMerge>
+                  <feMergeNode in="b"/>
+                  <feMergeNode in="SourceGraphic"/>
+                </feMerge>
+              </filter>
+              <filter id="glowOrange" x="-60%" y="-60%" width="220%" height="220%">
+                <feGaussianBlur stdDeviation="3.4" result="b"/>
+                <feMerge>
+                  <feMergeNode in="b"/>
+                  <feMergeNode in="SourceGraphic"/>
+                </feMerge>
+              </filter>
+              <radialGradient id="btcGrad" cx="35%" cy="30%" r="70%">
+                <stop offset="0%" stop-color="#ffd08b"/>
+                <stop offset="45%" stop-color="#f7a93b"/>
+                <stop offset="100%" stop-color="#d67900"/>
+              </radialGradient>
+              <linearGradient id="metalGrad" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0%" stop-color="#161616"/>
+                <stop offset="50%" stop-color="#3a3a3a"/>
+                <stop offset="100%" stop-color="#121212"/>
+              </linearGradient>
+              <radialGradient id="portalGrad" cx="50%" cy="50%" r="60%">
+                <stop offset="0%" stop-color="#000000"/>
+                <stop offset="65%" stop-color="#12000a"/>
+                <stop offset="100%" stop-color="#ff003c" stop-opacity="0.25"/>
+              </radialGradient>
+            </defs>
+
+            <g id="trash" transform="translate(500 470)" opacity="0">
+              <g id="portal">
+                <circle id="portalRing" r="52" fill="none" stroke="#ff003c" stroke-width="4" stroke-dasharray="10 8" filter="url(#glowRed)" opacity="0.9"/>
+                <circle id="portalCore" r="38" fill="url(#portalGrad)" opacity="0.95"/>
+                <text x="0" y="7" text-anchor="middle" font-size="16" font-weight="800" fill="#ff003c" style="letter-spacing:0.16em" filter="url(#glowRed)">DEL</text>
+              </g>
+
+              <g id="trashCan" transform="translate(0 6)" filter="url(#glowRed)">
+                <path d="M-26 -8 H26" stroke="#ff003c" stroke-width="6" stroke-linecap="round"/>
+                <path d="M-18 -8 V-18 H18 V-8" fill="none" stroke="#ff003c" stroke-width="6" stroke-linejoin="round" stroke-linecap="round"/>
+                <path d="M-20 -6 L-16 34 H16 L20 -6" fill="rgba(0,0,0,0.65)" stroke="#ff003c" stroke-width="6" stroke-linejoin="round"/>
+                <path d="M-8 2 V28" stroke="rgba(255,0,60,0.8)" stroke-width="3" stroke-linecap="round"/>
+                <path d="M0 2 V28" stroke="rgba(255,0,60,0.8)" stroke-width="3" stroke-linecap="round"/>
+                <path d="M8 2 V28" stroke="rgba(255,0,60,0.8)" stroke-width="3" stroke-linecap="round"/>
+              </g>
+              <circle id="trashMouth" cx="0" cy="-6" r="2" fill="rgba(255,255,255,0.0)"/>
+            </g>
+
+            <circle id="shockwave" cx="0" cy="0" r="16" fill="rgba(255,0,60,0.12)" stroke="#ff003c" stroke-width="3" opacity="0" filter="url(#glowRed)"/>
+
+            <g id="miningGroup" transform="translate(500 280)">
+              <g id="select" opacity="0">
+                <rect id="selectBox" x="-165" y="-150" width="330" height="260" rx="14" fill="rgba(255,0,60,0.05)" stroke="rgba(255,0,60,0.9)" stroke-width="2" filter="url(#glowRed)"/>
+                <path d="M-165 -120 v-18 h18 M165 -120 v-18 h-18 M-165 110 v18 h18 M165 110 v18 h-18" fill="none" stroke="rgba(247,147,26,0.9)" stroke-width="3" stroke-linecap="round" filter="url(#glowOrange)"/>
+              </g>
+
+              <g id="stickRoot" transform="translate(-60 25)">
+                <g id="stickBase" stroke="#ff003c" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" filter="url(#glowRed)">
+                  <circle cx="0" cy="-78" r="18" fill="rgba(0,0,0,0.65)"/>
+                  <line x1="0" y1="-60" x2="0" y2="-10" />
+                  <line x1="0" y1="-38" x2="-40" y2="-10" opacity="0.75"/>
+                  <line x1="0" y1="-10" x2="-28" y2="42" opacity="0.8"/>
+                  <line x1="0" y1="-10" x2="28" y2="42" />
+                </g>
+
+                <g id="armRGroup" transform="translate(0 -38)">
+                  <g id="armRRot" transform="rotate(-35)">
+                    <g id="pickaxeHandle" transform="translate(0 0)"> 
+                      <line x1="0" y1="0" x2="56" y2="0" stroke="url(#metalGrad)" stroke-width="10" stroke-linecap="round" />
+                      <path d="M34 -5 L34 5 M39 -5 L39 5 M44 -5 L44 5 M49 -5 L49 5" stroke="rgba(247,147,26,0.75)" stroke-width="2" stroke-linecap="round" filter="url(#glowOrange)"/>
+                      <path d="M30 -10 C 26 -14, 24 -8, 28 -6" fill="none" stroke="rgba(255,255,255,0.35)" stroke-width="2" stroke-linecap="round"/>
+                    </g>
+
+                    <line x1="56" y1="0" x2="84" y2="0" stroke="#ff003c" stroke-width="8" stroke-linecap="round" filter="url(#glowRed)"/>
+                    <line x1="84" y1="0" x2="112" y2="0" stroke="#ff003c" stroke-width="8" stroke-linecap="round" filter="url(#glowRed)"/>
+                    <line x1="56" y1="0" x2="84" y2="0" stroke="rgba(255,255,255,0.28)" stroke-width="2.5" stroke-linecap="round"/>
+                    <line x1="84" y1="0" x2="112" y2="0" stroke="rgba(255,255,255,0.28)" stroke-width="2.5" stroke-linecap="round"/>
+
+                    <g id="handR" transform="translate(56 0)">
+                      <g id="handRInner" transform="scale(1)">
+                        <path d="M2 -6 C 9 -10, 18 -9, 21 -2 C 23 4, 20 11, 12 12 C 6 13, 1 8, 0 2 C -1 -3, -1 -4, 2 -6 Z" fill="rgba(0,0,0,0.55)" stroke="#ff003c" stroke-width="2.5" stroke-linejoin="round" filter="url(#glowRed)"/>
+                        <path d="M10 -6 C 12 -12, 20 -11, 21 -5" fill="none" stroke="#ff003c" stroke-width="3" stroke-linecap="round" filter="url(#glowRed)"/>
+                        <path d="M12 -2 C 14 -8, 22 -7, 23 -1" fill="none" stroke="#ff003c" stroke-width="3" stroke-linecap="round" filter="url(#glowRed)"/>
+                        <path d="M12 2 C 14 -3, 22 -2, 23 4" fill="none" stroke="#ff003c" stroke-width="3" stroke-linecap="round" filter="url(#glowRed)"/>
+                        <path d="M11 6 C 13 3, 20 4, 21 9" fill="none" stroke="#ff003c" stroke-width="3" stroke-linecap="round" filter="url(#glowRed)"/>
+                        <path d="M3 2 C -2 3, -5 -1, -2 -5" fill="none" stroke="#ff003c" stroke-width="3" stroke-linecap="round" filter="url(#glowRed)"/>
+                      </g>
+                    </g>
+
+                    <g id="pickaxe" transform="translate(56 0)">
+                      <line x1="57" y1="-22" x2="57" y2="22" stroke="#111" stroke-width="12" stroke-linecap="round" />
+                      <rect x="52" y="-10" width="10" height="20" rx="4" fill="#111" filter="url(#glowRed)"/>
+                      <path d="M57 -7 H82" fill="none" stroke="#ff003c" stroke-width="6" stroke-linecap="round" filter="url(#glowRed)"/>
+                      <path d="M57 8 L80 16" fill="none" stroke="#ff003c" stroke-width="6" stroke-linecap="round" filter="url(#glowRed)"/>
+                    </g>
+                  </g>
+                </g>
+              </g>
+
+              <g id="coin" transform="translate(50 -10)">
+                <circle r="28" fill="url(#btcGrad)" stroke="#f7931a" stroke-width="4" filter="url(#glowOrange)" />
+                <circle r="24" fill="none" stroke="rgba(255,255,255,0.25)" stroke-width="2" />
+                <text x="0" y="12" text-anchor="middle" font-size="34" font-weight="900" fill="#fff" style="paint-order:stroke; stroke: rgba(0,0,0,0.35); stroke-width:3">₿</text>
+              </g>
+            </g>
+
+            <g id="cursor" transform="translate(1040 80) scale(1.1)" opacity="0">
+              <path d="M0 0 L54 34 L28 36 L36 66 L20 72 L12 40 L0 52 Z" fill="#ffffff" opacity="0.95" />
+              <path d="M6 8 L44 32 L26 33 L32 56 L22 60 L16 36 L6 46 Z" fill="#121212" opacity="0.95"/>
+            </g>
+
+          </svg>
+
+          <div class="hud">
+            <div class="row"><span class="label" id="hudText">MINING CACHE…</span><span class="pct" id="hudPct">0%</span></div>
+            <div class="bar" aria-hidden="true"><i id="progressBar"></i></div>
+            <div class="hint"></div>
+          </div>
+        </div>
+
+        <script>
+        (function() {
+            if (window.parent.__sheep_loader_played) {
+                if (window.frameElement) window.frameElement.style.display = 'none';
+                return;
+            }
+            window.parent.__sheep_loader_played = true;
+
+            if (window.frameElement) {
+                window.frameElement.style.position = 'fixed';
+                window.frameElement.style.top = '0';
+                window.frameElement.style.left = '0';
+                window.frameElement.style.width = '100vw';
+                window.frameElement.style.height = '100vh';
+                window.frameElement.style.zIndex = '2147483647';
+                window.frameElement.style.border = 'none';
+                window.frameElement.style.background = 'transparent';
+            }
+
+            const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+            const loader = document.getElementById('loader');
+            const svg = document.getElementById('scene');
+            const canvas = document.getElementById('fx');
+            const ctx = canvas.getContext('2d', { alpha: true });
+
+            const must = (id) => document.getElementById(id);
+            const el = {
+              group: must('miningGroup'), stickRoot: must('stickRoot'), armRot: must('armRRot'),
+              coin: must('coin'), cursor: must('cursor'), trash: must('trash'), portalRing: must('portalRing'),
+              shock: must('shockwave'), select: must('select'), handInner: must('handRInner'),
+              hudText: must('hudText'), hudPct: must('hudPct'), progress: must('progressBar'),
+            };
+
+            const VB = { w: 1000, h: 600 };
+            const CONFIG = { duration: 7200, autoRemove: true, idleAfter: true };
+            const TL = Object.freeze({
+              tApproach0: 900,  tApproach1: 2000, tGrab0: 2000,     tGrab1: 2600,
+              tDrag0: 2600,     tDrag1: 3800,     tRelease: 3800,   tLand: 4500,
+              tSwallow0: 4500,  tSwallow1: 5200,  tShock0: 5000,    tShock1: 5600,
+              tGrid0: 5400,     tGrid1: 6200,
+            });
+
+            const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+            const lerp = (a, b, t) => a + (b - a) * t;
+            const mix2 = (p0, p1, t) => ({ x: lerp(p0.x, p1.x, t), y: lerp(p0.y, p1.y, t) });
+            const easeOutCubic = t => 1 - Math.pow(1 - t, 3);
+            const easeInCubic = t => t * t * t;
+            const easeInOutCubic = t => t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+            const easeOutBack = t => { const c1 = 1.70158; const c3 = c1 + 1; return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2); };
+            const easeInBack = t => { const c1 = 1.70158; const c3 = c1 + 1; return c3 * t * t * t - c1 * t * t; };
+            const seg = (t, a, b) => clamp((t - a) / (b - a), 0, 1);
+            const rad = d => d * Math.PI / 180;
+            const bez3 = (p0, p1, p2, p3, t) => {
+              const u = 1 - t, tt = t * t, uu = u * u, uuu = uu * u, ttt = tt * t;
+              return { x: uuu * p0.x + 3 * uu * t * p1.x + 3 * u * tt * p2.x + ttt * p3.x, y: uuu * p0.y + 3 * uu * t * p1.y + 3 * u * tt * p2.y + ttt * p3.y };
+            };
+
+            const geom = { base: { x: 500, y: 280 }, stick: { x: -60, y: 25 }, coinLocal: { x: 50, y: -10 }, coinR: 28, grabOffset: { x: -42, y: 36 }, trash: { x: 500, y: 470 }, mouthLocal: { x: 0, y: -6 } };
+
+            let map = { s: 1, ox: 0, oy: 0, dpr: 1 };
+            function resize() {
+              const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+              map.dpr = dpr; canvas.width = Math.floor(window.innerWidth * dpr); canvas.height = Math.floor(window.innerHeight * dpr);
+              canvas.style.width = window.innerWidth + 'px'; canvas.style.height = window.innerHeight + 'px';
+              ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+              const r = svg.getBoundingClientRect(); const s = Math.min(r.width / VB.w, r.height / VB.h);
+              map.s = s; map.ox = r.left + (r.width - VB.w * s) / 2; map.oy = r.top + (r.height - VB.h * s) / 2;
+            }
+            window.addEventListener('resize', resize, { passive: true }); resize();
+
+            const particles = [];
+            function spawnSparks(worldX, worldY, power = 1) {
+              const count = Math.floor(12 + 10 * power);
+              for (let i = 0; i < count; i++) {
+                const a = rad(-40 + Math.random() * 80), sp = 380 + Math.random() * 520 * power, life = 0.55 + Math.random() * 0.25;
+                particles.push({ x: worldX + (Math.random() * 2 - 1) * 4, y: worldY + (Math.random() * 2 - 1) * 4, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 120, life, max: life, size: 1.2 + Math.random() * 1.8 });
+              }
+            }
+            function drawParticles(dt) {
+              ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+              if (!particles.length) return;
+              const g = 1200;
+              for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i]; p.vy += g * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
+                if (p.life <= 0) { particles.splice(i, 1); continue; }
+                const alpha = clamp(p.life / p.max, 0, 1), px = p.x * map.s + map.ox, py = p.y * map.s + map.oy;
+                ctx.globalAlpha = alpha; ctx.beginPath(); ctx.fillStyle = 'rgba(247,147,26,0.95)'; ctx.arc(px, py, p.size, 0, Math.PI * 2); ctx.fill();
+                ctx.globalAlpha = alpha * 0.6; ctx.fillStyle = 'rgba(255,255,255,0.9)'; ctx.beginPath(); ctx.arc(px, py, p.size * 0.45, 0, Math.PI * 2); ctx.fill();
+              }
+              ctx.globalAlpha = 1;
+            }
+
+            let running = true, start = performance.now(), last = start;
+            let groupPos = { ...geom.base }, groupVel = { x: 0, y: 0 }, groupRot = 0, groupScale = 1, groupOpacity = 1;
+            let cursorPos = { x: 1040, y: 80 }, cursorOpacity = 0, cursorScale = 1.1;
+            let trashOpacity = 0, trashScale = 0.1, shockOpacity = 0, shockScale = 0, hitPulse = 0, shake = 0;
+            let impactedThisCycle = false, lastCycle = -1, releaseInit = false, landed = false;
+
+            function setTransform(elm, x, y, rDeg = 0, s = 1) { elm.setAttribute('transform', `translate(${x.toFixed(2)} ${y.toFixed(2)}) rotate(${rDeg.toFixed(2)}) scale(${s.toFixed(4)})`); }
+            function setOpacity(elm, o) { elm.setAttribute('opacity', o.toFixed(4)); }
+            function miningArmAngle(phase) {
+              const impactAt = 0.58, up = -58, down = 7;
+              if (phase < impactAt) return lerp(up, down, easeInCubic(phase / impactAt));
+              return lerp(down, up, easeOutCubic((phase - impactAt) / (1 - impactAt)));
+            }
+
+            function updateHUD(t) {
+              let pct;
+              if (t < 2000) pct = lerp(8, 34, easeOutCubic(t / 2000));
+              else if (t < 3800) pct = lerp(34, 72, easeInOutCubic((t - 2000) / 1800));
+              else if (t < 5200) pct = lerp(72, 92, easeInOutCubic((t - 3800) / 1400));
+              else if (t < CONFIG.duration) pct = lerp(92, 100, easeOutCubic((t - 5200) / (CONFIG.duration - 5200)));
+              else pct = 100;
+              el.hudPct.textContent = Math.round(pct) + '%';
+              el.progress.style.width = pct + '%';
+              if (t < 2000) el.hudText.textContent = '載入緩存...'; else if (t < 3800) el.hudText.textContent = '鼠標覆蓋...'; else if (t < 5200) el.hudText.textContent = '載入模型...'; else el.hudText.textContent = '載入量化參數組合...';
+            }
+
+            function update(t, dt) {
+              const { tApproach0, tApproach1, tGrab0, tGrab1, tDrag0, tDrag1, tRelease, tLand, tSwallow0, tSwallow1, tShock0, tShock1, tGrid0, tGrid1 } = TL;
+              const pOff = { x: 1040, y: 80 }, pGrab = { x: 560, y: 220 }, pDrag = { x: 540, y: 418 }, pFlick = { x: 840, y: 250 };
+
+              if (t < tApproach0) { cursorPos = { ...pOff }; cursorOpacity = 0; }
+              else if (t < tApproach1) { const u = easeOutCubic(seg(t, tApproach0, tApproach1)); cursorPos = bez3(pOff, { x: 900, y: 120 }, { x: 700, y: 110 }, pGrab, u); cursorOpacity = u; }
+              else if (t < tDrag1) { const dragU = easeInOutCubic(seg(t, tDrag0, tDrag1)), grabHold = easeInOutCubic(seg(t, tGrab0, tGrab1)), pHold = mix2(pGrab, { x: 548, y: 232 }, grabHold * 0.35); cursorPos = bez3(pHold, { x: 740, y: 280 }, { x: 620, y: 360 }, pDrag, dragU); cursorOpacity = 1; }
+              else { const u = easeOutCubic(seg(t, tRelease, tRelease + 700)); cursorPos = bez3(pDrag, { x: 620, y: 410 }, { x: 760, y: 300 }, pFlick, u); cursorOpacity = 1 - u; }
+
+              const clickEase = easeInOutCubic(seg(t, tGrab0 + 80, tGrab1 - 120)); cursorScale = 1.1 - 0.22 * clickEase;
+              const squeezeFromHit = (t < tGrab0) ? (0.10 * Math.max(0, hitPulse)) : 0;
+              const handSX = 1 - clamp(((t >= tGrab0 && t < tRelease) ? (0.14 * clickEase) : 0) + squeezeFromHit, 0, 0.18);
+              const handSY = 1 + clamp((((t >= tGrab0 && t < tRelease) ? (0.14 * clickEase) : 0) * 0.35) + (squeezeFromHit * 0.25), 0, 0.10);
+              el.handInner.setAttribute('transform', `scale(${handSX.toFixed(3)} ${handSY.toFixed(3)})`);
+              el.cursor.setAttribute('transform', `translate(${cursorPos.x.toFixed(2)} ${cursorPos.y.toFixed(2)}) scale(${cursorScale.toFixed(3)})`);
+              setOpacity(el.cursor, cursorOpacity);
+
+              if (t < 2400) { trashOpacity = 0; trashScale = 0.1; }
+              else { const u = easeOutBack(seg(t, 2400, 3050)); trashOpacity = clamp(u, 0, 1); trashScale = lerp(0.2, 1.0, u); }
+              el.trash.setAttribute('transform', `translate(${geom.trash.x} ${geom.trash.y}) scale(${trashScale.toFixed(3)})`); setOpacity(el.trash, trashOpacity);
+              el.portalRing.setAttribute('transform', `rotate(${((t * 0.22) % 360).toFixed(2)})`);
+              setOpacity(el.select, clamp(easeOutCubic(seg(t, tGrab0, tGrab1)) * (1 - easeOutCubic(seg(t, tRelease, tRelease + 260))), 0, 1));
+
+              let armAngle = -40;
+              if (t < tGrab0) {
+                groupPos = { x: geom.base.x + Math.sin(t * 0.003) * 2, y: geom.base.y + Math.sin(t * 0.006) * 3 }; groupVel = { x: 0, y: 0 }; groupScale = 1; groupOpacity = 1; groupRot = Math.sin(t * 0.003) * 2;
+                const phase = (t % 520) / 520, ci = Math.floor(t / 520); armAngle = miningArmAngle(phase);
+                if (ci !== lastCycle) { lastCycle = ci; impactedThisCycle = false; }
+                if (!impactedThisCycle && phase >= 0.58) { impactedThisCycle = true; hitPulse = 1; shake = Math.max(shake, 0.65); spawnSparks(groupPos.x + (geom.coinLocal.x - geom.coinR + 3), groupPos.y + geom.coinLocal.y, 0.9); }
+              } else if (t >= tGrab0 && t < tRelease) {
+                const grip = easeInOutCubic(seg(t, tGrab0, tGrab1)), target = { x: cursorPos.x + geom.grabOffset.x, y: cursorPos.y + geom.grabOffset.y }, k = lerp(0, 52, grip), damp = lerp(18, 12, grip);
+                groupVel.x += (target.x - groupPos.x) * k * dt; groupVel.y += (target.y - groupPos.y) * k * dt; const decay = Math.exp(-damp * dt); groupVel.x *= decay; groupVel.y *= decay; groupPos.x += groupVel.x * dt; groupPos.y += groupVel.y * dt;
+                groupRot = clamp((-groupVel.x * 0.015) + (groupVel.y * 0.010), -18, 18); groupScale = lerp(1.0, 0.92, grip); groupOpacity = 1; armAngle = lerp(7, -18, grip) + clamp(-groupVel.x * 0.03, -14, 14);
+              } else if (t >= tRelease && t < tLand) {
+                if (!releaseInit) { releaseInit = true; landed = false; const dtFlight = (tLand - tRelease) / 1000; groupVel.x = (geom.trash.x - groupPos.x) / dtFlight; groupVel.y = (geom.trash.y + geom.mouthLocal.y - groupPos.y - 0.5 * 2400 * dtFlight * dtFlight) / dtFlight; }
+                groupVel.y += 2400 * dt; groupPos.x += groupVel.x * dt; groupPos.y += groupVel.y * dt; groupRot += clamp(groupVel.x * 0.0009, -1.2, 1.2) * 180 * dt; groupScale = 0.92; groupOpacity = 1; armAngle = -10 + clamp(groupVel.y * 0.01, -25, 25);
+              } else if (t >= tSwallow0 && t < tSwallow1) {
+                if (!landed) { landed = true; shake = Math.max(shake, 1.2); spawnSparks(geom.trash.x, geom.trash.y - 10, 1.6); }
+                groupPos = { x: geom.trash.x, y: geom.trash.y + geom.mouthLocal.y }; const u = easeInBack(seg(t, tSwallow0, tSwallow1)); groupScale = lerp(0.92, 0.02, u); groupRot = lerp(groupRot, 540, easeOutCubic(u)); groupOpacity = 1 - u; armAngle = lerp(-10, 25, easeInOutCubic(seg(t, tSwallow0, (tSwallow0 + tSwallow1) / 2)));
+              } else { groupOpacity = 0; groupScale = 0.02; }
+
+              hitPulse = Math.max(0, hitPulse - dt * 3.2);
+              el.coin.setAttribute('transform', `translate(${geom.coinLocal.x} ${geom.coinLocal.y}) rotate(${(((t * 0.35) % 360) + Math.sin(t * 0.01) * 6 + hitPulse * 18).toFixed(2)}) scale(${(1 + hitPulse * 0.08).toFixed(3)})`);
+              el.stickRoot.setAttribute('transform', `translate(${geom.stick.x} ${geom.stick.y}) rotate(${((t < tGrab0) ? Math.sin(t * 0.012) * 1.2 : clamp(groupVel.x * -0.04, -4, 4)).toFixed(2)})`);
+              el.armRot.setAttribute('transform', `rotate(${armAngle.toFixed(2)})`);
+              setTransform(el.group, groupPos.x, groupPos.y, groupRot, groupScale); setOpacity(el.group, groupOpacity);
+
+              if (t < tShock0) { shockOpacity = 0; shockScale = 0; } else { const u = seg(t, tShock0, tShock1); shockOpacity = 1 - u; shockScale = lerp(0.2, 46, easeOutCubic(u)); }
+              el.shock.setAttribute('transform', `translate(500 470) scale(${shockScale.toFixed(3)})`); setOpacity(el.shock, shockOpacity);
+
+              loader.style.setProperty('--gridA', easeOutCubic(seg(t, tGrid0, tGrid1)).toFixed(3));
+              loader.style.setProperty('--flash', ((t >= tShock0 && t <= tShock0 + 220) ? (1 - seg(t, tShock0, tShock0 + 220)) : 0).toFixed(3));
+              shake = Math.max(0, shake - dt * 2.6); svg.style.transform = `translate(${((Math.random() * 2 - 1) * shake * 6).toFixed(2)}px, ${((Math.random() * 2 - 1) * shake * 5).toFixed(2)}px)`;
+
+              updateHUD(t); if (!reduceMotion) drawParticles(dt);
+              if (CONFIG.autoRemove && t >= CONFIG.duration) window.LoaderAnim.finish();
+            }
+
+            function loop(now) {
+              if (!running) return;
+              const t = now - start, dt = Math.min(0.033, Math.max(0.001, (now - last) / 1000));
+              last = now;
+
+              if (reduceMotion) {
+                updateHUD(Math.min(t, CONFIG.duration)); loader.style.setProperty('--gridA', '1'); el.cursor.setAttribute('opacity', '0'); el.trash.setAttribute('opacity', '1'); el.trash.setAttribute('transform', `translate(${geom.trash.x} ${geom.trash.y}) scale(1)`);
+                setTransform(el.group, geom.base.x, geom.base.y, 0, 1); setOpacity(el.group, 1); el.armRot.setAttribute('transform', `rotate(7)`);
+                if (t >= CONFIG.duration && CONFIG.autoRemove) window.LoaderAnim.finish();
+                return;
+              }
+
+              update(t, dt);
+              if (t >= CONFIG.duration && !CONFIG.idleAfter) running = false;
+              requestAnimationFrame(loop);
+            }
+
+            window.LoaderAnim = {
+              finish({ immediate = false } = {}) {
+                if (immediate) {
+                  running = false; loader.remove();
+                  if (window.frameElement) window.frameElement.style.display = 'none';
+                  return;
+                }
+                loader.classList.add('is-fading'); running = false;
+                setTimeout(() => {
+                    loader.remove();
+                    if (window.frameElement) window.frameElement.style.display = 'none';
+                }, 430);
+              }
+            };
+
+            requestAnimationFrame(loop);
+        })();
+        </script>
+        </body>
+        </html>
+        """,
+        height=0,
+    )
     # [專家級修正] 注入攔截器：強制將 Fivetran Webhook 等潛在阻塞的第三方請求設為非同步射後不理，瞬間釋放主渲染線程
     st.components.v1.html(
         """
@@ -1451,13 +1999,25 @@ def _style() -> None:
                 } catch (err) {}
             }
 
-            function styleTutorialBtn() {
+            function styleSidebarBtns() {
                 try {
                     const btns = doc.querySelectorAll('div[data-testid="stSidebar"] button p');
                     btns.forEach(p => {
-                        if (p.textContent && p.textContent.trim() === '新手教學') {
-                            const btn = p.closest('button');
-                            if (btn && !btn.classList.contains('tutorial-glass-btn')) {
+                        const btn = p.closest('button');
+                        if (!btn) return;
+                        
+                        if (p.textContent && p.textContent.trim() === '主頁') {
+                            if (!btn.classList.contains('home-core-btn')) {
+                                btn.classList.add('home-core-btn');
+                                btn.style.background = 'linear-gradient(135deg, rgba(255,0,60,0.8) 0%, rgba(100,0,20,0.9) 100%)';
+                                btn.style.color = '#fff';
+                                btn.style.border = '1px solid #FF003C';
+                                btn.style.boxShadow = '0 0 15px rgba(255,0,60,0.5)';
+                                btn.style.fontWeight = '900';
+                                btn.style.letterSpacing = '2px';
+                            }
+                        } else if (p.textContent && p.textContent.trim() === '新手教學') {
+                            if (!btn.classList.contains('tutorial-glass-btn')) {
                                 btn.classList.add('tutorial-glass-btn');
                             }
                         }
@@ -1465,11 +2025,11 @@ def _style() -> None:
                 } catch (err) {}
             }
 
-            const observer = new MutationObserver(() => { injectMenuButton(); styleTutorialBtn(); });
+            const observer = new MutationObserver(() => { injectMenuButton(); styleSidebarBtns(); });
             if (doc.body) {
                 observer.observe(doc.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class'] });
             }
-            setInterval(() => { injectMenuButton(); styleTutorialBtn(); }, 800);
+            setInterval(() => { injectMenuButton(); styleSidebarBtns(); }, 800);
             
             if (doc.defaultView) {
                 doc.defaultView.addEventListener('resize', injectMenuButton);
@@ -1726,7 +2286,7 @@ def _login_form() -> None:
         _queue_clear_cookie(_REMEMBER_COOKIE_NAME)
 
     st.success("登入成功。")
-    st.session_state["nav_page_pending"] = "控制台"
+    st.session_state["nav_page_pending"] = "主頁"
     st.rerun()
 
 def _register_form() -> None:
@@ -1823,7 +2383,7 @@ def _register_form() -> None:
         _queue_clear_cookie(_REMEMBER_COOKIE_NAME)
 
     st.success("帳號已建立並完成登入。")
-    st.session_state["nav_page_pending"] = "控制台"
+    st.session_state["nav_page_pending"] = "主頁"
     st.rerun()
 
 
@@ -2758,9 +3318,149 @@ def _render_global_progress(cycle_id: int) -> None:
                 '</div>',
                 unsafe_allow_html=True,
             )
-def _page_tutorial(user: Optional[Dict[str, Any]] = None) -> None:
-    st.markdown(f"### {APP_TITLE} · Open the Mine , Mine the Node.")
+def _page_home(user: Optional[Dict[str, Any]] = None) -> None:
+    st.components.v1.html(
+        """
+        <!DOCTYPE html>
+        <html>
+        <head>
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap');
+        body { margin: 0; padding: 0; background-color: transparent; font-family: 'Space Mono', monospace; overflow: hidden; user-select: none; }
+        
+        .hero {
+            position: relative; width: 100%; height: 260px;
+            background: rgba(10, 0, 2, 0.6); border: 1px solid #33000b; border-left: 4px solid #FF003C;
+            border-radius: 6px; box-sizing: border-box; display: flex; flex-direction: column;
+            justify-content: center; padding-left: 40px; overflow: hidden; box-shadow: inset 0 0 50px rgba(255,0,60,0.05);
+        }
+        
+        /* 漂浮代碼 */
+        .code-float { position: absolute; font-size: 11px; color: rgba(255,0,60,0.15); font-weight: bold; white-space: nowrap; pointer-events: none; z-index: 1; text-shadow: 0 0 5px rgba(255,0,60,0.2); }
+        .c1 { top: 15%; left: -10%; animation: floatR 20s linear infinite; }
+        .c2 { top: 60%; left: 15%; animation: floatL 18s linear infinite reverse; }
+        .c3 { top: 80%; left: 40%; animation: floatR 25s linear infinite; }
+        @keyframes floatR { 100% { transform: translateX(250px); } }
+        @keyframes floatL { 100% { transform: translateX(-250px); } }
 
+        /* 動態滑鼠探照燈 */
+        .spotlight {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: radial-gradient(circle 0px at 50% 50%, rgba(255,0,60,0.15) 0%, transparent 100%);
+            pointer-events: none; z-index: 2; transition: background 0.15s ease-out;
+        }
+
+        .content { z-index: 10; position: relative; }
+
+        /* RGB 色散標題 */
+        .glitch-title {
+            font-size: 54px; font-weight: 700; color: #ffffff; margin: 0 0 20px 0;
+            letter-spacing: -2px; position: relative; display: inline-block;
+            text-shadow: 0 0 15px rgba(255,255,255,0.1); transition: transform 0.1s;
+        }
+        .glitch-title:hover {
+            cursor: crosshair; transform: skewX(-6deg);
+            text-shadow: 4px 0 #FF003C, -4px 0 #00FFCC;
+            animation: shake 0.2s infinite;
+        }
+        .g-dot { color: #FF003C; transition: text-shadow 0.2s; }
+        .glitch-title:hover .g-dot { text-shadow: 0 0 20px #FF003C, 0 0 40px #FF003C; }
+        @keyframes shake {
+            0%, 100% { transform: translate(0,0) skewX(-6deg); }
+            25% { transform: translate(-2px,1px) skewX(-6deg); }
+            50% { transform: translate(2px,-1px) skewX(-6deg); }
+            75% { transform: translate(-1px,2px) skewX(-6deg); }
+        }
+
+        /* 3D 物理翻轉牌 */
+        .row { display: flex; gap: 24px; flex-wrap: wrap; }
+        .flip-box { width: 240px; height: 50px; perspective: 1000px; cursor: crosshair; }
+        .flip-inner {
+            position: relative; width: 100%; height: 100%;
+            transition: transform 0.6s cubic-bezier(0.34, 1.56, 0.64, 1); /* 極端阻尼彈簧感 */
+            transform-style: preserve-3d;
+        }
+        .flip-box:hover .flip-inner { transform: rotateX(180deg); }
+        
+        .face {
+            position: absolute; width: 100%; height: 100%; backface-visibility: hidden;
+            display: flex; align-items: center; justify-content: center; border-radius: 2px;
+        }
+        .front {
+            background: rgba(10,2,4,0.9); border: 1px solid #3d0a16; color: #ff8a9f;
+            font-size: 15px; font-weight: bold; letter-spacing: 1px;
+            box-shadow: inset 0 0 15px rgba(0,0,0,0.9); transition: border-color 0.3s, color 0.3s;
+        }
+        .front::before {
+            content: '>_'; color: #FF003C; margin-right: 10px; font-weight: 900;
+            animation: blink 1s step-end infinite;
+        }
+        .flip-box:hover .front { border-color: #FF003C; color: #fff; }
+        
+        .back {
+            background: #ffffff; color: #000000; transform: rotateX(180deg);
+            font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+            font-size: 17px; font-weight: 900; letter-spacing: 4px;
+            border: 2px solid #FF003C; box-shadow: 0 0 25px rgba(255,0,60,0.35);
+        }
+        @keyframes blink { 50% { opacity: 0; } }
+        </style>
+        </head>
+        <body>
+            <div class="hero" id="cyber-hero">
+                <div class="spotlight" id="spotlight"></div>
+                
+                <div class="code-float c1">@njit(fastmath=True, nogil=True)</div>
+                <div class="code-float c2">await ws.send_json({"type": "EXEC", "payload": 0x9A})</div>
+                <div class="code-float c3">df['RSI'] = ta.momentum.rsi(window=14)</div>
+                
+                <div class="content">
+                    <div class="glitch-title">OpenNode<span class="g-dot">.</span></div>
+                    <div class="row">
+                        <div class="flip-box">
+                            <div class="flip-inner">
+                                <div class="face front">OPEN_THE_MINE</div>
+                                <div class="face back">解鎖無盡算力</div>
+                            </div>
+                        </div>
+                        <div class="flip-box">
+                            <div class="flip-inner">
+                                <div class="face front">MINE_THE_NODE</div>
+                                <div class="face back">共鑄量化節點</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <script>
+                const hero = document.getElementById('cyber-hero');
+                const spot = document.getElementById('spotlight');
+                let ticking = false;
+                hero.addEventListener('mousemove', (e) => {
+                    if (!ticking) {
+                        window.requestAnimationFrame(() => {
+                            const rect = hero.getBoundingClientRect();
+                            const x = e.clientX - rect.left;
+                            const y = e.clientY - rect.top;
+                            spot.style.background = `radial-gradient(circle 200px at ${x}px ${y}px, rgba(255,0,60,0.18) 0%, transparent 100%)`;
+                            ticking = false;
+                        });
+                        ticking = true;
+                    }
+                });
+                hero.addEventListener('mouseleave', () => {
+                    spot.style.background = `radial-gradient(circle 0px at 50% 50%, rgba(255,0,60,0.15) 0%, transparent 100%)`;
+                });
+            </script>
+        </body>
+        </html>
+        """,
+        height=280,
+        scrolling=False
+    )
+
+def _page_tutorial(user: Optional[Dict[str, Any]] = None) -> None:
+    st.markdown('<div class="sec_h3">新手教學與操作手冊</div>', unsafe_allow_html=True)
     st.markdown(
         """
 <style>
@@ -2782,14 +3482,13 @@ def _page_tutorial(user: Optional[Dict[str, Any]] = None) -> None:
 .flow_hint{font-size:12px;opacity:.70;}
 .flow_items{display:flex;flex-direction:column;gap:8px;}
 .flow_item{display:flex;gap:10px;align-items:flex-start;padding:10px 10px;border-radius:12px;border:1px solid rgba(255,255,255,0.10);background:rgba(255,255,255,0.03);}
-.flow_badge{width:28px;height:28px;border-radius:10px;display:flex;align-items:center;justify-content:center;border:1px solid rgba(120,180,255,0.45);background:rgba(120,180,255,0.12);font-weight:800;font-size:12px;}
+.flow_badge{width:28px;height:28px;border-radius:10px;display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,0,60,0.45);background:rgba(255,0,60,0.12);font-weight:800;font-size:12px;}
 .flow_text{font-size:13px;line-height:1.55;opacity:.88;}
 .flow_sub{font-size:12px;opacity:.70;margin-top:2px;}
 </style>
         """,
         unsafe_allow_html=True,
     )
-
     tabs = st.tabs(["總覽", "任務執行", "策略選擇", "候選與提交", "結算"])
 
     with tabs[0]:
@@ -3845,6 +4544,7 @@ def _render_all_candidates_and_audit(user: Dict[str, Any], completed_tasks: List
             except Exception as e:
                 st.session_state[f"audit_result_{c['id']}"] = {"passed": False, "error": str(e)}
             my_bar.progress((idx + 1) / total, text=f"審核進度: {idx + 1}/{total}")
+            time.sleep(0.005) # 釋放 GIL，防止審核迴圈霸佔導致其他用戶 WebSocket 逾時
         my_bar.empty()
         
     passed_cands = []
@@ -4961,6 +5661,7 @@ def _page_admin(user: Dict[str, Any], job_mgr: JobManager) -> None:
                 after = len(db.list_tasks_for_user(int(u["id"]), cycle_id=cycle_id))
                 if after > before:
                     applied += int(after - before)
+                time.sleep(0.005) # 釋放 GIL，防止大規模派發任務時鎖死全站
 
             db.write_audit_log(int(user["id"]), "sync_tasks_all_users", {"applied": int(applied)})
             st.success(f"已分配 {int(applied)} 個任務。")
@@ -5099,6 +5800,7 @@ def _run_weekly_check(week_start_ts: str, week_end_ts: str) -> None:
             amount = capital_usdt * (ret / 100.0) * alloc * payout_rate
             if amount > 0.0 and not db.payout_exists(int(s["id"]), week_start_ts):
                 db.create_payout(strategy_id=int(s["id"]), user_id=int(s["user_id"]), week_start_ts=week_start_ts, amount_usdt=float(amount))
+        time.sleep(0.005) # 釋放 GIL，防止管理員背景結算癱瘓主執行緒
 
 
 
@@ -5189,8 +5891,8 @@ def main() -> None:
 
     role = str(user.get("role") or "user")
 
-    # [新增] 排行榜頁面入口
-    pages = ["新手教學", "控制台", "排行榜", "任務", "提交", "結算"] + (["管理"] if role == "admin" else [])
+    # [新增] 主頁分離與排行榜頁面入口
+    pages = ["主頁", "控制台", "排行榜", "任務", "提交", "結算", "新手教學"] + (["管理"] if role == "admin" else [])
 
     # 利用 URL 查詢參數持久化當前頁面狀態
     try:
@@ -5269,7 +5971,9 @@ def main() -> None:
 
     import traceback
     try:
-        if page == "新手教學":
+        if page == "主頁":
+            _page_home(user)
+        elif page == "新手教學":
             _page_tutorial(user)
         elif page == "控制台":
             _page_dashboard(user)

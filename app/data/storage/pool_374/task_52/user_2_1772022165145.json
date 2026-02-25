@@ -1,0 +1,26 @@
+{
+  "task_info": {
+    "id": 52,
+    "user_id": 2,
+    "pool_id": 374,
+    "cycle_id": 1,
+    "partition_idx": 14,
+    "num_partitions": 16,
+    "status": "queued",
+    "progress_json": "{\"phase\": \"queued\", \"phase_msg\": \"收回並重新置入分配池\", \"combos_done\": 0, \"combos_total\": 0, \"updated_at\": \"2026-02-25T12:19:31.203673+00:00\"}",
+    "last_heartbeat": "2026-02-25T12:19:31.206472+00:00",
+    "created_at": "2026-02-25T12:19:29.646004+00:00",
+    "updated_at": "2026-02-25T12:19:31.206461+00:00",
+    "family": "ATR_Band_Break",
+    "symbol": "ETH_USDT",
+    "timeframe_min": 15,
+    "years": 1,
+    "grid_spec_json": "{\"p_min\": 10, \"p_max\": 28, \"p_step\": 3, \"mult_min\": 0.8, \"mult_max\": 1.8, \"mult_step\": 0.25}",
+    "risk_spec_json": "{\"tp_min\": 0.3, \"tp_max\": 1.2, \"tp_step\": 0.3, \"sl_min\": 0.4, \"sl_max\": 1.6, \"sl_step\": 0.4, \"max_hold_min\": 30, \"max_hold_max\": 720, \"max_hold_step\": 30, \"fee_side\": 0.0002, \"slippage\": 0.0, \"worst_case\": true, \"reverse_mode\": false}",
+    "seed": 592349518,
+    "pool_name": "ATR_Band_Break | BTC_USDT | 1m [ETH_USDT_15m]"
+  },
+  "timestamp": "2026-02-25T12:22:45.098355+00:00",
+  "best_pass_count": 0,
+  "candidates": []
+}

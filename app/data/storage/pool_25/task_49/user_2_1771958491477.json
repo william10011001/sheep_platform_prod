@@ -1,0 +1,510 @@
+{
+  "task_info": {
+    "id": 49,
+    "user_id": 2,
+    "pool_id": 25,
+    "cycle_id": 1,
+    "partition_idx": 2,
+    "num_partitions": 16,
+    "status": "queued",
+    "progress_json": "{\"phase\": \"queued\", \"phase_msg\": \"收回並重新置入分配池\", \"combos_done\": 0, \"combos_total\": 0, \"updated_at\": \"2026-02-24T18:40:42.770002+00:00\"}",
+    "last_heartbeat": "2026-02-24T18:40:42.773528+00:00",
+    "created_at": "2026-02-24T18:40:32.311869+00:00",
+    "updated_at": "2026-02-24T18:40:42.773511+00:00",
+    "family": "SMA_Cross",
+    "symbol": "ETH_USDT",
+    "timeframe_min": 30,
+    "years": 1,
+    "grid_spec_json": "{\"fast_min\": 5, \"fast_max\": 30, \"fast_step\": 5, \"slow_min\": 20, \"slow_max\": 120, \"slow_step\": 10}",
+    "risk_spec_json": "{\"tp_min\": 0.3, \"tp_max\": 1.2, \"tp_step\": 0.3, \"sl_min\": 0.4, \"sl_max\": 1.6, \"sl_step\": 0.4, \"max_hold_min\": 30, \"max_hold_max\": 720, \"max_hold_step\": 30, \"fee_side\": 0.0002, \"slippage\": 0.0, \"worst_case\": true, \"reverse_mode\": false}",
+    "seed": 105583270,
+    "pool_name": "SMA_Cross | BTC_USDT | 1m [ETH_USDT_30m]"
+  },
+  "timestamp": "2026-02-24T18:41:31.286106+00:00",
+  "best_pass_count": 23,
+  "candidates": [
+    {
+      "id": 107,
+      "score": 18.34306,
+      "params": {
+        "family": "SMA_Cross",
+        "family_params": {
+          "fast": 5,
+          "slow": 40
+        },
+        "tp": 0.012,
+        "sl": 0.004,
+        "max_hold": 90
+      },
+      "metrics": {
+        "total_return_pct": 17.6482,
+        "max_drawdown_pct": 8.4094,
+        "sharpe": 1.1481,
+        "trades": 375,
+        "win_rate_pct": 30.4
+      }
+    },
+    {
+      "id": 108,
+      "score": 18.34306,
+      "params": {
+        "family": "SMA_Cross",
+        "family_params": {
+          "fast": 5,
+          "slow": 40
+        },
+        "tp": 0.012,
+        "sl": 0.004,
+        "max_hold": 120
+      },
+      "metrics": {
+        "total_return_pct": 17.6482,
+        "max_drawdown_pct": 8.4094,
+        "sharpe": 1.1481,
+        "trades": 375,
+        "win_rate_pct": 30.4
+      }
+    },
+    {
+      "id": 109,
+      "score": 18.34306,
+      "params": {
+        "family": "SMA_Cross",
+        "family_params": {
+          "fast": 5,
+          "slow": 40
+        },
+        "tp": 0.012,
+        "sl": 0.004,
+        "max_hold": 150
+      },
+      "metrics": {
+        "total_return_pct": 17.6482,
+        "max_drawdown_pct": 8.4094,
+        "sharpe": 1.1481,
+        "trades": 375,
+        "win_rate_pct": 30.4
+      }
+    },
+    {
+      "id": 110,
+      "score": 18.34306,
+      "params": {
+        "family": "SMA_Cross",
+        "family_params": {
+          "fast": 5,
+          "slow": 40
+        },
+        "tp": 0.012,
+        "sl": 0.004,
+        "max_hold": 180
+      },
+      "metrics": {
+        "total_return_pct": 17.6482,
+        "max_drawdown_pct": 8.4094,
+        "sharpe": 1.1481,
+        "trades": 375,
+        "win_rate_pct": 30.4
+      }
+    },
+    {
+      "id": 111,
+      "score": 18.34306,
+      "params": {
+        "family": "SMA_Cross",
+        "family_params": {
+          "fast": 5,
+          "slow": 40
+        },
+        "tp": 0.012,
+        "sl": 0.004,
+        "max_hold": 210
+      },
+      "metrics": {
+        "total_return_pct": 17.6482,
+        "max_drawdown_pct": 8.4094,
+        "sharpe": 1.1481,
+        "trades": 375,
+        "win_rate_pct": 30.4
+      }
+    },
+    {
+      "id": 112,
+      "score": 18.34306,
+      "params": {
+        "family": "SMA_Cross",
+        "family_params": {
+          "fast": 5,
+          "slow": 40
+        },
+        "tp": 0.012,
+        "sl": 0.004,
+        "max_hold": 240
+      },
+      "metrics": {
+        "total_return_pct": 17.6482,
+        "max_drawdown_pct": 8.4094,
+        "sharpe": 1.1481,
+        "trades": 375,
+        "win_rate_pct": 30.4
+      }
+    },
+    {
+      "id": 113,
+      "score": 18.34306,
+      "params": {
+        "family": "SMA_Cross",
+        "family_params": {
+          "fast": 5,
+          "slow": 40
+        },
+        "tp": 0.012,
+        "sl": 0.004,
+        "max_hold": 270
+      },
+      "metrics": {
+        "total_return_pct": 17.6482,
+        "max_drawdown_pct": 8.4094,
+        "sharpe": 1.1481,
+        "trades": 375,
+        "win_rate_pct": 30.4
+      }
+    },
+    {
+      "id": 114,
+      "score": 18.34306,
+      "params": {
+        "family": "SMA_Cross",
+        "family_params": {
+          "fast": 5,
+          "slow": 40
+        },
+        "tp": 0.012,
+        "sl": 0.004,
+        "max_hold": 300
+      },
+      "metrics": {
+        "total_return_pct": 17.6482,
+        "max_drawdown_pct": 8.4094,
+        "sharpe": 1.1481,
+        "trades": 375,
+        "win_rate_pct": 30.4
+      }
+    },
+    {
+      "id": 115,
+      "score": 18.34306,
+      "params": {
+        "family": "SMA_Cross",
+        "family_params": {
+          "fast": 5,
+          "slow": 40
+        },
+        "tp": 0.012,
+        "sl": 0.004,
+        "max_hold": 330
+      },
+      "metrics": {
+        "total_return_pct": 17.6482,
+        "max_drawdown_pct": 8.4094,
+        "sharpe": 1.1481,
+        "trades": 375,
+        "win_rate_pct": 30.4
+      }
+    },
+    {
+      "id": 116,
+      "score": 18.34306,
+      "params": {
+        "family": "SMA_Cross",
+        "family_params": {
+          "fast": 5,
+          "slow": 40
+        },
+        "tp": 0.012,
+        "sl": 0.004,
+        "max_hold": 360
+      },
+      "metrics": {
+        "total_return_pct": 17.6482,
+        "max_drawdown_pct": 8.4094,
+        "sharpe": 1.1481,
+        "trades": 375,
+        "win_rate_pct": 30.4
+      }
+    },
+    {
+      "id": 117,
+      "score": 18.34306,
+      "params": {
+        "family": "SMA_Cross",
+        "family_params": {
+          "fast": 5,
+          "slow": 40
+        },
+        "tp": 0.012,
+        "sl": 0.004,
+        "max_hold": 390
+      },
+      "metrics": {
+        "total_return_pct": 17.6482,
+        "max_drawdown_pct": 8.4094,
+        "sharpe": 1.1481,
+        "trades": 375,
+        "win_rate_pct": 30.4
+      }
+    },
+    {
+      "id": 118,
+      "score": 18.34306,
+      "params": {
+        "family": "SMA_Cross",
+        "family_params": {
+          "fast": 5,
+          "slow": 40
+        },
+        "tp": 0.012,
+        "sl": 0.004,
+        "max_hold": 420
+      },
+      "metrics": {
+        "total_return_pct": 17.6482,
+        "max_drawdown_pct": 8.4094,
+        "sharpe": 1.1481,
+        "trades": 375,
+        "win_rate_pct": 30.4
+      }
+    },
+    {
+      "id": 119,
+      "score": 18.34306,
+      "params": {
+        "family": "SMA_Cross",
+        "family_params": {
+          "fast": 5,
+          "slow": 40
+        },
+        "tp": 0.012,
+        "sl": 0.004,
+        "max_hold": 450
+      },
+      "metrics": {
+        "total_return_pct": 17.6482,
+        "max_drawdown_pct": 8.4094,
+        "sharpe": 1.1481,
+        "trades": 375,
+        "win_rate_pct": 30.4
+      }
+    },
+    {
+      "id": 120,
+      "score": 18.34306,
+      "params": {
+        "family": "SMA_Cross",
+        "family_params": {
+          "fast": 5,
+          "slow": 40
+        },
+        "tp": 0.012,
+        "sl": 0.004,
+        "max_hold": 480
+      },
+      "metrics": {
+        "total_return_pct": 17.6482,
+        "max_drawdown_pct": 8.4094,
+        "sharpe": 1.1481,
+        "trades": 375,
+        "win_rate_pct": 30.4
+      }
+    },
+    {
+      "id": 121,
+      "score": 18.34306,
+      "params": {
+        "family": "SMA_Cross",
+        "family_params": {
+          "fast": 5,
+          "slow": 40
+        },
+        "tp": 0.012,
+        "sl": 0.004,
+        "max_hold": 510
+      },
+      "metrics": {
+        "total_return_pct": 17.6482,
+        "max_drawdown_pct": 8.4094,
+        "sharpe": 1.1481,
+        "trades": 375,
+        "win_rate_pct": 30.4
+      }
+    },
+    {
+      "id": 122,
+      "score": 18.34306,
+      "params": {
+        "family": "SMA_Cross",
+        "family_params": {
+          "fast": 5,
+          "slow": 40
+        },
+        "tp": 0.012,
+        "sl": 0.004,
+        "max_hold": 540
+      },
+      "metrics": {
+        "total_return_pct": 17.6482,
+        "max_drawdown_pct": 8.4094,
+        "sharpe": 1.1481,
+        "trades": 375,
+        "win_rate_pct": 30.4
+      }
+    },
+    {
+      "id": 123,
+      "score": 18.34306,
+      "params": {
+        "family": "SMA_Cross",
+        "family_params": {
+          "fast": 5,
+          "slow": 40
+        },
+        "tp": 0.012,
+        "sl": 0.004,
+        "max_hold": 570
+      },
+      "metrics": {
+        "total_return_pct": 17.6482,
+        "max_drawdown_pct": 8.4094,
+        "sharpe": 1.1481,
+        "trades": 375,
+        "win_rate_pct": 30.4
+      }
+    },
+    {
+      "id": 124,
+      "score": 18.34306,
+      "params": {
+        "family": "SMA_Cross",
+        "family_params": {
+          "fast": 5,
+          "slow": 40
+        },
+        "tp": 0.012,
+        "sl": 0.004,
+        "max_hold": 600
+      },
+      "metrics": {
+        "total_return_pct": 17.6482,
+        "max_drawdown_pct": 8.4094,
+        "sharpe": 1.1481,
+        "trades": 375,
+        "win_rate_pct": 30.4
+      }
+    },
+    {
+      "id": 125,
+      "score": 18.34306,
+      "params": {
+        "family": "SMA_Cross",
+        "family_params": {
+          "fast": 5,
+          "slow": 40
+        },
+        "tp": 0.012,
+        "sl": 0.004,
+        "max_hold": 630
+      },
+      "metrics": {
+        "total_return_pct": 17.6482,
+        "max_drawdown_pct": 8.4094,
+        "sharpe": 1.1481,
+        "trades": 375,
+        "win_rate_pct": 30.4
+      }
+    },
+    {
+      "id": 126,
+      "score": 18.34306,
+      "params": {
+        "family": "SMA_Cross",
+        "family_params": {
+          "fast": 5,
+          "slow": 40
+        },
+        "tp": 0.012,
+        "sl": 0.004,
+        "max_hold": 660
+      },
+      "metrics": {
+        "total_return_pct": 17.6482,
+        "max_drawdown_pct": 8.4094,
+        "sharpe": 1.1481,
+        "trades": 375,
+        "win_rate_pct": 30.4
+      }
+    },
+    {
+      "id": 127,
+      "score": 18.34306,
+      "params": {
+        "family": "SMA_Cross",
+        "family_params": {
+          "fast": 5,
+          "slow": 40
+        },
+        "tp": 0.012,
+        "sl": 0.004,
+        "max_hold": 690
+      },
+      "metrics": {
+        "total_return_pct": 17.6482,
+        "max_drawdown_pct": 8.4094,
+        "sharpe": 1.1481,
+        "trades": 375,
+        "win_rate_pct": 30.4
+      }
+    },
+    {
+      "id": 128,
+      "score": 18.34306,
+      "params": {
+        "family": "SMA_Cross",
+        "family_params": {
+          "fast": 5,
+          "slow": 40
+        },
+        "tp": 0.012,
+        "sl": 0.004,
+        "max_hold": 720
+      },
+      "metrics": {
+        "total_return_pct": 17.6482,
+        "max_drawdown_pct": 8.4094,
+        "sharpe": 1.1481,
+        "trades": 375,
+        "win_rate_pct": 30.4
+      }
+    },
+    {
+      "id": 129,
+      "score": 17.79356,
+      "params": {
+        "family": "SMA_Cross",
+        "family_params": {
+          "fast": 5,
+          "slow": 40
+        },
+        "tp": 0.012,
+        "sl": 0.004,
+        "max_hold": 60
+      },
+      "metrics": {
+        "total_return_pct": 17.2132,
+        "max_drawdown_pct": 8.4094,
+        "sharpe": 1.1252,
+        "trades": 375,
+        "win_rate_pct": 30.4
+      }
+    }
+  ]
+}

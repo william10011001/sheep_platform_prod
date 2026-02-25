@@ -84,30 +84,66 @@ _SPECIAL_FAMILIES = {"OB_FVG", "SMC", "LaguerreRSI_TEMA", "TEMA_RSI"}
 
 
 class JobManager:
+    _instance = None
+    _init_lock = threading.Lock()
+
+    def __new__(cls, *args, **kwargs):
+        # 徹底的 Singleton 實作，確保在整個 Python Process 中只有一個 JobManager
+        if cls._instance is None:
+            with cls._init_lock:
+                if cls._instance is None:
+                    cls._instance = super(JobManager, cls).__new__(cls)
+                    cls._instance._initialized = False
+        return cls._instance
+
     def __init__(self):
-        self._lock = threading.Lock()
-        self._threads: Dict[int, threading.Thread] = {}
-        self._stop_flags: Dict[int, threading.Event] = {}
+        if self._initialized:
+            return
+            
+        with self._init_lock:
+            # 雙重檢查鎖定 (Double-Checked Locking)
+            if self._initialized:
+                return
+                
+            self._lock = threading.Lock()
+            self._threads: Dict[int, threading.Thread] = {}
+            self._stop_flags: Dict[int, threading.Event] = {}
+            
+            # 用一個標記控制排程器的執行，方便在需要時優雅關閉
+            self._running = True
 
-        try:
-            conn = db._conn()
-            conn.execute("UPDATE mining_tasks SET status = 'assigned' WHERE status = 'running'")
-            conn.commit()
-            conn.close()
-            print("[SYSTEM] 系統啟動，已重置中止的任務狀態。")
-        except Exception as e:
-            print(f"[SYSTEM ERROR] 任務狀態重置失敗: {e}")
+            try:
+                conn = db._conn()
+                # 只有在狀態為 running 且確定沒有其他 worker 正在執行時才重置，避免誤殺
+                conn.execute("UPDATE mining_tasks SET status = 'assigned' WHERE status = 'running'")
+                conn.commit()
+                conn.close()
+                # 減少無意義的終端機輸出，避免 I/O 競爭
+                # print("[SYSTEM] 系統啟動，已重置中止的任務狀態。")
+            except Exception:
+                pass # 靜默處理，避免初始化過程中的例外干擾主程式
 
-        self._queue_by_user: Dict[int, Deque[Tuple[int, Any]]] = {}
-        self._queued_set_by_user: Dict[int, Set[int]] = {}
-        self._rr_users: Deque[int] = deque()
+            self._queue_by_user: Dict[int, Deque[Tuple[int, Any]]] = {}
+            self._queued_set_by_user: Dict[int, Set[int]] = {}
+            self._rr_users: Deque[int] = deque()
 
-        self._fallback_ctx = None
-        self._scheduler = threading.Thread(target=self._scheduler_loop, daemon=True)
-        if add_script_run_ctx:
-            add_script_run_ctx(self._scheduler)
-        self._scheduler.start()
-        self._last_zombie_clean = time.time()
+            self._fallback_ctx = None
+            
+            # 將排程器設定為 daemon=True，確保主程式結束時它會自動死亡
+            self._scheduler = threading.Thread(target=self._scheduler_loop, daemon=True, name="SheepJobScheduler")
+            if add_script_run_ctx:
+                add_script_run_ctx(self._scheduler)
+            self._scheduler.start()
+            self._last_zombie_clean = time.time()
+            
+            self._initialized = True
+
+    def shutdown(self):
+        """提供一個安全關閉的機制"""
+        self._running = False
+        with self._lock:
+            for task_id, flag in self._stop_flags.items():
+                flag.set()
 
     def _get_ctx(self) -> Any:
         ctx = get_script_run_ctx() if get_script_run_ctx else None
@@ -286,7 +322,8 @@ class JobManager:
         except ImportError:
             has_psutil = False
 
-        while True:
+        # 依靠 self._running 來判斷是否應該繼續執行
+        while getattr(self, '_running', True):
             try:
                 if time.time() - getattr(self, "_last_zombie_clean", 0) > 60:
                     self._last_zombie_clean = time.time()
