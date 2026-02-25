@@ -1,6 +1,8 @@
 import json
+import os
 import re
 import random
+import sys
 import threading
 import time
 from collections import deque
@@ -112,16 +114,24 @@ class JobManager:
             # 用一個標記控制排程器的執行，方便在需要時優雅關閉
             self._running = True
 
+            # 是否啟用本進程的排程器（UI/Worker 分離時很重要）
+            self._enable_scheduler = (str(os.environ.get("SHEEP_RUN_SCHEDULER", "1") or "1").strip() != "0")
+
+            # 禁止「啟動就把 running 全部改回 assigned」：
+            # 這會把還活著的 worker 直接打成幽靈任務，然後你就只會看到 QUEUED 卡爆。
+            # 正確做法：只回收「超時沒心跳」的 zombie 任務。
             try:
-                conn = db._conn()
-                # 只有在狀態為 running 且確定沒有其他 worker 正在執行時才重置，避免誤殺
-                conn.execute("UPDATE mining_tasks SET status = 'assigned' WHERE status = 'running'")
-                conn.commit()
-                conn.close()
-                # 減少無意義的終端機輸出，避免 I/O 競爭
-                # print("[SYSTEM] 系統啟動，已重置中止的任務狀態。")
+                timeout_min = int(os.environ.get("SHEEP_ZOMBIE_TIMEOUT_MIN", "15") or "15")
             except Exception:
-                pass # 靜默處理，避免初始化過程中的例外干擾主程式
+                timeout_min = 15
+
+            try:
+                cleared = db.clean_zombie_tasks(timeout_minutes=int(timeout_min))
+                if int(cleared or 0) > 0:
+                    print(f"[SYSTEM] 系統啟動：已回收 {int(cleared)} 個超時任務。")
+            except Exception as e:
+                import traceback
+                print(f"[SYSTEM] 系統啟動：回收超時任務失敗: {e}\n{traceback.format_exc()}", file=sys.stderr)
 
             self._queue_by_user: Dict[int, Deque[Tuple[int, Any]]] = {}
             self._queued_set_by_user: Dict[int, Set[int]] = {}
@@ -129,13 +139,19 @@ class JobManager:
 
             self._fallback_ctx = None
             
-            # 將排程器設定為 daemon=True，確保主程式結束時它會自動死亡
-            self._scheduler = threading.Thread(target=self._scheduler_loop, daemon=True, name="SheepJobScheduler")
-            if add_script_run_ctx:
-                add_script_run_ctx(self._scheduler)
-            self._scheduler.start()
             self._last_zombie_clean = time.time()
-            
+            self._last_orphan_scan = 0.0
+
+            # 將排程器設定為 daemon=True，確保主程式結束時它會自動死亡
+            # 但：若此進程被設定為不跑排程器（例如 UI 容器），就不要啟動，避免跟 worker 容器搶任務。
+            if bool(self._enable_scheduler):
+                self._scheduler = threading.Thread(target=self._scheduler_loop, daemon=True, name="SheepJobScheduler")
+                if add_script_run_ctx:
+                    add_script_run_ctx(self._scheduler)
+                self._scheduler.start()
+            else:
+                self._scheduler = None
+
             self._initialized = True
 
     def shutdown(self):
@@ -279,41 +295,95 @@ class JobManager:
         return None
 
     def _auto_enqueue_orphans(self) -> None:
+        # 目標：
+        # 1) assigned/queued 的任務一定會被塞進隊列（根治卡在 QUEUED）
+        # 2) 絕對禁止把 progress 歸零（根治「挖到一半刷新就歸零」）
+        # 3) 任何錯誤都要印出來（根治「不知道卡哪」）
+
         try:
             import backtest_panel2
-            conn = db._conn()
-            # 擴大檢索範圍，避免任務過多時產生飢餓現象而無法排入隊列
-            rows = conn.execute("SELECT id, user_id FROM mining_tasks WHERE status IN ('assigned', 'queued') ORDER BY updated_at ASC LIMIT 5000").fetchall()
-            conn.close()
-            
-            to_enqueue = {}
-            for r in rows:
+        except Exception as e:
+            import traceback
+            print(f"[CRITICAL] backtest_panel2 import failed: {e}\n{traceback.format_exc()}", file=sys.stderr)
+            return
+
+        # 注意：這裡加上 users.disabled / users.run_enabled / pool.active 過濾，避免把不該跑的任務塞進隊列
+        conn = db._conn()
+        try:
+            rows = conn.execute(
+                """
+                SELECT t.id, t.user_id
+                FROM mining_tasks t
+                LEFT JOIN users u ON u.id = t.user_id
+                LEFT JOIN factor_pools p ON p.id = t.pool_id
+                WHERE t.status IN ('assigned', 'queued')
+                  AND COALESCE(u.disabled, 0) = 0
+                  AND COALESCE(u.run_enabled, 1) = 1
+                  AND COALESCE(p.active, 1) = 1
+                ORDER BY COALESCE(t.updated_at, t.created_at) ASC, t.id ASC
+                LIMIT 5000
+                """
+            ).fetchall()
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+        if not rows:
+            return
+
+        # 先把「整體排隊位置」算出來，寫進 progress（讓前端至少知道是不是卡在排程器）
+        total = int(len(rows))
+        to_enqueue: Dict[int, List[Tuple[int, int, int]]] = {}
+        pos = 0
+        for r in rows:
+            pos += 1
+            try:
                 tid = int(r["id"])
                 uid = int(r["user_id"])
-                if not self.is_queued(uid, tid) and not self.is_running(tid):
-                    if uid not in to_enqueue:
-                        to_enqueue[uid] = []
-                    to_enqueue[uid].append(tid)
-            
-            for uid, tids in to_enqueue.items():
-                res = self.enqueue_many(uid, tids, backtest_panel2)
-                # 確保任務進入隊列時，介面進度能被正確歸零
-                if int(res.get("queued") or 0) > 0:
-                    for tid in tids:
-                        if self.is_queued(uid, tid):
-                            try:
-                                db.update_task_status(tid, "queued")
-                                db.update_task_progress(tid, {
-                                    "phase": "queued",
-                                    "phase_msg": "收回並重新置入分配池",
-                                    "combos_done": 0,
-                                    "combos_total": 0,
-                                    "updated_at": db.utc_now_iso()
-                                })
-                            except Exception:
-                                pass
-        except Exception:
-            pass
+            except Exception:
+                continue
+
+            if self.is_running(tid) or self.is_queued(uid, tid):
+                continue
+
+            to_enqueue.setdefault(uid, []).append((tid, int(pos), int(total)))
+
+        if not to_enqueue:
+            return
+
+        for uid, items in to_enqueue.items():
+            tids = [int(x[0]) for x in items]
+            res = self.enqueue_many(int(uid), tids, backtest_panel2)
+
+            if int(res.get("queued") or 0) <= 0:
+                continue
+
+            # 只更新 queued 狀態與排隊資訊，不碰 combos_done/combos_total（保留進度）
+            for tid, qpos, qtot in items:
+                if not self.is_queued(int(uid), int(tid)):
+                    continue
+                try:
+                    t = db.get_task(int(tid)) or {}
+                    prog = _json_load(t.get("progress_json") or "{}")
+                    if not isinstance(prog, dict):
+                        prog = {}
+
+                    prog["phase"] = "queued"
+                    prog["phase_msg"] = "等待排程分配..."
+                    prog["queue_pos"] = int(qpos)
+                    prog["queue_total"] = int(qtot)
+                    prog["updated_at"] = db.utc_now_iso()
+
+                    # 若任務還是 assigned，就標成 queued；若本來就 queued，不動它
+                    if str(t.get("status") or "") == "assigned":
+                        db.update_task_status(int(tid), "queued")
+
+                    db.update_task_progress(int(tid), prog)
+                except Exception as e:
+                    import traceback
+                    print(f"[DB ERROR] _auto_enqueue_orphans update failed tid={tid}: {e}\n{traceback.format_exc()}", file=sys.stderr)
 
     def _scheduler_loop(self) -> None:
         try:
@@ -325,6 +395,16 @@ class JobManager:
         # 依靠 self._running 來判斷是否應該繼續執行
         while getattr(self, '_running', True):
             try:
+                # 若此進程被設定為不跑排程器（例如 UI 容器），就不要做任何排程動作
+                if not bool(getattr(self, "_enable_scheduler", True)):
+                    time.sleep(5.0)
+                    continue
+
+                # 高頻掃描 orphan（節流 2 秒一次）：根治 QUEUED 卡死
+                if time.time() - getattr(self, "_last_orphan_scan", 0) > 2.0:
+                    self._last_orphan_scan = time.time()
+                    self._auto_enqueue_orphans()
+
                 if time.time() - getattr(self, "_last_zombie_clean", 0) > 60:
                     self._last_zombie_clean = time.time()
                     try:
@@ -449,16 +529,27 @@ class JobManager:
             risk_spec = dict(pool.get("risk_spec") or {})
 
             progress = _json_load(task.get("progress_json") or "{}")
+
+            # 允許 resume：不要把進度硬歸零（不然你刷新就是重開一局）
+            prev_total = int(progress.get("combos_total") or 0)
+            prev_done = int(progress.get("combos_done") or 0)
+            prev_best_pass = progress.get("best_pass") if isinstance(progress.get("best_pass"), list) else []
+            prev_best_any_score = progress.get("best_any_score", None)
+            prev_best_any_metrics = progress.get("best_any_metrics", None)
+            prev_best_any_params = progress.get("best_any_params", None)
+            prev_best_any_passed = bool(progress.get("best_any_passed") or False)
+
             progress.update(
                 {
-                    "combos_total": 0,
-                    "combos_done": 0,
+                    "combos_total": int(prev_total),
+                    "combos_done": int(prev_done),
                     "best_score": None,
                     "best_candidate_id": None,
-                    "best_any_score": None,
-                    "best_any_metrics": None,
-                    "best_any_params": None,
-                    "best_any_passed": False,
+                    "best_any_score": prev_best_any_score,
+                    "best_any_metrics": prev_best_any_metrics,
+                    "best_any_params": prev_best_any_params,
+                    "best_any_passed": bool(prev_best_any_passed),
+                    "best_pass": prev_best_pass,
                     "phase": "sync_data",
                     "phase_progress": 0.0,
                     "phase_msg": "",
@@ -610,24 +701,69 @@ class JobManager:
             finally:
                 sconn.close()
 
-            db.clear_candidates_for_task(task_id)
+            # 只在第一次跑這個 task 時才清空 candidates；resume 時不動它（避免 UX 突然歸零）
+            if int(progress.get("combos_done") or 0) <= 0:
+                db.clear_candidates_for_task(task_id)
 
+            # --- restore checkpoint (best_pass / best_any / done) ---
+            prev_best_pass_list = progress.get("best_pass") if isinstance(progress.get("best_pass"), list) else []
             best_pass: List[Tuple[float, Dict[str, Any], Dict[str, Any]]] = []
-            best_any_score: Optional[float] = None
-            best_any_metrics: Optional[Dict[str, Any]] = None
-            best_any_params: Optional[Dict[str, Any]] = None
-            best_any_passed: bool = False
+            for it in prev_best_pass_list:
+                if not isinstance(it, dict):
+                    continue
+                try:
+                    sc0 = float(it.get("score"))
+                    pr0 = dict(it.get("params") or {})
+                    me0 = dict(it.get("metrics") or {})
+                    best_pass.append((sc0, pr0, me0))
+                except Exception:
+                    pass
+            best_pass.sort(key=lambda x: x[0], reverse=True)
+            if len(best_pass) > keep_top:
+                best_pass = best_pass[:keep_top]
 
-            done = 0
-            last_commit = 0
+            best_any_score: Optional[float] = None
+            try:
+                best_any_score = float(progress.get("best_any_score")) if progress.get("best_any_score") is not None else None
+            except Exception:
+                best_any_score = None
+
+            best_any_metrics: Optional[Dict[str, Any]] = dict(progress.get("best_any_metrics") or {}) if isinstance(progress.get("best_any_metrics"), dict) else None
+            best_any_params: Optional[Dict[str, Any]] = dict(progress.get("best_any_params") or {}) if isinstance(progress.get("best_any_params"), dict) else None
+            best_any_passed: bool = bool(progress.get("best_any_passed") or False)
+
+            done = int(progress.get("combos_done") or 0)
+            if done < 0:
+                done = 0
+            if done > combos_total:
+                done = 0
+
+            last_commit = int(done)
             last_commit_ts = time.time()
-            # t0 = time.time() # [專家級修復] 已移至 _progress_cb 上方以計算總體耗時
 
             progress["phase"] = "grid_search"
             progress["combos_total"] = int(combos_total)
-            progress["combos_done"] = 0
+            progress["combos_done"] = int(done)
             progress["updated_at"] = db.utc_now_iso()
             db.update_task_progress(task_id, progress)
+
+            # 時間切片：避免單一巨大任務霸佔 worker，也讓「暫停」真的有效
+            slice_s = 30.0
+            slice_max = 20000
+            _c3 = db._conn()
+            try:
+                slice_s = float(db.get_setting(_c3, "task_timeslice_s", 30.0))
+                slice_max = int(db.get_setting(_c3, "task_timeslice_max_combos", 20000))
+            finally:
+                _c3.close()
+
+            slice_s = float(max(3.0, min(600.0, slice_s)))
+            slice_start_ts = time.time()
+            slice_start_done = int(done)
+
+            risk_n = max(1, len(risk_grid))
+            start_family_i = int(done // risk_n)
+            start_risk_i = int(done % risk_n)
 
             fee_side = float(risk_spec.get("fee_side", 0.0002))
             slippage = float(risk_spec.get("slippage", 0.0))
@@ -680,18 +816,38 @@ class JobManager:
                 progress["best_any_params"] = dict(best_any_params) if best_any_params is not None else None
                 progress["best_any_passed"] = bool(best_any_passed)
                 progress["best_score"] = float(best_pass[0][0]) if best_pass else None
+
+                bp = []
+                for sc_i, pr_i, me_i in (best_pass[:keep_top] if best_pass else []):
+                    try:
+                        bp.append({"score": float(sc_i), "params": pr_i, "metrics": me_i})
+                    except Exception:
+                        pass
+                progress["best_pass"] = bp
+
                 progress["updated_at"] = db.utc_now_iso()
                 db.update_task_progress(task_id, progress)
 
             if combos_total > 0:
                 if use_fast_path and sig_cache is not None:
-                    for family_params, entry_sig in zip(part, sig_cache):
-                        if stop_flag.is_set():
-                            db.update_task_status(task_id, "assigned")
-                            return
-                        for tp, sl, mh in risk_grid:
+                    for i, (family_params, entry_sig) in enumerate(zip(part, sig_cache)):
+                        if i < start_family_i:
+                            continue
+
+                        for j, (tp, sl, mh) in enumerate(risk_grid):
+                            if i == start_family_i and j < start_risk_i:
+                                continue
+
                             if stop_flag.is_set():
-                                db.update_task_status(task_id, "assigned")
+                                _commit()
+                                progress["phase"] = "stopped"
+                                progress["phase_msg"] = "已暫停：進度已保存，等待重新開始"
+                                progress["updated_at"] = db.utc_now_iso()
+                                try:
+                                    db.update_task_progress(task_id, progress)
+                                except Exception:
+                                    pass
+                                db.update_task_status(task_id, "queued")
                                 return
 
                             res = bt_module.run_backtest_from_entry_sig(
@@ -717,16 +873,37 @@ class JobManager:
                                     best_pass = best_pass[:keep_top]
 
                             done += 1
+
+                            if (time.time() - slice_start_ts) >= slice_s or (slice_max > 0 and (done - slice_start_done) >= slice_max):
+                                _commit()
+                                progress["phase"] = "queued"
+                                progress["phase_msg"] = "時間切片：進度已保存，等待下一輪排程..."
+                                progress["updated_at"] = db.utc_now_iso()
+                                db.update_task_progress(task_id, progress)
+                                db.update_task_status(task_id, "queued")
+                                return
+
                             if done - last_commit >= 50 or (time.time() - last_commit_ts) >= 1.0:
                                 _commit()
                 else:
-                    for family_params in part:
-                        if stop_flag.is_set():
-                            db.update_task_status(task_id, "assigned")
-                            return
-                        for tp, sl, mh in risk_grid:
+                    for i, family_params in enumerate(part):
+                        if i < start_family_i:
+                            continue
+
+                        for j, (tp, sl, mh) in enumerate(risk_grid):
+                            if i == start_family_i and j < start_risk_i:
+                                continue
+
                             if stop_flag.is_set():
-                                db.update_task_status(task_id, "assigned")
+                                _commit()
+                                progress["phase"] = "stopped"
+                                progress["phase_msg"] = "已暫停：進度已保存，等待重新開始"
+                                progress["updated_at"] = db.utc_now_iso()
+                                try:
+                                    db.update_task_progress(task_id, progress)
+                                except Exception:
+                                    pass
+                                db.update_task_status(task_id, "queued")
                                 return
 
                             res = bt_module.run_backtest(
@@ -752,6 +929,16 @@ class JobManager:
                                     best_pass = best_pass[:keep_top]
 
                             done += 1
+
+                            if (time.time() - slice_start_ts) >= slice_s or (slice_max > 0 and (done - slice_start_done) >= slice_max):
+                                _commit()
+                                progress["phase"] = "queued"
+                                progress["phase_msg"] = "時間切片：進度已保存，等待下一輪排程..."
+                                progress["updated_at"] = db.utc_now_iso()
+                                db.update_task_progress(task_id, progress)
+                                db.update_task_status(task_id, "queued")
+                                return
+
                             if done - last_commit >= 50 or (time.time() - last_commit_ts) >= 1.0:
                                 _commit()
 

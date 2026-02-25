@@ -37,6 +37,7 @@ services:
       SHEEP_DB_URL: postgresql://sheep:${POSTGRES_PASSWORD}@db:5432/sheep
       SHEEP_API_ROOT_PATH: /api
       SHEEP_GIT_SHA: ${SHEEP_GIT_SHA}
+      SHEEP_RUN_SCHEDULER: "0"
 
     depends_on:
       migrate:
@@ -74,6 +75,25 @@ services:
       interval: 10s
       timeout: 3s
       retries: 20
+
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.ui
+    environment:
+      SHEEP_DB_URL: postgresql://sheep:${POSTGRES_PASSWORD}@db:5432/sheep
+      SHEEP_GIT_SHA: ${SHEEP_GIT_SHA}
+      SHEEP_RUN_SCHEDULER: "1"
+      SHEEP_ASSIGN_INTERVAL_S: "15"
+      SHEEP_MIN_TASKS: "2"
+      SHEEP_MAX_TASKS: "6"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - app_data:/app/data
+    restart: always
+    entrypoint: ["python", "-u", "sheep_worker_daemon.py"]
 
   nginx:
     image: nginx:1.25-alpine
