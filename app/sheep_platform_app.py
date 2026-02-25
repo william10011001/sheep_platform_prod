@@ -3430,10 +3430,75 @@ visibility: hidden !important;
         """,
         height=0,
     )
+def _force_red_bg_every_rerun() -> None:
+    # 終極保險：不管你切到哪個頁面，最後都用最高優先級把紅色網格背景蓋回來
+    st.markdown(
+        """
+<style id="sheepForceRedBg">
+html, body { background: #050007 !important; }
 
+div[data-testid="stAppViewContainer"],
+div[data-testid="stAppViewBlockContainer"],
+section.main,
+.stApp {
+  background-color: #050007 !important;
+  background-image:
+    radial-gradient(circle at 50% 20%, rgba(255,0,60,0.22) 0%, transparent 60%),
+    linear-gradient(rgba(255,0,60,0.12) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,0,60,0.12) 1px, transparent 1px) !important;
+  background-size: 100% 100%, 40px 40px, 40px 40px !important;
+  background-attachment: fixed !important;
+}
+
+/* 防止某些頁面把主容器填成純黑色遮住背景 */
+.main { background: transparent !important; }
+.block-container { background: transparent !important; }
+
+/* PERF HUD 不應該影響點擊 */
+#sheepPerfHud { pointer-events: auto !important; }
+</style>
+        """,
+        unsafe_allow_html=True,
+    )
 _LAST_ROLLOVER_CHECK = 0.0
 
+def _kill_stuck_fullscreen_iframes() -> None:
+    st.components.v1.html(
+        """
+<script>
+(function(){
+  const w = window.parent || window;
+  const d = w.document || document;
 
+  if (w.__sheep_kill_iframe_guard) return;
+  w.__sheep_kill_iframe_guard = true;
+
+  function kill(){
+    try{
+      const iframes = Array.from(d.querySelectorAll("iframe"));
+      for (const f of iframes){
+        const st = f.style || {};
+        const z = parseInt(st.zIndex || "0", 10);
+        const pos = (st.position || "").toLowerCase();
+        const wv = (st.width || "");
+        const hv = (st.height || "");
+        // 命中條件：固定定位 + 超高 z-index + 100vw/100vh
+        if (pos === "fixed" && z >= 2147483640 && (wv.includes("100vw") || wv.includes("100%")) && (hv.includes("100vh") || hv.includes("100%"))){
+          f.style.pointerEvents = "none";
+          f.style.display = "none";
+        }
+      }
+    }catch(e){}
+  }
+
+  // 立刻殺一次，之後每 1 秒再檢查（很輕量）
+  kill();
+  setInterval(kill, 1000);
+})();
+</script>
+        """,
+        height=0,
+    )
 @st.cache_resource
 def _init_once() -> None:
     """Initialize DB schema/defaults once per Streamlit process.
@@ -4933,6 +4998,18 @@ def _render_global_progress(cycle_id: int) -> None:
                 unsafe_allow_html=True,
             )
 def _page_home(user: Optional[Dict[str, Any]] = None) -> None:
+    # 主頁 iframe 偶發不渲染的根因：components 沒有 key，Streamlit 有機率沿用舊 iframe 狀態
+    # 解法：固定給它一個可控的 key，必要時手動 bump 強制重新 mount
+    if "_home_iframe_nonce" not in st.session_state:
+        st.session_state["_home_iframe_nonce"] = random.randint(100000, 999999)
+
+    colx, coly = st.columns([1.0, 1.0])
+    with colx:
+        if st.button("重新載入主頁元素", key="home_force_remount", type="secondary", use_container_width=True):
+            st.session_state["_home_iframe_nonce"] = random.randint(100000, 999999)
+            st.rerun()
+    with coly:
+        st.markdown('<div class="small-muted">若你看到只有背景但沒有主頁卡片，按左側按鈕即可強制修復。</div>', unsafe_allow_html=True)
     st.components.v1.html(
         """
         <!DOCTYPE html>
@@ -5121,7 +5198,8 @@ def _page_home(user: Optional[Dict[str, Any]] = None) -> None:
         </html>
         """,
         height=280,
-        scrolling=False
+        scrolling=False,
+        key=f"home_iframe_{int(st.session_state.get('_home_iframe_nonce') or 0)}"
     )
 
 def _page_tutorial(user: Optional[Dict[str, Any]] = None) -> None:
@@ -7585,6 +7663,8 @@ def main() -> None:
     st.set_page_config(page_title=APP_TITLE, layout="wide", initial_sidebar_state="expanded")
     _render_entry_overlay_once()
     _style()
+    _force_red_bg_every_rerun()
+    _kill_stuck_fullscreen_iframes()
     _bootstrap()
 
     _apply_cookie_ops()
@@ -7677,7 +7757,24 @@ def main() -> None:
             _logout()
             st.rerun()
 
-        _render_user_hud(user)
+        # 主頁必須秒開：HUD 若查 DB 卡住會讓主內容永遠走不到渲染（你第1張圖就是這種表現）
+        try:
+            if str(st.session_state.get("nav_page") or "") == "主頁":
+                st.markdown(
+                    f"""
+<div class="user_hud">
+  <div class="hud_name">{html.escape(str(user.get("username") or ""))}</div>
+  <div class="hud_div"></div>
+  <div class="hud_row"><div class="hud_k">已跑組合</div><div class="hud_v">-</div></div>
+  <div class="hud_row"><div class="hud_k">積分</div><div class="hud_v">-</div></div>
+</div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            else:
+                _render_user_hud(user)
+        except Exception:
+            pass
 
     page = str(st.session_state.get("nav_page") or pages[0])
 

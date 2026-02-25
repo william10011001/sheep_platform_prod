@@ -38,7 +38,6 @@ services:
       SHEEP_API_ROOT_PATH: /api
       SHEEP_GIT_SHA: ${SHEEP_GIT_SHA}
       SHEEP_RUN_SCHEDULER: "0"
-      SHEEP_RUN_SCHEDULER: "0"
 
     depends_on:
       migrate:
