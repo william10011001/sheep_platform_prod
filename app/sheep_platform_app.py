@@ -4465,7 +4465,7 @@ def _perf_hud_bootstrap_once() -> None:
 
   const el = d.createElement('div');
   el.id = 'sheepPerfHud';
-  el.innerHTML = `<div class="t">PERF</div><div class="r" id="sheepPerfHudBody">boot...</div>`;
+  el.innerHTML = `<div class="t">延遲監測(ms)</div><div class="r" id="sheepPerfHudBody">boot...</div>`;
   d.body.appendChild(el);
 
   // client-side nav timings

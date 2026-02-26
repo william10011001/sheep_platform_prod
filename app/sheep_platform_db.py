@@ -255,7 +255,12 @@ def _conn() -> _DBConn:
     except Exception:
         pass
     try:
-        raw.execute("PRAGMA busy_timeout = 60000;")
+        busy_ms = int(float(os.environ.get("SHEEP_SQLITE_BUSY_TIMEOUT_MS", "2000") or "2000"))
+    except Exception:
+        busy_ms = 2000
+    busy_ms = max(0, min(60000, int(busy_ms)))
+    try:
+        raw.execute(f"PRAGMA busy_timeout = {busy_ms};")
     except Exception:
         pass
     try:
@@ -425,6 +430,49 @@ def init_db() -> None:
                 """
             )
 
+            # ── 相容舊版 alembic schema：users 可能沒有 username_norm（你現在爆炸的根因）
+            try:
+                conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS username_norm TEXT")
+            except Exception:
+                pass
+
+            # 補齊既有資料（先用 lower(username) 當作 norm；可用就好，先救命）
+            try:
+                conn.execute("UPDATE users SET username_norm = lower(username) WHERE username_norm IS NULL OR username_norm = ''")
+            except Exception:
+                pass
+
+            # 盡量加唯一索引；如果遇到大小寫重複導致建不成，也不能讓系統起不來
+            try:
+                conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS users_username_norm_uq ON users(username_norm)")
+            except Exception:
+                try:
+                    conn.execute("CREATE INDEX IF NOT EXISTS users_username_norm_idx ON users(username_norm)")
+                except Exception:
+                    pass
+
+            # ── 你 UI/結算/錢包流程會用到的欄位（舊 schema 可能也沒有）
+            try:
+                conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS nickname TEXT DEFAULT ''")
+            except Exception:
+                pass
+            try:
+                conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled INTEGER NOT NULL DEFAULT 0")
+            except Exception:
+                pass
+            try:
+                conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS run_enabled INTEGER NOT NULL DEFAULT 1")
+            except Exception:
+                pass
+            try:
+                conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS wallet_address TEXT NOT NULL DEFAULT ''")
+            except Exception:
+                pass
+            try:
+                conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS wallet_chain TEXT NOT NULL DEFAULT ''")
+            except Exception:
+                pass
+
             conn.commit()
             return
         finally:
@@ -583,8 +631,56 @@ def init_db() -> None:
             conn.execute("ALTER TABLE users ADD COLUMN wallet_chain TEXT NOT NULL DEFAULT ''")
         except Exception:
             pass
+        # ── mining_tasks lease 欄位：你現在崩潰的根因就是它不存在
         try:
-            conn.execute("ALTER TABLE users ADD COLUMN nickname TEXT DEFAULT ''")
+            conn.execute("ALTER TABLE mining_tasks ADD COLUMN lease_id TEXT")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE mining_tasks ADD COLUMN lease_worker_id TEXT")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE mining_tasks ADD COLUMN lease_expires_at TEXT")
+        except Exception:
+            pass
+        try:
+            conn.execute("ALTER TABLE mining_tasks ADD COLUMN attempt INTEGER DEFAULT 0")
+        except Exception:
+            pass
+
+        # ── compute worker 狀態面板必備表
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS workers (
+                    worker_id TEXT PRIMARY KEY,
+                    kind TEXT NOT NULL DEFAULT 'worker',
+                    version TEXT NOT NULL DEFAULT '',
+                    protocol INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL,
+                    last_task_id INTEGER,
+                    tasks_done INTEGER NOT NULL DEFAULT 0,
+                    tasks_fail INTEGER NOT NULL DEFAULT 0,
+                    avg_cps REAL NOT NULL DEFAULT 0.0,
+                    last_error TEXT NOT NULL DEFAULT '',
+                    meta_json TEXT NOT NULL DEFAULT '{}'
+                );
+
+                CREATE TABLE IF NOT EXISTS worker_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts TEXT NOT NULL,
+                    worker_id TEXT,
+                    event TEXT NOT NULL,
+                    detail_json TEXT NOT NULL DEFAULT '{}'
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_workers_last_seen ON workers(last_seen_at);
+                CREATE INDEX IF NOT EXISTS idx_worker_events_ts ON worker_events(ts);
+                CREATE INDEX IF NOT EXISTS idx_mining_tasks_user_cycle_status_upd ON mining_tasks(user_id, cycle_id, status, updated_at);
+                """
+            )
         except Exception:
             pass
 
@@ -693,16 +789,34 @@ def init_db() -> None:
 
 
 def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
-    uname_norm = normalize_username(str(username or ""))
+    raw = str(username or "")
+    uname_norm = normalize_username(raw)
     if not uname_norm:
         return None
+
     conn = _conn()
     try:
-        row = conn.execute(
-            "SELECT * FROM users WHERE username_norm = ? LIMIT 1",
-            (uname_norm,),
+        # 優先走 username_norm（新 schema / 已補欄位的 DB）
+        try:
+            row = conn.execute(
+                "SELECT * FROM users WHERE username_norm = ? LIMIT 1",
+                (uname_norm,),
+            ).fetchone()
+            if row:
+                return dict(row)
+        except Exception as e:
+            # Postgres 舊 schema 沒 username_norm 會噴 UndefinedColumn (pgcode=42703)
+            msg = str(e)
+            pgcode = str(getattr(e, "pgcode", "") or "")
+            if ("username_norm" not in msg) and (pgcode != "42703"):
+                raise
+
+        # 後備：直接用 username（大小寫不敏感）查，至少讓登入不炸
+        row2 = conn.execute(
+            "SELECT * FROM users WHERE lower(username) = ? OR username = ? LIMIT 1",
+            (uname_norm, raw.strip()),
         ).fetchone()
-        return dict(row) if row else None
+        return dict(row2) if row2 else None
     finally:
         conn.close()
 
@@ -1244,7 +1358,14 @@ def _sqlite_has_table(conn: sqlite3.Connection, table: str) -> bool:
 
 def _read_factor_pools_from_sqlite(db_path: str) -> List[Dict[str, Any]]:
     try:
-        conn = sqlite3.connect(db_path, timeout=5.0, check_same_thread=False)
+        # UI 不准因 DB 鎖等到天荒地老：預設 2 秒就放棄，避免你看到「動畫跑完→空白卡死」
+        try:
+            timeout_s = float(os.environ.get("SHEEP_SQLITE_TIMEOUT_S", "2.0") or "2.0")
+        except Exception:
+            timeout_s = 2.0
+        timeout_s = max(0.2, min(30.0, float(timeout_s)))
+
+        conn = sqlite3.connect(path, timeout=timeout_s, check_same_thread=False)
         conn.row_factory = sqlite3.Row
     except Exception:
         return []
