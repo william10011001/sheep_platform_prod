@@ -215,25 +215,30 @@ def _render_brand_header(animate: bool, dim: bool = False) -> None:
   }}
 }}
 
+/* Sidebar controls: keep Streamlit native open/close usable (do NOT collapse them). */
 div[data-testid="stSidebarCollapsedControl"],
 div[data-testid="collapsedControl"] {{
-  opacity: 0 !important;
-  position: absolute !important;
-  width: 1px !important;
-  height: 1px !important;
-  overflow: hidden !important;
-  z-index: -1 !important;
+opacity: 1 !important;
+position: fixed !important;
+top: 10px !important;
+left: 10px !important;
+width: auto !important;
+height: auto !important;
+overflow: visible !important;
+z-index: 100000 !important;
+pointer-events: auto !important;
 }}
 
 section[data-testid="stSidebar"] button[kind="headerNoPadding"],
 section[data-testid="stSidebar"] button[aria-label="Close sidebar"],
 button[aria-label="Close sidebar"] {{
-  opacity: 0 !important;
-  position: absolute !important;
-  width: 1px !important;
-  height: 1px !important;
-  overflow: hidden !important;
-  z-index: -1 !important;
+opacity: 1 !important;
+position: relative !important;
+width: auto !important;
+height: auto !important;
+overflow: visible !important;
+z-index: auto !important;
+pointer-events: auto !important;
 }}
 
 header[data-testid="stHeader"] {{
@@ -634,17 +639,37 @@ def _try_auto_login_from_cookie() -> bool:
     if st.session_state.get("auth_user_id") is not None:
         return True
 
+    # 先讀新 cookie 名；讀不到就 fallback 舊名（你過去很可能寫錯名）
     raw = _get_cookie(_REMEMBER_COOKIE_NAME)
     raw = str(raw or "").strip()
     if not raw:
+        raw = _get_cookie(_REMEMBER_TOKEN_NAME)
+        raw = str(raw or "").strip()
+    if not raw:
         return False
 
+    verify_err = None
     try:
         res = db.verify_api_token(raw)
-    except Exception:
+    except Exception as e:
+        verify_err = e
         res = None
 
     if not res or not isinstance(res, dict):
+        # 明確無效/過期：清 cookie，避免用戶永遠以為「有記住我」但其實 token 早死了
+        if verify_err is None:
+            try:
+                print(f"[AUTH] remember token invalid/expired -> clearing cookie. token_len={len(raw)}", file=sys.stderr, flush=True)
+            except Exception:
+                pass
+            _queue_clear_cookie(_REMEMBER_COOKIE_NAME)
+            _queue_clear_cookie(_REMEMBER_TOKEN_NAME)
+        else:
+            try:
+                print(f"[AUTH WARN] verify_api_token failed: {verify_err}", file=sys.stderr, flush=True)
+                print(traceback.format_exc(), file=sys.stderr, flush=True)
+            except Exception:
+                pass
         return False
 
     u = res.get("user")
@@ -730,9 +755,28 @@ def _week_bounds_last_completed(now_utc: datetime) -> Dict[str, str]:
 
 
 def _style() -> None:
-    # 重要：Streamlit 每次切頁/互動都會 rerun，DOM 會重建
-    # CSS 不能用 early-return 跳過，否則你切到「任務」就會變成「紅背景/按鈕/文字渲染全消失」
-    # 若要避免 JS 監聽器疊加，請在 JS 端用 window.xxx guard（你其他 script 已經有做）
+# 重要：Streamlit 每次切頁/互動都會 rerun，DOM 會重建
+# CSS 不能用 early-return 跳過，否則你切到「任務」就會變成「紅背景/按鈕/文字渲染全消失」
+# 若要避免 JS 監聽器疊加，請在 JS 端用 window.xxx guard（你其他 script 已經有做）
+
+# Auth/Cookie 防線：登入後通常會 st.rerun()，cookie 若不在 rerun 早期 apply，就等於「根本沒寫入」
+    try:
+        _apply_cookie_ops()
+    except Exception as e:
+        try:
+            print(f"[AUTH WARN] _apply_cookie_ops failed: {e}", file=sys.stderr, flush=True)
+            print(traceback.format_exc(), file=sys.stderr, flush=True)
+        except Exception:
+            pass
+
+    # UI 防線：Ctrl/Cmd + B 強制切換側邊欄（就算你又把按鈕 CSS 弄死，也還有路）
+    st.components.v1.html(
+        """
+    <script> (function() { if (window.__sheepSidebarHotkeyV1) return; window.__sheepSidebarHotkeyV1 = true; function q(sel) { try { return window.parent.document.querySelector(sel); } catch (e) { return null; } } function isSidebarVisible() { try { var el = q('section[data-testid="stSidebar"]'); if (!el) return false; var st = window.parent.getComputedStyle(el); if (!st || st.display === 'none' || st.visibility === 'hidden') return false; var r = el.getBoundingClientRect(); return (r && r.width > 30); } catch (e) { return false; } } function click(el) { try { if (el) { el.click(); return true; } } catch (e) {} return false; } function openSidebar() { var btn = q('button[aria-label="Open sidebar"]') || q('div[data-testid="stSidebarCollapsedControl"] button'); if (!click(btn)) console.warn('[sidebar] open button not found'); } function closeSidebar() { var btn = q('button[aria-label="Close sidebar"]') || q('section[data-testid="stSidebar"] button[kind="headerNoPadding"]') || q('section[data-testid="stSidebar"] button[aria-label="Close sidebar"]'); if (!click(btn)) console.warn('[sidebar] close button not found'); } window.addEventListener('keydown', function(ev) { try { var k = (ev.key || '').toLowerCase(); var isToggle = (k === 'b') && (ev.ctrlKey || ev.metaKey); if (!isToggle) return; ev.preventDefault(); ev.stopPropagation(); if (isSidebarVisible()) closeSidebar(); else openSidebar(); } catch (e) { console.error('[sidebar] hotkey error', e); } }, true); })(); </script>
+        """,
+        height=0,
+    )
+
     st.markdown(
         """
         <style>

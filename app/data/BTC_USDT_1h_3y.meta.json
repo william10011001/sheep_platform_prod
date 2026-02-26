@@ -3,8 +3,8 @@
   "symbol": "BTC_USDT",
   "step_min": 60,
   "years": 1,
-  "last_sync_utc": "2026-02-26T04:00:03.668315+00:00",
-  "last_closed_open_ts_sec": 1772074800,
-  "rows_appended": 1,
+  "last_sync_utc": "2026-02-26T06:05:28.257453+00:00",
+  "last_closed_open_ts_sec": 1772082000,
+  "rows_appended": 2,
   "csv": "data\\BTC_USDT_1h_3y.csv"
 }
