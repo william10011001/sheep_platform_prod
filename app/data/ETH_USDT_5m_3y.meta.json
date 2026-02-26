@@ -3,8 +3,8 @@
   "symbol": "ETH_USDT",
   "step_min": 5,
   "years": 1,
-  "last_sync_utc": "2026-02-26T13:35:03.249269+00:00",
-  "last_closed_open_ts_sec": 1772112600,
+  "last_sync_utc": "2026-02-26T16:00:04.325431+00:00",
+  "last_closed_open_ts_sec": 1772121300,
   "rows_appended": 1,
   "csv": "data\\ETH_USDT_5m_3y.csv"
 }

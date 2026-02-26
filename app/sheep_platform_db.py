@@ -1075,31 +1075,6 @@ def set_setting(arg1: Any, arg2: Any, arg3: Any = None) -> None:
         conn.close()
 
 
-def set_setting(arg1: Any, arg2: Any, arg3: Any = None) -> None:
-    import sqlite3
-    if isinstance(arg1, sqlite3.Connection):
-        k = str(arg2 or "").strip()
-        value = arg3
-    else:
-        k = str(arg1 or "").strip()
-        value = arg2
-
-    if not k:
-        return
-    v_json = json.dumps(value, ensure_ascii=False)
-    conn = _conn()
-    try:
-        conn.execute(
-            """
-            INSERT INTO settings (key, value, updated_at)
-            VALUES (?, ?, ?)
-            ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
-            """,
-            (k, v_json, _now_iso()),
-        )
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def write_audit_log(user_id: Optional[int], action: str, payload: Any) -> None:

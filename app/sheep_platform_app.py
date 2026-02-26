@@ -206,6 +206,14 @@ def _render_brand_header(animate: bool, dim: bool = False) -> None:
   height: 84px !important;
   z-index: 500 !important;
   background: transparent !important;
+
+  /* 關鍵：Header 外框不吃點擊，避免把 Streamlit 原生 sidebar toggle 蓋死 */
+  pointer-events: none !important;
+}}
+
+/* 但品牌本體仍可點（登入/返回等互動不會壞） */
+#sheepBrandHdr .brandWrap,
+#sheepBrandHdr .brandWrap * {{
   pointer-events: auto !important;
 }}
 
@@ -214,32 +222,22 @@ def _render_brand_header(animate: bool, dim: bool = False) -> None:
     height: 78px !important;
   }}
 }}
-
-/* Sidebar controls: keep Streamlit native open/close usable (do NOT collapse them). */
+/* Sidebar controls: do NOT reposition.
+   Only enforce "visible + clickable + on top", otherwise你一定會再把它改到消失。 */
 div[data-testid="stSidebarCollapsedControl"],
-div[data-testid="collapsedControl"] {{
+div[data-testid="collapsedControl"],
+button[data-testid="stExpandSidebarButton"],
+button[data-testid="stCollapseSidebarButton"] {{
   opacity: 1 !important;
-  position: fixed !important;
-  top: calc(env(safe-area-inset-top, 0px) + 92px) !important;
-  left: 16px !important;
-  right: auto !important;
-  bottom: auto !important;
-  transform: none !important;
-  width: auto !important;
-  height: auto !important;
-  display: flex !important;
   visibility: visible !important;
-  overflow: visible !important;
-  z-index: 2147483000 !important;
   pointer-events: auto !important;
+  z-index: 2147483000 !important;
 }}
 
 div[data-testid="stSidebarCollapsedControl"] button,
 div[data-testid="collapsedControl"] button {{
   pointer-events: auto !important;
-  visibility: visible !important;
   opacity: 1 !important;
-  transform: none !important;
 }}
 
 section[data-testid="stSidebar"] button[kind="headerNoPadding"],
@@ -269,7 +267,7 @@ header[data-testid="stHeader"] * {{
 #sheepBrandHdr .brandWrap {{
   position: absolute;
   top: 6px;
-  left: 6px;
+  left: 50px;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -363,7 +361,7 @@ header[data-testid="stHeader"] * {{
 }}
 
 @media (max-width: 720px) {{
-  #sheepBrandHdr .brandWrap {{ top: 6px; left: 6px; gap: 8px; padding: 4px 12px 4px 4px; }}
+  #sheepBrandHdr .brandWrap {{ top: 6px; left: 50px; gap: 8px; padding: 4px 12px 4px 4px; }}
   #sheepBrandHdr .logoContainer {{ width: 62px; height: 62px; }}
   #sheepBrandHdr .name {{ font-size: 18px; }}
 }}
@@ -609,27 +607,60 @@ def _get_cookie(name: str) -> str:
 
 
 def _queue_set_cookie(name: str, value: str, max_age_s: int) -> None:
-    st.session_state["_cookie_op"] = {"op": "set", "name": str(name), "value": str(value), "max_age_s": int(max_age_s)}
+    ops = st.session_state.get("_cookie_ops")
+    if not isinstance(ops, list):
+        # backward compat: if legacy single op exists, convert to list
+        legacy = st.session_state.get("_cookie_op")
+        ops = [legacy] if isinstance(legacy, dict) else []
+        st.session_state["_cookie_ops"] = ops
+        if "_cookie_op" in st.session_state:
+            try:
+                del st.session_state["_cookie_op"]
+            except Exception:
+                pass
+    ops.append({"op": "set", "name": str(name), "value": str(value), "max_age_s": int(max_age_s)})
 
 
 def _queue_clear_cookie(name: str) -> None:
-    st.session_state["_cookie_op"] = {"op": "clear", "name": str(name)}
+    ops = st.session_state.get("_cookie_ops")
+    if not isinstance(ops, list):
+        legacy = st.session_state.get("_cookie_op")
+        ops = [legacy] if isinstance(legacy, dict) else []
+        st.session_state["_cookie_ops"] = ops
+        if "_cookie_op" in st.session_state:
+            try:
+                del st.session_state["_cookie_op"]
+            except Exception:
+                pass
+    ops.append({"op": "clear", "name": str(name)})
 
 
 def _apply_cookie_ops() -> None:
-    op = st.session_state.get("_cookie_op")
-    if not isinstance(op, dict):
-        return
-    try:
-        kind = str(op.get("op") or "")
-        name = str(op.get("name") or "")
-        if not name:
+    ops = st.session_state.get("_cookie_ops")
+    if not isinstance(ops, list) or not ops:
+        # backward compat for legacy key
+        legacy = st.session_state.get("_cookie_op")
+        if isinstance(legacy, dict):
+            ops = [legacy]
+        else:
             return
 
-        if kind == "set":
-            val = str(op.get("value") or "")
-            max_age_s = int(op.get("max_age_s") or 0)
-            js = f"""
+    try:
+        for op in ops:
+            if not isinstance(op, dict):
+                continue
+            kind = str(op.get("op") or "")
+            name = str(op.get("name") or "")
+            if not name:
+                continue
+
+            # localStorage mirror key (for remember-me resilience)
+            ls_key = "sheep_ls_" + name
+
+            if kind == "set":
+                val = str(op.get("value") or "")
+                max_age_s = int(op.get("max_age_s") or 0)
+                js = f"""
 <script>
 (function() {{
   try {{
@@ -641,13 +672,23 @@ def _apply_cookie_ops() -> None:
       cookie += "; Secure";
     }}
     document.cookie = cookie;
+
+    try {{
+      if (window.localStorage) {{
+        localStorage.setItem({json.dumps(ls_key)}, value);
+      }}
+      if (window.sessionStorage) {{
+        sessionStorage.removeItem("sheep_restore_cookie_once");
+      }}
+    }} catch (e2) {{}}
   }} catch (e) {{}}
 }})();
 </script>
 """
-            st.components.v1.html(js, height=0)
-        elif kind == "clear":
-            js = f"""
+                st.components.v1.html(js, height=0)
+
+            elif kind == "clear":
+                js = f"""
 <script>
 (function() {{
   try {{
@@ -657,18 +698,95 @@ def _apply_cookie_ops() -> None:
       cookie += "; Secure";
     }}
     document.cookie = cookie;
+
+    try {{
+      if (window.localStorage) {{
+        localStorage.removeItem({json.dumps(ls_key)});
+      }}
+      if (window.sessionStorage) {{
+        sessionStorage.removeItem("sheep_restore_cookie_once");
+      }}
+    }} catch (e2) {{}}
   }} catch (e) {{}}
 }})();
 </script>
 """
-            st.components.v1.html(js, height=0)
+                st.components.v1.html(js, height=0)
     finally:
         try:
-            del st.session_state["_cookie_op"]
+            if "_cookie_ops" in st.session_state:
+                del st.session_state["_cookie_ops"]
+        except Exception:
+            pass
+        try:
+            if "_cookie_op" in st.session_state:
+                del st.session_state["_cookie_op"]
         except Exception:
             pass
 
+def _ensure_remember_cookie_from_localstorage() -> None:
+    # Streamlit 的 st.context.cookies 只會讀「新 session 初始請求」帶進來的 cookies。:contentReference[oaicite:4]{index=4}
+    # 若瀏覽器有 localStorage 記住 token，但本次 session 初始請求沒帶 cookie，就補寫 cookie 並 reload 一次開新 session。
+    js = f"""
+<script>
+(function() {{
+  try {{
+    var cookieNames = [{json.dumps(_REMEMBER_COOKIE_NAME)}, {json.dumps(_REMEMBER_TOKEN_NAME)}];
 
+    function hasCookie(n) {{
+      try {{
+        var c = document.cookie || "";
+        var parts = c.split(";");
+        for (var i=0;i<parts.length;i++) {{
+          var p = parts[i].trim();
+          if (!p) continue;
+          if (p.indexOf(n + "=") === 0) return true;
+        }}
+      }} catch(e) {{}}
+      return false;
+    }}
+
+    var cookieOk = false;
+    for (var i=0;i<cookieNames.length;i++) {{
+      if (hasCookie(cookieNames[i])) {{ cookieOk = true; break; }}
+    }}
+
+    var token = "";
+    try {{
+      if (window.localStorage) {{
+        token = localStorage.getItem("sheep_ls_" + {json.dumps(_REMEMBER_COOKIE_NAME)}) || localStorage.getItem("sheep_ls_" + {json.dumps(_REMEMBER_TOKEN_NAME)}) || "";
+      }}
+    }} catch(e2) {{}}
+
+    if (!cookieOk && token) {{
+      var once = "";
+      try {{ once = (window.sessionStorage ? (sessionStorage.getItem("sheep_restore_cookie_once") || "") : ""); }} catch(e3) {{}}
+      if (once !== "1") {{
+        try {{ if (window.sessionStorage) sessionStorage.setItem("sheep_restore_cookie_once", "1"); }} catch(e4) {{}}
+
+        var maxAge = {int(_REMEMBER_TTL_DAYS) * 86400};
+        var name = {json.dumps(_REMEMBER_COOKIE_NAME)};
+        var cookie = name + "=" + token + "; Path=/; Max-Age=" + maxAge + "; SameSite=Lax";
+        if (window.location && window.location.protocol === "https:") {{
+          cookie += "; Secure";
+        }}
+        document.cookie = cookie;
+
+        // 立刻 reload：讓“下一個新 session 初始請求”帶上 cookie，後端才真的能用 st.context.cookies 讀到並自動登入
+        window.location.reload();
+        return;
+      }}
+    }}
+
+    // cookie 已經 ok：清掉一次性旗標，避免未來誤判
+    if (cookieOk) {{
+      try {{ if (window.sessionStorage) sessionStorage.removeItem("sheep_restore_cookie_once"); }} catch(e5) {{}}
+    }}
+  }} catch (e) {{}}
+}})();
+</script>
+"""
+    st.components.v1.html(js, height=0)
 def _try_auto_login_from_cookie() -> bool:
     if st.session_state.get("auth_user_id") is not None:
         return True
@@ -720,6 +838,7 @@ def _try_auto_login_from_cookie() -> bool:
             except Exception:
                 pass
             _queue_clear_cookie(_REMEMBER_COOKIE_NAME)
+            _queue_clear_cookie(_REMEMBER_TOKEN_NAME)
             _queue_clear_cookie(_REMEMBER_TOKEN_NAME)
         else:
             try:
@@ -1166,18 +1285,33 @@ def _style() -> None:
 
         /* [專家級修正] 徹底解決側邊欄位移、滾動條跳動、頂部留白與按鈕間距問題 */
         section[data-testid="stSidebar"] {
-            min-width: 260px !important;
-            max-width: 260px !important;
-            background: rgba(10, 14, 20, 0.95) !important;
-            border-right: 1px solid var(--border) !important;
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-        }
-        
-        div[data-testid="stSidebarHeader"] {
-            display: none !important; /* 隱藏原生頂部區塊，消滅巨大留白與關閉按鈕造成的排版跳動 */
+        background: rgba(10, 14, 20, 0.95) !important;
+        border-right: 1px solid var(--border) !important;
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
         }
 
+        /* 不要把 sidebar 寬度鎖死，否則收起只會「縮一點點」看起來像沒反應 */
+        html.sheepSidebarOpen section[data-testid="stSidebar"] {
+            width: 260px !important;
+            min-width: 260px !important;
+            max-width: 260px !important;
+        }
+
+        /* 保留原生 header（裡面有關閉按鈕與 Streamlit 事件），但把多餘留白壓到最小 */
+        div[data-testid="stSidebarHeader"] {
+            padding: 0 !important;
+            margin: 0 !important;
+            min-height: 0 !important;
+            height: auto !important;
+            background: transparent !important;
+            border-bottom: none !important;
+        }
+        div[data-testid="stSidebarHeader"] > div {
+            padding: 0 !important;
+            margin: 0 !important;
+            min-height: 0 !important;
+        }
         div[data-testid="stSidebarUserContent"] {
             padding-top: 0 !important; /* 防止 Streamlit 原生插入的多餘頂部間距 */
         }
@@ -1271,8 +1405,8 @@ def _style() -> None:
 
         #custom-sys-menu-btn {
             position: fixed !important;
-            top: calc(env(safe-area-inset-top, 0px) + 92px) !important;
-            left: 64px !important;              /* 讓出原生 collapsedControl（通常在 left:16px）避免重疊 */
+            top: 16px !important;
+            left: 16px !important;
             right: auto !important;
             width: 44px !important;
             height: 44px !important;
@@ -1281,7 +1415,7 @@ def _style() -> None:
             border: 1px solid rgba(255,255,255,0.15) !important;
             z-index: 2147483647 !important;
             cursor: pointer !important;
-            display: flex !important;
+            display: none;                       /* 預設不顯示：由 JS 依「原生按鈕是否可點」決定顯示/隱藏 */
             align-items: center !important;
             justify-content: center !important;
             box-shadow: 0 4px 20px rgba(0,0,0,0.6) !important;
@@ -3444,27 +3578,37 @@ visibility: hidden !important;
         <script>
         (function() {
             const w = window.parent || window;
-
-            // Streamlit rerun 會重複注入這段 JS；沒有 guard 會造成 observer/timer 疊加而變慢
-            if (w.__sheep_sys_menu_injected_v2) {
-                return;
-            }
-            w.__sheep_sys_menu_injected_v2 = true;
-
             const doc = (w.document ? w.document : document);
 
-            function q(sel) {
-                try { return doc.querySelector(sel); } catch (e) { return null; }
+            function q(sel) { try { return doc.querySelector(sel); } catch (e) { return null; } }
+            function cs(el) { try { return w.getComputedStyle ? w.getComputedStyle(el) : null; } catch (e) { return null; } }
+            function rect(el) { try { return el.getBoundingClientRect ? el.getBoundingClientRect() : null; } catch (e) { return null; } }
+
+            function isVisible(el) {
+                try {
+                    if (!el) return false;
+                    const st = cs(el);
+                    const r = rect(el);
+                    if (!st || !r) return false;
+                    if (st.display === "none" || st.visibility === "hidden" || st.opacity === "0") return false;
+                    if (st.pointerEvents === "none") return false;
+                    if (r.width < 6 || r.height < 6) return false;
+                    return true;
+                } catch (e) {
+                    return false;
+                }
             }
 
-            function isSidebarVisible() {
+            function isClickable(el) {
                 try {
-                    const el = q('section[data-testid="stSidebar"]');
-                    if (!el) return false;
-                    const st = (w.getComputedStyle ? w.getComputedStyle(el) : null);
-                    if (st && (st.display === 'none' || st.visibility === 'hidden')) return false;
-                    const r = el.getBoundingClientRect();
-                    return (r && r.width > 30);
+                    if (!isVisible(el)) return false;
+                    const r = rect(el);
+                    const cx = Math.floor(r.left + r.width / 2);
+                    const cy = Math.floor(r.top + r.height / 2);
+                    if (cx < 0 || cy < 0) return false;
+                    const hit = doc.elementFromPoint ? doc.elementFromPoint(cx, cy) : null;
+                    if (!hit) return true;
+                    return (hit === el) || (el.contains && el.contains(hit));
                 } catch (e) {
                     return false;
                 }
@@ -3473,164 +3617,248 @@ visibility: hidden !important;
             function clickEl(el) {
                 try {
                     if (!el) return false;
+                    try { el.dispatchEvent(new MouseEvent("click", { bubbles:true, cancelable:true, view:w })); } catch (e) {}
+                    try { el.click(); } catch (e2) {}
+                    return true;
+                } catch (e3) {
+                    return false;
+                }
+            }
+
+        function isSidebarOpen() {
+        try {
+        const el = q('section[data-testid="stSidebar"]');
+        if (!el) return false;
+        const st = cs(el);
+        if (st && (st.display === "none" || st.visibility === "hidden")) return false;
+        const r = rect(el);
+        if (!r) return false;
+        if (r.width <= 30) return false;
+        if (r.right <= 8) return false;
+        return true;
+        } catch (e) {
+        return false;
+        }
+        }
+
+        function syncSidebarClass() {
+            try {
+                const root = doc.documentElement;
+                if (!root) return;
+                if (isSidebarOpen()) root.classList.add("sheepSidebarOpen");
+                else root.classList.remove("sheepSidebarOpen");
+            } catch (e) {}
+        }
+
+        const OPEN_SELS = [
+            'button[data-testid="stExpandSidebarButton"]',
+            'div[data-testid="stSidebarCollapsedControl"] button',
+            'div[data-testid="collapsedControl"] button',
+            'button[aria-label="Open sidebar"]',
+            'button[aria-label="View sidebar"]',
+            'button[title="Open sidebar"]'
+        ];
+
+        const CLOSE_SELS = [
+            'button[data-testid="stCollapseSidebarButton"]',
+            'button[aria-label="Close sidebar"]',
+            'section[data-testid="stSidebar"] button[kind="headerNoPadding"]',
+            'section[data-testid="stSidebar"] button[aria-label="Close sidebar"]',
+            'button[title="Close sidebar"]'
+        ];
+
+        function pickFirstVisible(selectors) {
+            for (const sel of selectors) {
+                const el = q(sel);
+                if (isVisible(el)) return el;
+            }
+            return null;
+        }
+
+        function pickBest(selectors) {
+            let firstExisting = null;
+            for (const sel of selectors) {
+                const el = q(sel);
+                if (!el) continue;
+                if (!firstExisting) firstExisting = el;
+                if (isClickable(el)) return el;
+            }
+            return firstExisting;
+        }
+
+        function _debugCandidates(tag, selectors) {
+            try {
+                const now = Date.now();
+                const key = "__sheep_sidebar_dbg_" + tag;
+                if (w[key] && (now - w[key]) < 2500) return;
+                w[key] = now;
+
+                const out = [];
+                for (const sel of selectors) {
+                    const el = q(sel);
+                    if (!el) { out.push({ sel, found:false }); continue; }
+                    const r = rect(el);
+                    const st = cs(el);
+                    out.push({
+                        sel,
+                        found:true,
+                        clickable: isClickable(el),
+                        visible: isVisible(el),
+                        rect: r ? { x:r.x, y:r.y, w:r.width, h:r.height } : null,
+                        display: st ? st.display : null,
+                        visibility: st ? st.visibility : null,
+                        opacity: st ? st.opacity : null,
+                        pointerEvents: st ? st.pointerEvents : null
+                    });
+                }
+                console.warn("[sidebar] candidates", tag, out);
+            } catch (e) {}
+        }
+
+        function openSidebar() {
+            const el = pickBest(OPEN_SELS);
+            const ok = clickEl(el);
+            if (!ok) _debugCandidates("open", OPEN_SELS);
+            syncSidebarClass();
+            return ok;
+        }
+
+        function closeSidebar() {
+            const el = pickBest(CLOSE_SELS);
+            const ok = clickEl(el);
+            if (!ok) _debugCandidates("close", CLOSE_SELS);
+            syncSidebarClass();
+            return ok;
+        }
+            function ensureFallbackButton() {
+                try {
+                if (!doc.body) return false;
+
+                syncSidebarClass();
+
+                const nativeOpen = pickFirstVisible(OPEN_SELS);
+                const nativeOk = isClickable(nativeOpen);
+
+                    let btn = doc.getElementById("custom-sys-menu-btn");
+
+                    // 原生按鈕可點：不顯示備援（避免移位、避免覆蓋）
+                    if (nativeOk) {
+                        if (btn) {
+                            try { btn.style.setProperty("display", "none", "important"); } catch (e0) { btn.style.display = "none"; }
+                            try { btn.style.setProperty("pointer-events", "none", "important"); } catch (e1) { btn.style.pointerEvents = "none"; }
+                            try { btn.style.setProperty("opacity", "0", "important"); } catch (e2) {}
+                            try { btn.style.setProperty("visibility", "hidden", "important"); } catch (e3) {}
+                        }
+                        return true;
+                    }
+
+                    // 原生按鈕消失或不可點：顯示備援按鈕
+                    if (!btn) {
+                        btn = doc.createElement("div");
+                        btn.id = "custom-sys-menu-btn";
+                        btn.setAttribute("role", "button");
+                        btn.setAttribute("tabindex", "0");
+                        btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"></path></svg>';
+                        doc.body.appendChild(btn);
+                    }
+
+                    // 把備援按鈕“貼”到原生按鈕應該在的位置（解決你抱怨的移位）
+                    let top = 12, left = 12;
                     try {
-                        el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: w }));
-                    } catch (e) {}
-                    el.click();
+                        const r = rect(nativeOpen);
+                        if (r) { top = Math.max(6, Math.floor(r.top)); left = Math.max(6, Math.floor(r.left)); }
+                    } catch (e0) {}
+
+                    btn.style.position = "fixed";
+                    btn.style.top = top + "px";
+                    btn.style.left = left + "px";
+                    btn.style.right = "auto";
+                    btn.style.zIndex = "2147483647";
+                    try { btn.style.setProperty("display", "flex", "important"); } catch (e4) { btn.style.display = "flex"; }
+                    try { btn.style.setProperty("pointer-events", "auto", "important"); } catch (e5) { btn.style.pointerEvents = "auto"; }
+                    try { btn.style.setProperty("opacity", "1", "important"); } catch (e6) {}
+                    try { btn.style.setProperty("visibility", "visible", "important"); } catch (e7) {}
+
+                    // 最大化可追蹤性：遇到「左側按鈕看不到」時，用 Console 直接印根因
+                    try {
+                        const now = Date.now();
+                        if (!w.__sheep_sidebar_fallback_log_at || (now - w.__sheep_sidebar_fallback_log_at) > 5000) {
+                            w.__sheep_sidebar_fallback_log_at = now;
+                            const r0 = rect(nativeOpen);
+                            const cs0 = nativeOpen ? cs(nativeOpen) : null;
+                            console.warn("[sidebar] fallback button active", {
+                                nativeFound: !!nativeOpen,
+                                nativeOk: !!nativeOk,
+                                nativeRect: r0 ? {x:r0.x,y:r0.y,w:r0.width,h:r0.height} : null,
+                                nativeDisplay: cs0 ? cs0.display : null,
+                                nativeVisibility: cs0 ? cs0.visibility : null,
+                                nativeOpacity: cs0 ? cs0.opacity : null,
+                                nativePointerEvents: cs0 ? cs0.pointerEvents : null,
+                                fallbackTop: top,
+                                fallbackLeft: left
+                            });
+                        }
+                    } catch (e8) {}
+
+                    if (!btn.dataset.sheepBound || btn.dataset.sheepBound !== "1") {
+                        btn.dataset.sheepBound = "1";
+
+                        btn.addEventListener("pointerdown", function(e) {
+                            try { e.preventDefault(); e.stopPropagation(); } catch (e1) {}
+                        }, true);
+
+                        btn.addEventListener("click", function(e) {
+                            try {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                if (isSidebarOpen()) {
+                                    if (!closeSidebar()) console.warn("[sidebar] close button not found");
+                                } else {
+                                    if (!openSidebar()) console.warn("[sidebar] open button not found");
+                                }
+                            } catch (err) {
+                                try { console.error("[sidebar] toggle error", err); } catch (e2) {}
+                            }
+                        }, true);
+
+                        btn.addEventListener("keydown", function(e) {
+                            try {
+                                const k = (e.key || "").toLowerCase();
+                                if (k === "enter" || k === " ") { e.preventDefault(); e.stopPropagation(); btn.click(); }
+                            } catch (e3) {}
+                        }, true);
+                    }
+
                     return true;
                 } catch (e) {
                     return false;
                 }
             }
 
-            function _dbgCandidates(label, sels) {
+            // 核心：不要 return 鎖死（登出→再登入 DOM 會換），每次注入都 ensure 一次
+            const booted = !!w.__sheep_sidebar_toggle_booted;
+            w.__sheep_sidebar_toggle_booted = true;
+
+            ensureFallbackButton();
+
+            // 只在第一次掛 observer/timer，避免性能債
+            if (!booted) {
+                let tries = 0;
+                const t = w.setInterval(function() {
+                    tries += 1;
+                    ensureFallbackButton();
+                    if (tries >= 60) { try { w.clearInterval(t); } catch (e) {} }
+                }, 250);
+
                 try {
-                    const found = [];
-                    for (const sel of sels) {
-                        const el = q(sel);
-                        if (!el) continue;
-                        const r = (el.getBoundingClientRect ? el.getBoundingClientRect() : null);
-                        found.push({
-                            sel: sel,
-                            tag: (el.tagName || ""),
-                            aria: (el.getAttribute ? el.getAttribute("aria-label") : ""),
-                            rect: (r ? { x:r.x, y:r.y, w:r.width, h:r.height } : null)
-                        });
-                    }
-                    if (found.length) console.debug("[sidebar]", label, found);
+                    const ob = new MutationObserver(function() { ensureFallbackButton(); });
+                    if (doc.body) ob.observe(doc.body, { childList:true, subtree:true });
+                } catch (e) {}
+
+                try {
+                    if (doc.defaultView) doc.defaultView.addEventListener("resize", ensureFallbackButton);
                 } catch (e) {}
             }
-
-            function openSidebar() {
-                const sels = [
-                    'button[data-testid="stExpandSidebarButton"]',
-                    'div[data-testid="stSidebarCollapsedControl"] button',
-                    'div[data-testid="collapsedControl"] button',
-                    'div[data-testid="stSidebarExpandButton"] button',
-                    'button[aria-label="Open sidebar"]',
-                    'button[aria-label="View sidebar"]',
-                    'button[title="Open sidebar"]'
-                ];
-                for (const sel of sels) {
-                    const btn = q(sel);
-                    if (clickEl(btn)) return true;
-                }
-                _dbgCandidates("open not found", sels);
-                return false;
-            }
-
-            function closeSidebar() {
-                const sels = [
-                    'button[data-testid="stCollapseSidebarButton"]',
-                    'div[data-testid="stSidebarCollapseButton"] button',
-                    'button[aria-label="Close sidebar"]',
-                    'section[data-testid="stSidebar"] button[kind="headerNoPadding"]',
-                    'section[data-testid="stSidebar"] button[aria-label="Close sidebar"]',
-                    'button[title="Close sidebar"]'
-                ];
-                for (const sel of sels) {
-                    const btn = q(sel);
-                    if (clickEl(btn)) return true;
-                }
-                _dbgCandidates("close not found", sels);
-                return false;
-            }
-
-            function ensureMenuButton() {
-                try {
-                    if (!doc.body) return false;
-
-                    let btn = doc.getElementById('custom-sys-menu-btn');
-                    if (!btn) {
-                        btn = doc.createElement('div');
-                        btn.id = 'custom-sys-menu-btn';
-                        btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"></path></svg>';
-
-                        // 強制 inline 佈局：避免 CSS 沒套上時跑位、或被右上角工具列區域干擾
-                        try {
-                            btn.style.position = "fixed";
-                            btn.style.top = "calc((env(safe-area-inset-top, 0px)) + 92px)";
-                            btn.style.left = "64px";
-                            btn.style.right = "auto";
-                            btn.style.width = "44px";
-                            btn.style.height = "44px";
-                            btn.style.zIndex = "2147483647";
-                            btn.style.display = "flex";
-                            btn.style.alignItems = "center";
-                            btn.style.justifyContent = "center";
-                            btn.style.cursor = "pointer";
-                            btn.style.pointerEvents = "auto";
-                            btn.style.touchAction = "manipulation";
-                            btn.style.userSelect = "none";
-                            btn.style.webkitTapHighlightColor = "transparent";
-                        } catch (e0) {}
-
-                        // 先用 pointerdown 卡住冒泡（有些透明遮罩會偷吃 click，但吃不到 pointerdown）
-                        btn.addEventListener('pointerdown', function(e) {
-                            try { e.preventDefault(); e.stopPropagation(); } catch (e1) {}
-                        }, true);
-
-                        btn.addEventListener('click', function(e) {
-                            try {
-                                e.preventDefault();
-                                e.stopPropagation();
-
-                                if (isSidebarVisible()) {
-                                    if (!closeSidebar()) {
-                                        console.warn('[sidebar] close button not found');
-                                    }
-                                } else {
-                                    if (!openSidebar()) {
-                                        console.warn('[sidebar] open button not found');
-                                    }
-                                }
-                            } catch (err) {
-                                try { console.error('[sidebar] toggle error', err); } catch (e2) {}
-                            }
-                        }, true);
-
-                        doc.body.appendChild(btn);
-                    }
-
-                    // 每次都補一次：避免被其他 CSS/JS 意外改掉
-                    try {
-                        btn.style.pointerEvents = "auto";
-                        btn.style.zIndex = "2147483647";
-                        btn.style.display = "flex";
-                        btn.style.left = "64px";
-                        btn.style.right = "auto";
-                    } catch (e3) {}
-
-                    return true;
-                } catch (err) {
-                    return false;
-                }
-            }
-
-            // 先嘗試一次（多數情況這就夠了）
-            ensureMenuButton();
-
-            // 後備：短期 timer + MutationObserver，避免永久 setInterval 帶來的性能債
-            let tries = 0;
-            const timer = w.setInterval(function() {
-                tries += 1;
-                if (ensureMenuButton() || tries >= 40) {
-                    try { w.clearInterval(timer); } catch (e) {}
-                }
-            }, 250);
-
-            try {
-                const observer = new MutationObserver(function() { ensureMenuButton(); });
-                if (doc.body) {
-                    observer.observe(doc.body, { childList: true, subtree: true });
-                }
-            } catch (e) {}
-
-            try {
-                if (doc.defaultView) {
-                    doc.defaultView.addEventListener('resize', ensureMenuButton);
-                }
-            } catch (e) {}
         })();
         </script>
         """,
@@ -4043,6 +4271,7 @@ def _login_form() -> None:
         st.session_state["auth_remember_token_id"] = int(tok.get("token_id") or 0)
     else:
         _queue_clear_cookie(_REMEMBER_COOKIE_NAME)
+        _queue_clear_cookie(_REMEMBER_TOKEN_NAME)
 
     st.success("登入成功。")
     st.session_state["nav_page_pending"] = "主頁"
@@ -4140,6 +4369,7 @@ def _register_form() -> None:
         st.session_state["auth_remember_token_id"] = int(tok.get("token_id") or 0)
     else:
         _queue_clear_cookie(_REMEMBER_COOKIE_NAME)
+        _queue_clear_cookie(_REMEMBER_TOKEN_NAME)
 
     st.success("帳號已建立並完成登入。")
     st.session_state["nav_page_pending"] = "主頁"
@@ -7964,6 +8194,7 @@ def main() -> None:
     _bootstrap()
 
     _apply_cookie_ops()
+    _ensure_remember_cookie_from_localstorage()
     _inject_meta(APP_TITLE, "分散算力挖礦與週結算分潤任務平台")
 
     _render_brand_header(animate=False, dim=False)

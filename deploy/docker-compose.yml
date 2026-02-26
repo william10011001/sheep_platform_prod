@@ -18,15 +18,12 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.api
-    command: ["sh", "-lc", "alembic -c alembic.ini upgrade head"]
+    command: ["sh", "-lc", "python -c 'import sheep_platform_db; sheep_platform_db.init_db()'"]
     environment:
-      SHEEP_DB_URL: postgresql://sheep:${POSTGRES_PASSWORD}@db:5432/sheep
-      SHEEP_DB_MIGRATION: alembic
-    depends_on:
-      db:
-        condition: service_healthy
+      # SHEEP_DB_URL: postgresql://sheep:${POSTGRES_PASSWORD}@db:5432/sheep
+      SHEEP_DB_MIGRATION: none
     volumes:
-      - app_data:/app/data
+      - ../app/data:/app/data
     restart: "no"
 
   api:
@@ -34,7 +31,7 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile.api
     environment:
-      SHEEP_DB_URL: postgresql://sheep:${POSTGRES_PASSWORD}@db:5432/sheep
+      # SHEEP_DB_URL: postgresql://sheep:${POSTGRES_PASSWORD}@db:5432/sheep
       SHEEP_API_ROOT_PATH: /api
       SHEEP_GIT_SHA: ${SHEEP_GIT_SHA}
       SHEEP_RUN_SCHEDULER: "0"
@@ -43,7 +40,7 @@ services:
       migrate:
         condition: service_completed_successfully
     volumes:
-      - app_data:/app/data
+      - ../app/data:/app/data
     restart: always
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
@@ -56,7 +53,7 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile.ui
     environment:
-      SHEEP_DB_URL: postgresql://sheep:${POSTGRES_PASSWORD}@db:5432/sheep
+      # SHEEP_DB_URL: postgresql://sheep:${POSTGRES_PASSWORD}@db:5432/sheep
       SHEEP_BOOTSTRAP_ADMIN_USER: ${SHEEP_BOOTSTRAP_ADMIN_USER}
       SHEEP_BOOTSTRAP_ADMIN_PASS: ${SHEEP_BOOTSTRAP_ADMIN_PASS}
       SHEEP_CAPTCHA: "1"
@@ -69,7 +66,7 @@ services:
       migrate:
         condition: service_completed_successfully
     volumes:
-      - app_data:/app/data
+      - ../app/data:/app/data
     restart: always
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8501/app/_stcore/health"]
@@ -82,7 +79,7 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile.ui
     environment:
-      SHEEP_DB_URL: postgresql://sheep:${POSTGRES_PASSWORD}@db:5432/sheep
+      # SHEEP_DB_URL: postgresql://sheep:${POSTGRES_PASSWORD}@db:5432/sheep
       SHEEP_GIT_SHA: ${SHEEP_GIT_SHA}
       SHEEP_RUN_SCHEDULER: "1"
       SHEEP_ASSIGN_INTERVAL_S: "15"
@@ -92,7 +89,7 @@ services:
       migrate:
         condition: service_completed_successfully
     volumes:
-      - app_data:/app/data
+      - ../app/data:/app/data
     restart: always
     entrypoint: ["python", "-u", "sheep_worker_daemon.py"]
 
@@ -101,7 +98,7 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile.api
     environment:
-      SHEEP_DB_URL: postgresql://sheep:${POSTGRES_PASSWORD}@db:5432/sheep
+      # SHEEP_DB_URL: postgresql://sheep:${POSTGRES_PASSWORD}@db:5432/sheep
       SHEEP_COMPUTE_API_URL: http://api:8000
       SHEEP_COMPUTE_USER: ${SHEEP_BOOTSTRAP_ADMIN_USER}
       SHEEP_COMPUTE_PASS: ${SHEEP_BOOTSTRAP_ADMIN_PASS}
@@ -113,7 +110,7 @@ services:
       api:
         condition: service_healthy
     volumes:
-      - app_data:/app/data
+      - ../app/data:/app/data
     restart: always
     command: ["python", "-u", "sheep_compute_daemon.py"]
 
@@ -143,6 +140,5 @@ services:
 
 volumes:
   pgdata:
-  app_data:
   certbot_www:
   certbot_conf:

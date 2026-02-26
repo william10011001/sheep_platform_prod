@@ -1,0 +1,531 @@
+{
+  "task_info": {
+    "id": 88,
+    "user_id": 2,
+    "pool_id": 272,
+    "cycle_id": 1,
+    "partition_idx": 6,
+    "num_partitions": 16,
+    "status": "queued",
+    "progress_json": "{\"phase\": \"queued\", \"phase_msg\": \"等待排程分配...\", \"updated_at\": \"2026-02-26T15:57:10.481642+00:00\", \"queue_pos\": 2, \"queue_total\": 2, \"combos_total\": 768, \"combos_done\": 680, \"best_score\": null, \"best_candidate_id\": null, \"best_any_score\": -3.8754599999999995, \"best_any_metrics\": {\"total_return_pct\": 4.335, \"max_drawdown_pct\": 16.3266, \"sharpe\": 0.3171, \"trades\": 539, \"win_rate_pct\": 28.2004}, \"best_any_params\": {\"family\": \"ROC_Threshold\", \"family_params\": {\"period\": 8, \"enter_thr\": 0.003}, \"tp\": 0.012, \"sl\": 0.004, \"max_hold\": 30}, \"best_any_passed\": false, \"best_pass\": [], \"phase_progress\": 0.0, \"last_error\": null, \"elapsed_s\": 30.458, \"speed_cps\": 22.325537, \"eta_s\": 3.942}",
+    "last_heartbeat": "2026-02-26T15:57:10.497112+00:00",
+    "created_at": "2026-02-26T15:56:39.516793+00:00",
+    "updated_at": "2026-02-26T15:57:10.497108+00:00",
+    "family": "ROC_Threshold",
+    "symbol": "BTC_USDT",
+    "timeframe_min": 240,
+    "years": 1,
+    "grid_spec_json": "{\"p_min\": 5, \"p_max\": 20, \"p_step\": 3, \"thr_min\": 0.001, \"thr_max\": 0.006, \"thr_step\": 0.001}",
+    "risk_spec_json": "{\"tp_min\": 0.3, \"tp_max\": 1.2, \"tp_step\": 0.3, \"sl_min\": 0.4, \"sl_max\": 1.6, \"sl_step\": 0.4, \"max_hold_min\": 30, \"max_hold_max\": 720, \"max_hold_step\": 30, \"fee_side\": 0.0002, \"slippage\": 0.0, \"worst_case\": true, \"reverse_mode\": false}",
+    "seed": 662694014,
+    "pool_name": "ROC_Threshold | BTC_USDT | 1m [BTC_USDT_240m]"
+  },
+  "timestamp": "2026-02-26T15:57:13.919909+00:00",
+  "best_pass_count": 24,
+  "candidates": [
+    {
+      "id": 229,
+      "score": 9.848560000000003,
+      "params": {
+        "family": "ROC_Threshold",
+        "family_params": {
+          "period": 8,
+          "enter_thr": 0.003
+        },
+        "tp": 0.012,
+        "sl": 0.012,
+        "max_hold": 30
+      },
+      "metrics": {
+        "total_return_pct": 20.8012,
+        "max_drawdown_pct": 23.9569,
+        "sharpe": 0.6843,
+        "trades": 539,
+        "win_rate_pct": 53.6178
+      }
+    },
+    {
+      "id": 230,
+      "score": 9.848560000000003,
+      "params": {
+        "family": "ROC_Threshold",
+        "family_params": {
+          "period": 8,
+          "enter_thr": 0.003
+        },
+        "tp": 0.012,
+        "sl": 0.012,
+        "max_hold": 60
+      },
+      "metrics": {
+        "total_return_pct": 20.8012,
+        "max_drawdown_pct": 23.9569,
+        "sharpe": 0.6843,
+        "trades": 539,
+        "win_rate_pct": 53.6178
+      }
+    },
+    {
+      "id": 231,
+      "score": 9.848560000000003,
+      "params": {
+        "family": "ROC_Threshold",
+        "family_params": {
+          "period": 8,
+          "enter_thr": 0.003
+        },
+        "tp": 0.012,
+        "sl": 0.012,
+        "max_hold": 90
+      },
+      "metrics": {
+        "total_return_pct": 20.8012,
+        "max_drawdown_pct": 23.9569,
+        "sharpe": 0.6843,
+        "trades": 539,
+        "win_rate_pct": 53.6178
+      }
+    },
+    {
+      "id": 232,
+      "score": 9.848560000000003,
+      "params": {
+        "family": "ROC_Threshold",
+        "family_params": {
+          "period": 8,
+          "enter_thr": 0.003
+        },
+        "tp": 0.012,
+        "sl": 0.012,
+        "max_hold": 120
+      },
+      "metrics": {
+        "total_return_pct": 20.8012,
+        "max_drawdown_pct": 23.9569,
+        "sharpe": 0.6843,
+        "trades": 539,
+        "win_rate_pct": 53.6178
+      }
+    },
+    {
+      "id": 233,
+      "score": 9.848560000000003,
+      "params": {
+        "family": "ROC_Threshold",
+        "family_params": {
+          "period": 8,
+          "enter_thr": 0.003
+        },
+        "tp": 0.012,
+        "sl": 0.012,
+        "max_hold": 150
+      },
+      "metrics": {
+        "total_return_pct": 20.8012,
+        "max_drawdown_pct": 23.9569,
+        "sharpe": 0.6843,
+        "trades": 539,
+        "win_rate_pct": 53.6178
+      }
+    },
+    {
+      "id": 234,
+      "score": 9.848560000000003,
+      "params": {
+        "family": "ROC_Threshold",
+        "family_params": {
+          "period": 8,
+          "enter_thr": 0.003
+        },
+        "tp": 0.012,
+        "sl": 0.012,
+        "max_hold": 180
+      },
+      "metrics": {
+        "total_return_pct": 20.8012,
+        "max_drawdown_pct": 23.9569,
+        "sharpe": 0.6843,
+        "trades": 539,
+        "win_rate_pct": 53.6178
+      }
+    },
+    {
+      "id": 235,
+      "score": 9.848560000000003,
+      "params": {
+        "family": "ROC_Threshold",
+        "family_params": {
+          "period": 8,
+          "enter_thr": 0.003
+        },
+        "tp": 0.012,
+        "sl": 0.012,
+        "max_hold": 210
+      },
+      "metrics": {
+        "total_return_pct": 20.8012,
+        "max_drawdown_pct": 23.9569,
+        "sharpe": 0.6843,
+        "trades": 539,
+        "win_rate_pct": 53.6178
+      }
+    },
+    {
+      "id": 236,
+      "score": 9.848560000000003,
+      "params": {
+        "family": "ROC_Threshold",
+        "family_params": {
+          "period": 8,
+          "enter_thr": 0.003
+        },
+        "tp": 0.012,
+        "sl": 0.012,
+        "max_hold": 240
+      },
+      "metrics": {
+        "total_return_pct": 20.8012,
+        "max_drawdown_pct": 23.9569,
+        "sharpe": 0.6843,
+        "trades": 539,
+        "win_rate_pct": 53.6178
+      }
+    },
+    {
+      "id": 237,
+      "score": 9.848560000000003,
+      "params": {
+        "family": "ROC_Threshold",
+        "family_params": {
+          "period": 8,
+          "enter_thr": 0.003
+        },
+        "tp": 0.012,
+        "sl": 0.012,
+        "max_hold": 270
+      },
+      "metrics": {
+        "total_return_pct": 20.8012,
+        "max_drawdown_pct": 23.9569,
+        "sharpe": 0.6843,
+        "trades": 539,
+        "win_rate_pct": 53.6178
+      }
+    },
+    {
+      "id": 238,
+      "score": 9.848560000000003,
+      "params": {
+        "family": "ROC_Threshold",
+        "family_params": {
+          "period": 8,
+          "enter_thr": 0.003
+        },
+        "tp": 0.012,
+        "sl": 0.012,
+        "max_hold": 300
+      },
+      "metrics": {
+        "total_return_pct": 20.8012,
+        "max_drawdown_pct": 23.9569,
+        "sharpe": 0.6843,
+        "trades": 539,
+        "win_rate_pct": 53.6178
+      }
+    },
+    {
+      "id": 239,
+      "score": 9.848560000000003,
+      "params": {
+        "family": "ROC_Threshold",
+        "family_params": {
+          "period": 8,
+          "enter_thr": 0.003
+        },
+        "tp": 0.012,
+        "sl": 0.012,
+        "max_hold": 330
+      },
+      "metrics": {
+        "total_return_pct": 20.8012,
+        "max_drawdown_pct": 23.9569,
+        "sharpe": 0.6843,
+        "trades": 539,
+        "win_rate_pct": 53.6178
+      }
+    },
+    {
+      "id": 240,
+      "score": 9.848560000000003,
+      "params": {
+        "family": "ROC_Threshold",
+        "family_params": {
+          "period": 8,
+          "enter_thr": 0.003
+        },
+        "tp": 0.012,
+        "sl": 0.012,
+        "max_hold": 360
+      },
+      "metrics": {
+        "total_return_pct": 20.8012,
+        "max_drawdown_pct": 23.9569,
+        "sharpe": 0.6843,
+        "trades": 539,
+        "win_rate_pct": 53.6178
+      }
+    },
+    {
+      "id": 241,
+      "score": 9.848560000000003,
+      "params": {
+        "family": "ROC_Threshold",
+        "family_params": {
+          "period": 8,
+          "enter_thr": 0.003
+        },
+        "tp": 0.012,
+        "sl": 0.012,
+        "max_hold": 390
+      },
+      "metrics": {
+        "total_return_pct": 20.8012,
+        "max_drawdown_pct": 23.9569,
+        "sharpe": 0.6843,
+        "trades": 539,
+        "win_rate_pct": 53.6178
+      }
+    },
+    {
+      "id": 242,
+      "score": 9.848560000000003,
+      "params": {
+        "family": "ROC_Threshold",
+        "family_params": {
+          "period": 8,
+          "enter_thr": 0.003
+        },
+        "tp": 0.012,
+        "sl": 0.012,
+        "max_hold": 420
+      },
+      "metrics": {
+        "total_return_pct": 20.8012,
+        "max_drawdown_pct": 23.9569,
+        "sharpe": 0.6843,
+        "trades": 539,
+        "win_rate_pct": 53.6178
+      }
+    },
+    {
+      "id": 243,
+      "score": 9.848560000000003,
+      "params": {
+        "family": "ROC_Threshold",
+        "family_params": {
+          "period": 8,
+          "enter_thr": 0.003
+        },
+        "tp": 0.012,
+        "sl": 0.012,
+        "max_hold": 450
+      },
+      "metrics": {
+        "total_return_pct": 20.8012,
+        "max_drawdown_pct": 23.9569,
+        "sharpe": 0.6843,
+        "trades": 539,
+        "win_rate_pct": 53.6178
+      }
+    },
+    {
+      "id": 244,
+      "score": 9.848560000000003,
+      "params": {
+        "family": "ROC_Threshold",
+        "family_params": {
+          "period": 8,
+          "enter_thr": 0.003
+        },
+        "tp": 0.012,
+        "sl": 0.012,
+        "max_hold": 480
+      },
+      "metrics": {
+        "total_return_pct": 20.8012,
+        "max_drawdown_pct": 23.9569,
+        "sharpe": 0.6843,
+        "trades": 539,
+        "win_rate_pct": 53.6178
+      }
+    },
+    {
+      "id": 245,
+      "score": 9.848560000000003,
+      "params": {
+        "family": "ROC_Threshold",
+        "family_params": {
+          "period": 8,
+          "enter_thr": 0.003
+        },
+        "tp": 0.012,
+        "sl": 0.012,
+        "max_hold": 510
+      },
+      "metrics": {
+        "total_return_pct": 20.8012,
+        "max_drawdown_pct": 23.9569,
+        "sharpe": 0.6843,
+        "trades": 539,
+        "win_rate_pct": 53.6178
+      }
+    },
+    {
+      "id": 246,
+      "score": 9.848560000000003,
+      "params": {
+        "family": "ROC_Threshold",
+        "family_params": {
+          "period": 8,
+          "enter_thr": 0.003
+        },
+        "tp": 0.012,
+        "sl": 0.012,
+        "max_hold": 540
+      },
+      "metrics": {
+        "total_return_pct": 20.8012,
+        "max_drawdown_pct": 23.9569,
+        "sharpe": 0.6843,
+        "trades": 539,
+        "win_rate_pct": 53.6178
+      }
+    },
+    {
+      "id": 247,
+      "score": 9.848560000000003,
+      "params": {
+        "family": "ROC_Threshold",
+        "family_params": {
+          "period": 8,
+          "enter_thr": 0.003
+        },
+        "tp": 0.012,
+        "sl": 0.012,
+        "max_hold": 570
+      },
+      "metrics": {
+        "total_return_pct": 20.8012,
+        "max_drawdown_pct": 23.9569,
+        "sharpe": 0.6843,
+        "trades": 539,
+        "win_rate_pct": 53.6178
+      }
+    },
+    {
+      "id": 248,
+      "score": 9.848560000000003,
+      "params": {
+        "family": "ROC_Threshold",
+        "family_params": {
+          "period": 8,
+          "enter_thr": 0.003
+        },
+        "tp": 0.012,
+        "sl": 0.012,
+        "max_hold": 600
+      },
+      "metrics": {
+        "total_return_pct": 20.8012,
+        "max_drawdown_pct": 23.9569,
+        "sharpe": 0.6843,
+        "trades": 539,
+        "win_rate_pct": 53.6178
+      }
+    },
+    {
+      "id": 249,
+      "score": 9.848560000000003,
+      "params": {
+        "family": "ROC_Threshold",
+        "family_params": {
+          "period": 8,
+          "enter_thr": 0.003
+        },
+        "tp": 0.012,
+        "sl": 0.012,
+        "max_hold": 630
+      },
+      "metrics": {
+        "total_return_pct": 20.8012,
+        "max_drawdown_pct": 23.9569,
+        "sharpe": 0.6843,
+        "trades": 539,
+        "win_rate_pct": 53.6178
+      }
+    },
+    {
+      "id": 250,
+      "score": 9.848560000000003,
+      "params": {
+        "family": "ROC_Threshold",
+        "family_params": {
+          "period": 8,
+          "enter_thr": 0.003
+        },
+        "tp": 0.012,
+        "sl": 0.012,
+        "max_hold": 660
+      },
+      "metrics": {
+        "total_return_pct": 20.8012,
+        "max_drawdown_pct": 23.9569,
+        "sharpe": 0.6843,
+        "trades": 539,
+        "win_rate_pct": 53.6178
+      }
+    },
+    {
+      "id": 251,
+      "score": 9.848560000000003,
+      "params": {
+        "family": "ROC_Threshold",
+        "family_params": {
+          "period": 8,
+          "enter_thr": 0.003
+        },
+        "tp": 0.012,
+        "sl": 0.012,
+        "max_hold": 690
+      },
+      "metrics": {
+        "total_return_pct": 20.8012,
+        "max_drawdown_pct": 23.9569,
+        "sharpe": 0.6843,
+        "trades": 539,
+        "win_rate_pct": 53.6178
+      }
+    },
+    {
+      "id": 252,
+      "score": 9.848560000000003,
+      "params": {
+        "family": "ROC_Threshold",
+        "family_params": {
+          "period": 8,
+          "enter_thr": 0.003
+        },
+        "tp": 0.012,
+        "sl": 0.012,
+        "max_hold": 720
+      },
+      "metrics": {
+        "total_return_pct": 20.8012,
+        "max_drawdown_pct": 23.9569,
+        "sharpe": 0.6843,
+        "trades": 539,
+        "win_rate_pct": 53.6178
+      }
+    }
+  ]
+}
