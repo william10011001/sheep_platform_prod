@@ -200,8 +200,9 @@ def _render_brand_header(animate: bool, dim: bool = False) -> None:
 #sheepBrandHdr {{
   position: fixed !important;
   top: 0 !important;
-  left: 60px !important;
-  width: 300px !important;
+  left: 10px !important;              /* 真正貼齊左上角 */
+  width: auto !important;
+  max-width: calc(100vw - 20px) !important;
   height: 84px !important;
   z-index: 500 !important;
   background: transparent !important;
@@ -210,7 +211,6 @@ def _render_brand_header(animate: bool, dim: bool = False) -> None:
 
 @media (max-width: 720px) {{
   #sheepBrandHdr {{
-    width: 270px !important;
     height: 78px !important;
   }}
 }}
@@ -218,15 +218,28 @@ def _render_brand_header(animate: bool, dim: bool = False) -> None:
 /* Sidebar controls: keep Streamlit native open/close usable (do NOT collapse them). */
 div[data-testid="stSidebarCollapsedControl"],
 div[data-testid="collapsedControl"] {{
-opacity: 1 !important;
-position: fixed !important;
-top: 10px !important;
-left: 10px !important;
-width: auto !important;
-height: auto !important;
-overflow: visible !important;
-z-index: 100000 !important;
-pointer-events: auto !important;
+  opacity: 1 !important;
+  position: fixed !important;
+  top: calc(env(safe-area-inset-top, 0px) + 92px) !important;
+  left: 16px !important;
+  right: auto !important;
+  bottom: auto !important;
+  transform: none !important;
+  width: auto !important;
+  height: auto !important;
+  display: flex !important;
+  visibility: visible !important;
+  overflow: visible !important;
+  z-index: 2147483000 !important;
+  pointer-events: auto !important;
+}}
+
+div[data-testid="stSidebarCollapsedControl"] button,
+div[data-testid="collapsedControl"] button {{
+  pointer-events: auto !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  transform: none !important;
 }}
 
 section[data-testid="stSidebar"] button[kind="headerNoPadding"],
@@ -568,10 +581,31 @@ def _parse_cookie_header(cookie_header: str) -> Dict[str, str]:
 
 
 def _get_cookie(name: str) -> str:
+    n = str(name or "").strip()
+    if not n:
+        return ""
+
+    # Streamlit >= 1.32 may expose parsed cookies directly.
+    try:
+        ctx = getattr(st, "context", None)
+        jar = getattr(ctx, "cookies", None) if ctx is not None else None
+        if jar is not None:
+            try:
+                v = jar.get(n)  # type: ignore[attr-defined]
+            except Exception:
+                try:
+                    v = dict(jar).get(n)  # type: ignore[arg-type]
+                except Exception:
+                    v = None
+            if v is not None:
+                return str(v)
+    except Exception:
+        pass
+
     headers = _get_ws_headers()
     ck = headers.get("Cookie") or headers.get("cookie") or ""
     cookies = _parse_cookie_header(ck)
-    return str(cookies.get(str(name)) or "")
+    return str(cookies.get(n) or "")
 
 
 def _queue_set_cookie(name: str, value: str, max_age_s: int) -> None:
@@ -646,6 +680,29 @@ def _try_auto_login_from_cookie() -> bool:
         raw = _get_cookie(_REMEMBER_TOKEN_NAME)
         raw = str(raw or "").strip()
     if not raw:
+        # 最大化除錯：若環境沒有把 Cookie header 帶進來，你會永遠「記住我失效」
+        try:
+            if str(os.environ.get("SHEEP_DEBUG_AUTH", "0") or "0").strip() == "1":
+                hdrs = _get_ws_headers()
+                try:
+                    keys = list(dict(hdrs).keys())
+                except Exception:
+                    keys = list(hdrs.keys()) if hasattr(hdrs, "keys") else []
+                print(f"[AUTH DEBUG] no remember cookie. header_keys={keys[:30]}", file=sys.stderr, flush=True)
+
+                try:
+                    ctx = getattr(st, "context", None)
+                    jar = getattr(ctx, "cookies", None) if ctx is not None else None
+                    if jar is not None:
+                        try:
+                            ck_keys = list(dict(jar).keys())
+                        except Exception:
+                            ck_keys = []
+                        print(f"[AUTH DEBUG] ctx.cookies keys={ck_keys[:30]}", file=sys.stderr, flush=True)
+                except Exception:
+                    pass
+        except Exception:
+            pass
         return False
 
     verify_err = None
@@ -1214,8 +1271,9 @@ def _style() -> None:
 
         #custom-sys-menu-btn {
             position: fixed !important;
-            top: 16px !important;
-            left: 16px !important;
+            top: calc(env(safe-area-inset-top, 0px) + 92px) !important;
+            left: 64px !important;              /* 讓出原生 collapsedControl（通常在 left:16px）避免重疊 */
+            right: auto !important;
             width: 44px !important;
             height: 44px !important;
             background: linear-gradient(135deg, rgba(30,41,59,0.95) 0%, rgba(15,23,42,0.98) 100%) !important;
@@ -1229,6 +1287,9 @@ def _style() -> None:
             box-shadow: 0 4px 20px rgba(0,0,0,0.6) !important;
             transition: all 0.2s ease !important;
             pointer-events: auto !important;
+            touch-action: manipulation !important;
+            user-select: none !important;
+            -webkit-tap-highlight-color: transparent;
             backdrop-filter: blur(10px);
             -webkit-backdrop-filter: blur(10px);
         }
@@ -1480,12 +1541,12 @@ visibility: hidden !important;
 }
 
     /* [核心修復] 將按鈕內容容器轉為極度穩定的絕對定位基準點 */
-    div[data-testid=&quot;stSidebar&quot;] .stButton button {
+    div[data-testid="stSidebar"] .stButton button {
         position: relative !important;
         overflow: visible !important;
     }
 
-    div[data-testid=&quot;stSidebar&quot;] .stButton button div[data-testid=&quot;stMarkdownContainer&quot;] {
+    div[data-testid="stSidebar"] .stButton button div[data-testid="stMarkdownContainer"] {
         width: 100% !important;
         display: flex !important;
         align-items: center !important;
@@ -1493,7 +1554,7 @@ visibility: hidden !important;
     }
 
     /* 統一按鈕文字與圖示間距，徹底拋棄會因視窗寬度跑版的 calc(50%) 置中對齊 */
-    div[data-testid=&quot;stSidebar&quot;] .stButton button p {
+    div[data-testid="stSidebar"] .stButton button p {
         position: relative !important;
         display: flex !important;
         align-items: center !important;
@@ -1507,8 +1568,8 @@ visibility: hidden !important;
     }
     
     /* 統一設定偽類 ICON 基礎屬性，絕對定位在文字左方，完全避免被擠壓消失 */
-    div[data-testid=&quot;stSidebar&quot;] .stButton button p::before {
-        content: &#39;&#39; !important;
+    div[data-testid="stSidebar"] .stButton button p::before {
+        content: '' !important;
         position: absolute !important;
         left: 4px !important; /* 絕對固定在文字左側 4px 處 */
         top: 50% !important;
@@ -3379,103 +3440,204 @@ visibility: hidden !important;
     )
 
     st.components.v1.html(
-        """
+            """
         <script>
         (function() {
             const w = window.parent || window;
 
-            // 終極防線：Streamlit rerun 會重複注入這段 JS，沒有 guard 會造成 interval/observer 疊加，第二次開始直接爆慢
-            if (w.__sheep_sys_menu_injected) {
+            // Streamlit rerun 會重複注入這段 JS；沒有 guard 會造成 observer/timer 疊加而變慢
+            if (w.__sheep_sys_menu_injected_v2) {
                 return;
             }
-            w.__sheep_sys_menu_injected = true;
+            w.__sheep_sys_menu_injected_v2 = true;
 
-            const doc = w.document ? w.document : document;
-            
-            function isSidebarOpen() {
+            const doc = (w.document ? w.document : document);
+
+            function q(sel) {
+                try { return doc.querySelector(sel); } catch (e) { return null; }
+            }
+
+            function isSidebarVisible() {
                 try {
-                    const sidebar = doc.querySelector('section[data-testid="stSidebar"]');
-                    if (!sidebar) return false;
-                    const left = sidebar.getBoundingClientRect().left;
-                    return left >= 0;
+                    const el = q('section[data-testid="stSidebar"]');
+                    if (!el) return false;
+                    const st = (w.getComputedStyle ? w.getComputedStyle(el) : null);
+                    if (st && (st.display === 'none' || st.visibility === 'hidden')) return false;
+                    const r = el.getBoundingClientRect();
+                    return (r && r.width > 30);
                 } catch (e) {
                     return false;
                 }
             }
 
-            function injectMenuButton() {
+            function clickEl(el) {
                 try {
+                    if (!el) return false;
+                    try {
+                        el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: w }));
+                    } catch (e) {}
+                    el.click();
+                    return true;
+                } catch (e) {
+                    return false;
+                }
+            }
+
+            function _dbgCandidates(label, sels) {
+                try {
+                    const found = [];
+                    for (const sel of sels) {
+                        const el = q(sel);
+                        if (!el) continue;
+                        const r = (el.getBoundingClientRect ? el.getBoundingClientRect() : null);
+                        found.push({
+                            sel: sel,
+                            tag: (el.tagName || ""),
+                            aria: (el.getAttribute ? el.getAttribute("aria-label") : ""),
+                            rect: (r ? { x:r.x, y:r.y, w:r.width, h:r.height } : null)
+                        });
+                    }
+                    if (found.length) console.debug("[sidebar]", label, found);
+                } catch (e) {}
+            }
+
+            function openSidebar() {
+                const sels = [
+                    'button[data-testid="stExpandSidebarButton"]',
+                    'div[data-testid="stSidebarCollapsedControl"] button',
+                    'div[data-testid="collapsedControl"] button',
+                    'div[data-testid="stSidebarExpandButton"] button',
+                    'button[aria-label="Open sidebar"]',
+                    'button[aria-label="View sidebar"]',
+                    'button[title="Open sidebar"]'
+                ];
+                for (const sel of sels) {
+                    const btn = q(sel);
+                    if (clickEl(btn)) return true;
+                }
+                _dbgCandidates("open not found", sels);
+                return false;
+            }
+
+            function closeSidebar() {
+                const sels = [
+                    'button[data-testid="stCollapseSidebarButton"]',
+                    'div[data-testid="stSidebarCollapseButton"] button',
+                    'button[aria-label="Close sidebar"]',
+                    'section[data-testid="stSidebar"] button[kind="headerNoPadding"]',
+                    'section[data-testid="stSidebar"] button[aria-label="Close sidebar"]',
+                    'button[title="Close sidebar"]'
+                ];
+                for (const sel of sels) {
+                    const btn = q(sel);
+                    if (clickEl(btn)) return true;
+                }
+                _dbgCandidates("close not found", sels);
+                return false;
+            }
+
+            function ensureMenuButton() {
+                try {
+                    if (!doc.body) return false;
+
                     let btn = doc.getElementById('custom-sys-menu-btn');
                     if (!btn) {
                         btn = doc.createElement('div');
                         btn.id = 'custom-sys-menu-btn';
                         btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"></path></svg>';
-                        
+
+                        // 強制 inline 佈局：避免 CSS 沒套上時跑位、或被右上角工具列區域干擾
+                        try {
+                            btn.style.position = "fixed";
+                            btn.style.top = "calc((env(safe-area-inset-top, 0px)) + 92px)";
+                            btn.style.left = "64px";
+                            btn.style.right = "auto";
+                            btn.style.width = "44px";
+                            btn.style.height = "44px";
+                            btn.style.zIndex = "2147483647";
+                            btn.style.display = "flex";
+                            btn.style.alignItems = "center";
+                            btn.style.justifyContent = "center";
+                            btn.style.cursor = "pointer";
+                            btn.style.pointerEvents = "auto";
+                            btn.style.touchAction = "manipulation";
+                            btn.style.userSelect = "none";
+                            btn.style.webkitTapHighlightColor = "transparent";
+                        } catch (e0) {}
+
+                        // 先用 pointerdown 卡住冒泡（有些透明遮罩會偷吃 click，但吃不到 pointerdown）
+                        btn.addEventListener('pointerdown', function(e) {
+                            try { e.preventDefault(); e.stopPropagation(); } catch (e1) {}
+                        }, true);
+
                         btn.addEventListener('click', function(e) {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            
-                            const stSidebar = doc.querySelector('section[data-testid="stSidebar"]');
-                            if (!stSidebar) return;
-                            
-                            const isOpen = isSidebarOpen();
-                            
-                            stSidebar.style.removeProperty('transform');
-                            stSidebar.style.removeProperty('min-width');
-                            stSidebar.removeAttribute('aria-expanded');
-                            
-                            if (isOpen) {
-                                const closeBtn = doc.querySelector('section[data-testid="stSidebar"] button[kind="headerNoPadding"]') 
-                                              || doc.querySelector('section[data-testid="stSidebar"] button[aria-label="Close sidebar"]')
-                                              || doc.querySelector('button[aria-label="Close sidebar"]')
-                                              || doc.querySelector('section[data-testid="stSidebar"] [data-testid="baseButton-headerNoPadding"]');
-                                if (closeBtn) {
-                                    closeBtn.click();
+                            try {
+                                e.preventDefault();
+                                e.stopPropagation();
+
+                                if (isSidebarVisible()) {
+                                    if (!closeSidebar()) {
+                                        console.warn('[sidebar] close button not found');
+                                    }
                                 } else {
-                                    stSidebar.style.setProperty('transform', 'translateX(-100%)', 'important');
-                                    stSidebar.style.setProperty('min-width', '0', 'important');
+                                    if (!openSidebar()) {
+                                        console.warn('[sidebar] open button not found');
+                                    }
                                 }
-                            } else {
-                                const openBtn = doc.querySelector('div[data-testid="collapsedControl"] button') 
-                                             || doc.querySelector('div[data-testid="stSidebarCollapsedControl"] button') 
-                                             || doc.querySelector('button[aria-label="Open sidebar"]') 
-                                             || doc.querySelector('button[aria-label="View sidebar"]');
-                                if (openBtn) {
-                                    openBtn.click();
-                                } else {
-                                    stSidebar.style.setProperty('transform', 'translateX(0)', 'important');
-                                    stSidebar.style.setProperty('min-width', '16rem', 'important');
-                                }
+                            } catch (err) {
+                                try { console.error('[sidebar] toggle error', err); } catch (e2) {}
                             }
-                        });
+                        }, true);
+
                         doc.body.appendChild(btn);
                     }
-                    btn.style.display = 'flex';
-                } catch (err) {}
+
+                    // 每次都補一次：避免被其他 CSS/JS 意外改掉
+                    try {
+                        btn.style.pointerEvents = "auto";
+                        btn.style.zIndex = "2147483647";
+                        btn.style.display = "flex";
+                        btn.style.left = "64px";
+                        btn.style.right = "auto";
+                    } catch (e3) {}
+
+                    return true;
+                } catch (err) {
+                    return false;
+                }
             }
 
-            // [專家級修正] 徹底拔除消耗資源的 JS 樣式渲染與屬性監聽器，消除卡頓
-            let layoutTimer = null;
-            const observer = new MutationObserver(() => { 
-                if (layoutTimer) return;
-                layoutTimer = setTimeout(() => {
-                    injectMenuButton(); 
-                    layoutTimer = null;
-                }, 150); // 節流
-            });
-            if (doc.body) {
-                observer.observe(doc.body, { childList: true, subtree: true });
-            }
-            setInterval(injectMenuButton, 1000);
-            
-            if (doc.defaultView) {
-                doc.defaultView.addEventListener('resize', injectMenuButton);
-            }
+            // 先嘗試一次（多數情況這就夠了）
+            ensureMenuButton();
+
+            // 後備：短期 timer + MutationObserver，避免永久 setInterval 帶來的性能債
+            let tries = 0;
+            const timer = w.setInterval(function() {
+                tries += 1;
+                if (ensureMenuButton() || tries >= 40) {
+                    try { w.clearInterval(timer); } catch (e) {}
+                }
+            }, 250);
+
+            try {
+                const observer = new MutationObserver(function() { ensureMenuButton(); });
+                if (doc.body) {
+                    observer.observe(doc.body, { childList: true, subtree: true });
+                }
+            } catch (e) {}
+
+            try {
+                if (doc.defaultView) {
+                    doc.defaultView.addEventListener('resize', ensureMenuButton);
+                }
+            } catch (e) {}
         })();
         </script>
         """,
         height=0,
     )
+
+
 def _force_red_bg_every_rerun() -> None:
     # 終極保險：不管你切到哪個頁面，最後都用最高優先級把紅色網格背景蓋回來
     st.markdown(
@@ -3516,43 +3678,125 @@ def _kill_stuck_fullscreen_iframes() -> None:
   const w = window.parent || window;
   const d = w.document || document;
 
-  if (w.__sheep_kill_iframe_guard) return;
-  w.__sheep_kill_iframe_guard = true;
+  if (w.__sheep_kill_iframe_guard_v2) return;
+  w.__sheep_kill_iframe_guard_v2 = true;
+
+  const DEBUG = (function(){
+    try { return !!(w.localStorage && w.localStorage.getItem("SHEEP_UI_DEBUG") === "1"); } catch(e) { return false; }
+  })();
+
+  function _cs(el){ try { return w.getComputedStyle ? w.getComputedStyle(el) : null; } catch(e){ return null; } }
+  function _rect(el){ try { return el.getBoundingClientRect ? el.getBoundingClientRect() : null; } catch(e){ return null; } }
+  function _num(v){ const n = parseInt((v || "0"), 10); return isNaN(n) ? 0 : n; }
+  function _log(){ try { if (DEBUG) console.warn.apply(console, arguments); } catch(e){} }
+
+  function _isLoader(f){
+    try {
+      const isLoader = (f.getAttribute && f.getAttribute("data-sheep-loader") === "1");
+      if (!isLoader) return false;
+      const started = (w.__sheep_loader_started_at || 0);
+      const age = started ? (Date.now() - started) : 0;
+      const finished = !!w.__sheep_loader_finished;
+      if (!finished && age > 0 && age < 15000) return true;
+      return false;
+    } catch(e){
+      return false;
+    }
+  }
+
+  function _neuter(el, mode, reason){
+    try {
+      if (!el) return;
+      el.style.setProperty("pointer-events", "none", "important");
+      if (mode === "hide") {
+        el.style.setProperty("display", "none", "important");
+      }
+      _log("[ui-guard] neuter", reason, el.tagName, (el.id || ""), (el.className || ""));
+    } catch(e){}
+  }
 
   function kill(){
     try{
+      const vw = Math.max(d.documentElement.clientWidth || 0, w.innerWidth || 0);
+      const vh = Math.max(d.documentElement.clientHeight || 0, w.innerHeight || 0);
+
+      // 1) 專殺：全屏/高 z-index 的 iframe（用 computedStyle，不看 inline style）
       const iframes = Array.from(d.querySelectorAll("iframe"));
       for (const f of iframes){
-        const st = f.style || {};
-        const z = parseInt(st.zIndex || "0", 10);
-        const pos = (st.position || "").toLowerCase();
-        const wv = (st.width || "");
-        const hv = (st.height || "");
-        // 命中條件：固定定位 + 超高 z-index + 100vw/100vh
-        if (pos === "fixed" && z >= 2147483640 && (wv.includes("100vw") || wv.includes("100%")) && (hv.includes("100vh") || hv.includes("100%"))){
+        if (_isLoader(f)) continue;
 
-          // 重要：不要把「載入動畫」秒殺
-          const isLoader = (f.getAttribute && f.getAttribute("data-sheep-loader") === "1");
-          if (isLoader) {
-            const started = (w.__sheep_loader_started_at || 0);
-            const age = started ? (Date.now() - started) : 0;
-            const finished = !!w.__sheep_loader_finished;
-            // loader 沒完成且還在 15 秒內：放過它
-            if (!finished && age > 0 && age < 15000) {
-              continue;
-            }
-          }
+        const cs = _cs(f);
+        const r = _rect(f);
+        if (!cs || !r) continue;
 
-          f.style.pointerEvents = "none";
-          f.style.display = "none";
+        const pos = (cs.position || "").toLowerCase();
+        const z = _num(cs.zIndex);
+        const pe = (cs.pointerEvents || "").toLowerCase();
+        const op = parseFloat(cs.opacity || "1");
+        const vis = (cs.visibility || "").toLowerCase();
+        const disp = (cs.display || "").toLowerCase();
+
+        const fixedish = (pos === "fixed" || pos === "absolute" || pos === "sticky");
+        const covers = (r.width >= vw * 0.92 && r.height >= vh * 0.92);
+        const suspicious = fixedish && pe !== "none" && disp !== "none" && vis !== "hidden" && op > 0.01 && z >= 1000;
+
+        if (suspicious && covers) {
+          _neuter(f, "hide", "fullscreen-iframe");
+          continue;
+        }
+
+        // 只擋住上方控制區也一樣會讓「側邊欄按鈕不能點」
+        const hitsTopControls = (r.top <= 200) && (r.left <= 160 || r.right >= (vw - 160));
+        if (suspicious && hitsTopControls) {
+          _neuter(f, "pe-only", "top-controls-iframe");
         }
       }
-    }catch(e){}
+
+      // 2) 專殺：透明固定遮罩（不是 iframe 也會吃點擊）
+      const probe = [
+        {x: 20, y: 20},
+        {x: vw - 20, y: 20},
+        {x: 20, y: 120},
+        {x: vw - 20, y: 120}
+      ];
+
+      for (const p of probe){
+        const el = d.elementFromPoint(p.x, p.y);
+        if (!el) continue;
+
+        try {
+          if (el.closest && (el.closest('#custom-sys-menu-btn') || el.closest('div[data-testid="stSidebarCollapsedControl"]') || el.closest('div[data-testid="collapsedControl"]'))) {
+            continue;
+          }
+        } catch(e0){}
+
+        const cs = _cs(el);
+        const r = _rect(el);
+        if (!cs || !r) continue;
+
+        const pos = (cs.position || "").toLowerCase();
+        const z = _num(cs.zIndex);
+        const pe = (cs.pointerEvents || "").toLowerCase();
+        const op = parseFloat(cs.opacity || "1");
+        const vis = (cs.visibility || "").toLowerCase();
+        const disp = (cs.display || "").toLowerCase();
+        const bg = (cs.backgroundColor || "").toLowerCase();
+
+        const fixedish = (pos === "fixed" || pos === "absolute" || pos === "sticky");
+        const hugeTop = (r.top <= 220) && (r.width >= vw * 0.60) && (r.height >= 60);
+        const transparentish = (op < 0.05) || (bg === "transparent") || (bg === "rgba(0, 0, 0, 0)");
+        const likelyShield = fixedish && hugeTop && z >= 1000 && pe !== "none" && disp !== "none" && vis !== "hidden" && transparentish;
+
+        if (likelyShield) {
+          _neuter(el, "pe-only", "transparent-click-shield");
+        }
+      }
+
+    } catch(e){}
   }
 
-  // 立刻殺一次，之後每 1 秒再檢查（很輕量）
   kill();
-  setInterval(kill, 1000);
+  setInterval(kill, 800);
 })();
 </script>
         """,
