@@ -730,10 +730,9 @@ def _week_bounds_last_completed(now_utc: datetime) -> Dict[str, str]:
 
 
 def _style() -> None:
-    # 終極修復：_style 每次 rerun 都重塞超大 CSS/iframe，會讓第二次開始越來越慢
-    if bool(st.session_state.get("_sheep_style_done")):
-        return
-    st.session_state["_sheep_style_done"] = True    
+    # 重要：Streamlit 每次切頁/互動都會 rerun，DOM 會重建
+    # CSS 不能用 early-return 跳過，否則你切到「任務」就會變成「紅背景/按鈕/文字渲染全消失」
+    # 若要避免 JS 監聽器疊加，請在 JS 端用 window.xxx guard（你其他 script 已經有做）
     st.markdown(
         """
         <style>
@@ -2020,8 +2019,10 @@ visibility: hidden !important;
               return;
             }
             window.parent.__sheep_loader_played = true;
+            window.parent.__sheep_loader_started_at = Date.now();
 
             if (window.frameElement) {
+              try { window.frameElement.setAttribute('data-sheep-loader', '1'); } catch(e) {}
               window.frameElement.style.position = 'fixed';
               window.frameElement.style.top = '0';
               window.frameElement.style.left = '0';
@@ -3297,7 +3298,8 @@ visibility: hidden !important;
         </body>
         </html>
         """,
-        height=0,
+        height=1,
+        scrolling=False,
     )
     # [專家級修正] 注入攔截器：強制將 Fivetran Webhook 等潛在阻塞的第三方請求設為非同步射後不理，瞬間釋放主渲染線程
     st.components.v1.html(
@@ -3484,6 +3486,19 @@ def _kill_stuck_fullscreen_iframes() -> None:
         const hv = (st.height || "");
         // 命中條件：固定定位 + 超高 z-index + 100vw/100vh
         if (pos === "fixed" && z >= 2147483640 && (wv.includes("100vw") || wv.includes("100%")) && (hv.includes("100vh") || hv.includes("100%"))){
+
+          // 重要：不要把「載入動畫」秒殺
+          const isLoader = (f.getAttribute && f.getAttribute("data-sheep-loader") === "1");
+          if (isLoader) {
+            const started = (w.__sheep_loader_started_at || 0);
+            const age = started ? (Date.now() - started) : 0;
+            const finished = !!w.__sheep_loader_finished;
+            // loader 沒完成且還在 15 秒內：放過它
+            if (!finished && age > 0 && age < 15000) {
+              continue;
+            }
+          }
+
           f.style.pointerEvents = "none";
           f.style.display = "none";
         }
@@ -4373,7 +4388,7 @@ def _perf_add(name: str, t0: float) -> None:
 def _perf_emit_payload() -> None:
     try:
         pm = st.session_state.get("_perf_ms") or {}
-        pm["server_rerun_ms"] = round((time.perf_counter() - float(st.session_state.get("_perf_t0") or time.perf_counter())) * 1000.0, 3)
+        pm["伺服器延遲"] = round((time.perf_counter() - float(st.session_state.get("_perf_t0") or time.perf_counter())) * 1000.0, 3)
         payload = json.dumps(pm, ensure_ascii=False)
         st.components.v1.html(
             f"""
@@ -4486,13 +4501,13 @@ def _perf_hud_bootstrap_once() -> None:
 
       const lines = [];
       if (nav) {
-        lines.push(`nav_ttfb_ms: ${nav.ttfb.toFixed(1)}`);
-        lines.push(`nav_dom_ms:  ${nav.dom.toFixed(1)}`);
-        lines.push(`nav_load_ms: ${nav.load.toFixed(1)}`);
+        lines.push(`伺服器第一次回應: ${nav.ttfb.toFixed(1)}`);
+        lines.push(`骨架延遲:  ${nav.dom.toFixed(1)}`);
+        lines.push(`整頁資源載入: ${nav.load.toFixed(1)}`);
       }
 
       if (longMax > 0) {
-        lines.push(`longtask_max_ms: ${longMax.toFixed(1)}`);
+        lines.push(`最嚴重的延遲: ${longMax.toFixed(1)}`);
       }
 
       // server metrics (sorted)
@@ -5513,9 +5528,9 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
             db.assign_tasks_for_user(int(user["id"]), cycle_id=int(cycle["id"]), min_tasks=int(min_tasks), max_tasks=int(max_tasks))
             st.session_state[_task_assign_key] = _now
 
-    _tq0 = _perf_mark("tasks_live_query_ms")
+    _tq0 = _perf_mark("任務資料查詢耗時")
     tasks = db.list_tasks_for_user(int(user["id"]), cycle_id=int(cycle["id"]))
-    _perf_add("tasks_live_query_ms", _tq0)
+    _perf_add("任務資料查詢耗時", _tq0)
     if sel_family != "全部策略" and allowed_pool_ids:
         tasks = [t for t in tasks if int(t.get("pool_id") or 0) in set(allowed_pool_ids)]
 

@@ -1,0 +1,1047 @@
+{
+  "task_info": {
+    "id": 83,
+    "user_id": 2,
+    "pool_id": 479,
+    "cycle_id": 1,
+    "partition_idx": 116,
+    "num_partitions": 192,
+    "status": "queued",
+    "progress_json": "{\"phase\": \"queued\", \"phase_msg\": \"收回並重新置入分配池\", \"combos_done\": 0, \"combos_total\": 0, \"updated_at\": \"2026-02-26T01:37:13.151415+00:00\"}",
+    "last_heartbeat": "2026-02-26T01:37:13.248045+00:00",
+    "created_at": "2026-02-26T01:35:07.720466+00:00",
+    "updated_at": "2026-02-26T01:37:13.248038+00:00",
+    "family": "TEMA_RSI",
+    "symbol": "BTC_USDT",
+    "timeframe_min": 15,
+    "years": 1,
+    "grid_spec_json": "{\"fast_min\": 3, \"fast_max\": 6, \"fast_step\": 1, \"slow_min\": 50, \"slow_max\": 200, \"slow_step\": 50, \"rsi_thr_min\": 20, \"rsi_thr_max\": 40, \"rsi_thr_step\": 5, \"tp_min\": 0.6, \"tp_max\": 1.5, \"tp_step\": 0.3, \"sl_min\": 1.5, \"sl_max\": 4.5, \"sl_step\": 1.5, \"act_min\": 0.5, \"act_max\": 2.0, \"act_step\": 0.5, \"tr_tick_min\": 200, \"tr_tick_max\": 1200, \"tr_tick_step\": 200, \"mintick\": 0.1, \"stake_pct\": 95.0}",
+    "risk_spec_json": "{\"tp_min\": 0.0, \"tp_max\": 0.0, \"tp_step\": 1.0, \"sl_min\": 0.0, \"sl_max\": 0.0, \"sl_step\": 1.0, \"max_hold_min\": 60, \"max_hold_max\": 720, \"max_hold_step\": 60, \"fee_side\": 0.0002, \"slippage\": 0.0, \"worst_case\": true, \"reverse_mode\": false}",
+    "seed": 1312784442,
+    "pool_name": "TEMA_RSI | BTC_USDT | 1m [BTC_USDT_15m]"
+  },
+  "timestamp": "2026-02-26T01:51:20.724621+00:00",
+  "best_pass_count": 30,
+  "candidates": [
+    {
+      "id": 169,
+      "score": 262.2275,
+      "params": {
+        "family": "TEMA_RSI",
+        "family_params": {
+          "fast_len": 6,
+          "slow_len": 100,
+          "rsi_len": 14,
+          "rsi_thr": 30,
+          "tp_pct_strat": 1.2,
+          "sl_pct_strat": 1.5,
+          "activation_pct": 0.5,
+          "trail_ticks": 200,
+          "mintick": 0.1,
+          "act_max": 2.0,
+          "act_step": 0.5,
+          "tr_tick_min": 200,
+          "tr_tick_max": 1200,
+          "tr_tick_step": 200,
+          "stake_pct": 95.0
+        },
+        "tp": 0.0,
+        "sl": 0.0,
+        "max_hold": 60
+      },
+      "metrics": {
+        "total_return_pct": 251.1199,
+        "max_drawdown_pct": 15.2865,
+        "sharpe": 4.0559,
+        "trades": 1354,
+        "win_rate_pct": 70.6795
+      }
+    },
+    {
+      "id": 170,
+      "score": 254.34169999999997,
+      "params": {
+        "family": "TEMA_RSI",
+        "family_params": {
+          "fast_len": 6,
+          "slow_len": 100,
+          "rsi_len": 14,
+          "rsi_thr": 30,
+          "tp_pct_strat": 1.2,
+          "sl_pct_strat": 1.5,
+          "activation_pct": 0.5,
+          "trail_ticks": 200,
+          "mintick": 0.1,
+          "act_max": 2.0,
+          "act_step": 0.5,
+          "tr_tick_min": 200,
+          "tr_tick_max": 1200,
+          "tr_tick_step": 200,
+          "stake_pct": 95.0
+        },
+        "tp": 0.0,
+        "sl": 0.0,
+        "max_hold": 420
+      },
+      "metrics": {
+        "total_return_pct": 243.8947,
+        "max_drawdown_pct": 15.4625,
+        "sharpe": 3.9449,
+        "trades": 1216,
+        "win_rate_pct": 75.2467
+      }
+    },
+    {
+      "id": 171,
+      "score": 254.34169999999997,
+      "params": {
+        "family": "TEMA_RSI",
+        "family_params": {
+          "fast_len": 6,
+          "slow_len": 100,
+          "rsi_len": 14,
+          "rsi_thr": 30,
+          "tp_pct_strat": 1.2,
+          "sl_pct_strat": 1.5,
+          "activation_pct": 0.5,
+          "trail_ticks": 200,
+          "mintick": 0.1,
+          "act_max": 2.0,
+          "act_step": 0.5,
+          "tr_tick_min": 200,
+          "tr_tick_max": 1200,
+          "tr_tick_step": 200,
+          "stake_pct": 95.0
+        },
+        "tp": 0.0,
+        "sl": 0.0,
+        "max_hold": 480
+      },
+      "metrics": {
+        "total_return_pct": 243.8947,
+        "max_drawdown_pct": 15.4625,
+        "sharpe": 3.9449,
+        "trades": 1216,
+        "win_rate_pct": 75.2467
+      }
+    },
+    {
+      "id": 172,
+      "score": 254.34169999999997,
+      "params": {
+        "family": "TEMA_RSI",
+        "family_params": {
+          "fast_len": 6,
+          "slow_len": 100,
+          "rsi_len": 14,
+          "rsi_thr": 30,
+          "tp_pct_strat": 1.2,
+          "sl_pct_strat": 1.5,
+          "activation_pct": 0.5,
+          "trail_ticks": 200,
+          "mintick": 0.1,
+          "act_max": 2.0,
+          "act_step": 0.5,
+          "tr_tick_min": 200,
+          "tr_tick_max": 1200,
+          "tr_tick_step": 200,
+          "stake_pct": 95.0
+        },
+        "tp": 0.0,
+        "sl": 0.0,
+        "max_hold": 540
+      },
+      "metrics": {
+        "total_return_pct": 243.8947,
+        "max_drawdown_pct": 15.4625,
+        "sharpe": 3.9449,
+        "trades": 1216,
+        "win_rate_pct": 75.2467
+      }
+    },
+    {
+      "id": 173,
+      "score": 254.34169999999997,
+      "params": {
+        "family": "TEMA_RSI",
+        "family_params": {
+          "fast_len": 6,
+          "slow_len": 100,
+          "rsi_len": 14,
+          "rsi_thr": 30,
+          "tp_pct_strat": 1.2,
+          "sl_pct_strat": 1.5,
+          "activation_pct": 0.5,
+          "trail_ticks": 200,
+          "mintick": 0.1,
+          "act_max": 2.0,
+          "act_step": 0.5,
+          "tr_tick_min": 200,
+          "tr_tick_max": 1200,
+          "tr_tick_step": 200,
+          "stake_pct": 95.0
+        },
+        "tp": 0.0,
+        "sl": 0.0,
+        "max_hold": 600
+      },
+      "metrics": {
+        "total_return_pct": 243.8947,
+        "max_drawdown_pct": 15.4625,
+        "sharpe": 3.9449,
+        "trades": 1216,
+        "win_rate_pct": 75.2467
+      }
+    },
+    {
+      "id": 174,
+      "score": 254.34169999999997,
+      "params": {
+        "family": "TEMA_RSI",
+        "family_params": {
+          "fast_len": 6,
+          "slow_len": 100,
+          "rsi_len": 14,
+          "rsi_thr": 30,
+          "tp_pct_strat": 1.2,
+          "sl_pct_strat": 1.5,
+          "activation_pct": 0.5,
+          "trail_ticks": 200,
+          "mintick": 0.1,
+          "act_max": 2.0,
+          "act_step": 0.5,
+          "tr_tick_min": 200,
+          "tr_tick_max": 1200,
+          "tr_tick_step": 200,
+          "stake_pct": 95.0
+        },
+        "tp": 0.0,
+        "sl": 0.0,
+        "max_hold": 660
+      },
+      "metrics": {
+        "total_return_pct": 243.8947,
+        "max_drawdown_pct": 15.4625,
+        "sharpe": 3.9449,
+        "trades": 1216,
+        "win_rate_pct": 75.2467
+      }
+    },
+    {
+      "id": 175,
+      "score": 254.34169999999997,
+      "params": {
+        "family": "TEMA_RSI",
+        "family_params": {
+          "fast_len": 6,
+          "slow_len": 100,
+          "rsi_len": 14,
+          "rsi_thr": 30,
+          "tp_pct_strat": 1.2,
+          "sl_pct_strat": 1.5,
+          "activation_pct": 0.5,
+          "trail_ticks": 200,
+          "mintick": 0.1,
+          "act_max": 2.0,
+          "act_step": 0.5,
+          "tr_tick_min": 200,
+          "tr_tick_max": 1200,
+          "tr_tick_step": 200,
+          "stake_pct": 95.0
+        },
+        "tp": 0.0,
+        "sl": 0.0,
+        "max_hold": 720
+      },
+      "metrics": {
+        "total_return_pct": 243.8947,
+        "max_drawdown_pct": 15.4625,
+        "sharpe": 3.9449,
+        "trades": 1216,
+        "win_rate_pct": 75.2467
+      }
+    },
+    {
+      "id": 176,
+      "score": 253.97990000000001,
+      "params": {
+        "family": "TEMA_RSI",
+        "family_params": {
+          "fast_len": 6,
+          "slow_len": 100,
+          "rsi_len": 14,
+          "rsi_thr": 30,
+          "tp_pct_strat": 1.2,
+          "sl_pct_strat": 1.5,
+          "activation_pct": 0.5,
+          "trail_ticks": 200,
+          "mintick": 0.1,
+          "act_max": 2.0,
+          "act_step": 0.5,
+          "tr_tick_min": 200,
+          "tr_tick_max": 1200,
+          "tr_tick_step": 200,
+          "stake_pct": 95.0
+        },
+        "tp": 0.0,
+        "sl": 0.0,
+        "max_hold": 300
+      },
+      "metrics": {
+        "total_return_pct": 243.5524,
+        "max_drawdown_pct": 15.4625,
+        "sharpe": 3.941,
+        "trades": 1218,
+        "win_rate_pct": 75.2053
+      }
+    },
+    {
+      "id": 177,
+      "score": 252.53209999999999,
+      "params": {
+        "family": "TEMA_RSI",
+        "family_params": {
+          "fast_len": 6,
+          "slow_len": 100,
+          "rsi_len": 14,
+          "rsi_thr": 30,
+          "tp_pct_strat": 1.2,
+          "sl_pct_strat": 1.5,
+          "activation_pct": 0.5,
+          "trail_ticks": 200,
+          "mintick": 0.1,
+          "act_max": 2.0,
+          "act_step": 0.5,
+          "tr_tick_min": 200,
+          "tr_tick_max": 1200,
+          "tr_tick_step": 200,
+          "stake_pct": 95.0
+        },
+        "tp": 0.0,
+        "sl": 0.0,
+        "max_hold": 360
+      },
+      "metrics": {
+        "total_return_pct": 242.1646,
+        "max_drawdown_pct": 15.4625,
+        "sharpe": 3.929,
+        "trades": 1217,
+        "win_rate_pct": 75.1849
+      }
+    },
+    {
+      "id": 178,
+      "score": 251.44988,
+      "params": {
+        "family": "TEMA_RSI",
+        "family_params": {
+          "fast_len": 6,
+          "slow_len": 100,
+          "rsi_len": 14,
+          "rsi_thr": 30,
+          "tp_pct_strat": 1.2,
+          "sl_pct_strat": 1.5,
+          "activation_pct": 0.5,
+          "trail_ticks": 200,
+          "mintick": 0.1,
+          "act_max": 2.0,
+          "act_step": 0.5,
+          "tr_tick_min": 200,
+          "tr_tick_max": 1200,
+          "tr_tick_step": 200,
+          "stake_pct": 95.0
+        },
+        "tp": 0.0,
+        "sl": 0.0,
+        "max_hold": 240
+      },
+      "metrics": {
+        "total_return_pct": 241.2728,
+        "max_drawdown_pct": 15.7107,
+        "sharpe": 3.9207,
+        "trades": 1220,
+        "win_rate_pct": 75.082
+      }
+    },
+    {
+      "id": 179,
+      "score": 244.85746,
+      "params": {
+        "family": "TEMA_RSI",
+        "family_params": {
+          "fast_len": 6,
+          "slow_len": 100,
+          "rsi_len": 14,
+          "rsi_thr": 30,
+          "tp_pct_strat": 1.2,
+          "sl_pct_strat": 1.5,
+          "activation_pct": 0.5,
+          "trail_ticks": 200,
+          "mintick": 0.1,
+          "act_max": 2.0,
+          "act_step": 0.5,
+          "tr_tick_min": 200,
+          "tr_tick_max": 1200,
+          "tr_tick_step": 200,
+          "stake_pct": 95.0
+        },
+        "tp": 0.0,
+        "sl": 0.0,
+        "max_hold": 120
+      },
+      "metrics": {
+        "total_return_pct": 234.7199,
+        "max_drawdown_pct": 15.2449,
+        "sharpe": 3.8569,
+        "trades": 1251,
+        "win_rate_pct": 74.0208
+      }
+    },
+    {
+      "id": 180,
+      "score": 240.34938,
+      "params": {
+        "family": "TEMA_RSI",
+        "family_params": {
+          "fast_len": 6,
+          "slow_len": 100,
+          "rsi_len": 14,
+          "rsi_thr": 30,
+          "tp_pct_strat": 1.2,
+          "sl_pct_strat": 1.5,
+          "activation_pct": 0.5,
+          "trail_ticks": 200,
+          "mintick": 0.1,
+          "act_max": 2.0,
+          "act_step": 0.5,
+          "tr_tick_min": 200,
+          "tr_tick_max": 1200,
+          "tr_tick_step": 200,
+          "stake_pct": 95.0
+        },
+        "tp": 0.0,
+        "sl": 0.0,
+        "max_hold": 180
+      },
+      "metrics": {
+        "total_return_pct": 230.5608,
+        "max_drawdown_pct": 15.5407,
+        "sharpe": 3.8226,
+        "trades": 1223,
+        "win_rate_pct": 74.7343
+      }
+    },
+    {
+      "id": 181,
+      "score": 229.40839999999997,
+      "params": {
+        "family": "TEMA_RSI",
+        "family_params": {
+          "fast_len": 5,
+          "slow_len": 200,
+          "rsi_len": 14,
+          "rsi_thr": 25,
+          "tp_pct_strat": 1.2,
+          "sl_pct_strat": 1.5,
+          "activation_pct": 0.5,
+          "trail_ticks": 400,
+          "mintick": 0.1,
+          "act_max": 2.0,
+          "act_step": 0.5,
+          "tr_tick_min": 200,
+          "tr_tick_max": 1200,
+          "tr_tick_step": 200,
+          "stake_pct": 95.0
+        },
+        "tp": 0.0,
+        "sl": 0.0,
+        "max_hold": 180
+      },
+      "metrics": {
+        "total_return_pct": 217.3395,
+        "max_drawdown_pct": 11.326,
+        "sharpe": 3.7729,
+        "trades": 1187,
+        "win_rate_pct": 75.1474
+      }
+    },
+    {
+      "id": 183,
+      "score": 222.702,
+      "params": {
+        "family": "TEMA_RSI",
+        "family_params": {
+          "fast_len": 6,
+          "slow_len": 200,
+          "rsi_len": 14,
+          "rsi_thr": 40,
+          "tp_pct_strat": 1.5,
+          "sl_pct_strat": 1.5,
+          "activation_pct": 0.5,
+          "trail_ticks": 400,
+          "mintick": 0.1,
+          "act_max": 2.0,
+          "act_step": 0.5,
+          "tr_tick_min": 200,
+          "tr_tick_max": 1200,
+          "tr_tick_step": 200,
+          "stake_pct": 95.0
+        },
+        "tp": 0.0,
+        "sl": 0.0,
+        "max_hold": 420
+      },
+      "metrics": {
+        "total_return_pct": 212.0736,
+        "max_drawdown_pct": 13.0335,
+        "sharpe": 3.6897,
+        "trades": 1205,
+        "win_rate_pct": 75.4357
+      }
+    },
+    {
+      "id": 184,
+      "score": 222.702,
+      "params": {
+        "family": "TEMA_RSI",
+        "family_params": {
+          "fast_len": 6,
+          "slow_len": 200,
+          "rsi_len": 14,
+          "rsi_thr": 40,
+          "tp_pct_strat": 1.5,
+          "sl_pct_strat": 1.5,
+          "activation_pct": 0.5,
+          "trail_ticks": 400,
+          "mintick": 0.1,
+          "act_max": 2.0,
+          "act_step": 0.5,
+          "tr_tick_min": 200,
+          "tr_tick_max": 1200,
+          "tr_tick_step": 200,
+          "stake_pct": 95.0
+        },
+        "tp": 0.0,
+        "sl": 0.0,
+        "max_hold": 480
+      },
+      "metrics": {
+        "total_return_pct": 212.0736,
+        "max_drawdown_pct": 13.0335,
+        "sharpe": 3.6897,
+        "trades": 1205,
+        "win_rate_pct": 75.4357
+      }
+    },
+    {
+      "id": 186,
+      "score": 222.702,
+      "params": {
+        "family": "TEMA_RSI",
+        "family_params": {
+          "fast_len": 6,
+          "slow_len": 200,
+          "rsi_len": 14,
+          "rsi_thr": 40,
+          "tp_pct_strat": 1.5,
+          "sl_pct_strat": 1.5,
+          "activation_pct": 0.5,
+          "trail_ticks": 400,
+          "mintick": 0.1,
+          "act_max": 2.0,
+          "act_step": 0.5,
+          "tr_tick_min": 200,
+          "tr_tick_max": 1200,
+          "tr_tick_step": 200,
+          "stake_pct": 95.0
+        },
+        "tp": 0.0,
+        "sl": 0.0,
+        "max_hold": 540
+      },
+      "metrics": {
+        "total_return_pct": 212.0736,
+        "max_drawdown_pct": 13.0335,
+        "sharpe": 3.6897,
+        "trades": 1205,
+        "win_rate_pct": 75.4357
+      }
+    },
+    {
+      "id": 188,
+      "score": 222.702,
+      "params": {
+        "family": "TEMA_RSI",
+        "family_params": {
+          "fast_len": 6,
+          "slow_len": 200,
+          "rsi_len": 14,
+          "rsi_thr": 40,
+          "tp_pct_strat": 1.5,
+          "sl_pct_strat": 1.5,
+          "activation_pct": 0.5,
+          "trail_ticks": 400,
+          "mintick": 0.1,
+          "act_max": 2.0,
+          "act_step": 0.5,
+          "tr_tick_min": 200,
+          "tr_tick_max": 1200,
+          "tr_tick_step": 200,
+          "stake_pct": 95.0
+        },
+        "tp": 0.0,
+        "sl": 0.0,
+        "max_hold": 600
+      },
+      "metrics": {
+        "total_return_pct": 212.0736,
+        "max_drawdown_pct": 13.0335,
+        "sharpe": 3.6897,
+        "trades": 1205,
+        "win_rate_pct": 75.4357
+      }
+    },
+    {
+      "id": 190,
+      "score": 222.702,
+      "params": {
+        "family": "TEMA_RSI",
+        "family_params": {
+          "fast_len": 6,
+          "slow_len": 200,
+          "rsi_len": 14,
+          "rsi_thr": 40,
+          "tp_pct_strat": 1.5,
+          "sl_pct_strat": 1.5,
+          "activation_pct": 0.5,
+          "trail_ticks": 400,
+          "mintick": 0.1,
+          "act_max": 2.0,
+          "act_step": 0.5,
+          "tr_tick_min": 200,
+          "tr_tick_max": 1200,
+          "tr_tick_step": 200,
+          "stake_pct": 95.0
+        },
+        "tp": 0.0,
+        "sl": 0.0,
+        "max_hold": 660
+      },
+      "metrics": {
+        "total_return_pct": 212.0736,
+        "max_drawdown_pct": 13.0335,
+        "sharpe": 3.6897,
+        "trades": 1205,
+        "win_rate_pct": 75.4357
+      }
+    },
+    {
+      "id": 192,
+      "score": 222.702,
+      "params": {
+        "family": "TEMA_RSI",
+        "family_params": {
+          "fast_len": 6,
+          "slow_len": 200,
+          "rsi_len": 14,
+          "rsi_thr": 40,
+          "tp_pct_strat": 1.5,
+          "sl_pct_strat": 1.5,
+          "activation_pct": 0.5,
+          "trail_ticks": 400,
+          "mintick": 0.1,
+          "act_max": 2.0,
+          "act_step": 0.5,
+          "tr_tick_min": 200,
+          "tr_tick_max": 1200,
+          "tr_tick_step": 200,
+          "stake_pct": 95.0
+        },
+        "tp": 0.0,
+        "sl": 0.0,
+        "max_hold": 720
+      },
+      "metrics": {
+        "total_return_pct": 212.0736,
+        "max_drawdown_pct": 13.0335,
+        "sharpe": 3.6897,
+        "trades": 1205,
+        "win_rate_pct": 75.4357
+      }
+    },
+    {
+      "id": 193,
+      "score": 222.434,
+      "params": {
+        "family": "TEMA_RSI",
+        "family_params": {
+          "fast_len": 6,
+          "slow_len": 200,
+          "rsi_len": 14,
+          "rsi_thr": 40,
+          "tp_pct_strat": 1.5,
+          "sl_pct_strat": 1.5,
+          "activation_pct": 0.5,
+          "trail_ticks": 400,
+          "mintick": 0.1,
+          "act_max": 2.0,
+          "act_step": 0.5,
+          "tr_tick_min": 200,
+          "tr_tick_max": 1200,
+          "tr_tick_step": 200,
+          "stake_pct": 95.0
+        },
+        "tp": 0.0,
+        "sl": 0.0,
+        "max_hold": 300
+      },
+      "metrics": {
+        "total_return_pct": 211.8226,
+        "max_drawdown_pct": 13.0335,
+        "sharpe": 3.6863,
+        "trades": 1207,
+        "win_rate_pct": 75.3935
+      }
+    },
+    {
+      "id": 195,
+      "score": 221.03109999999998,
+      "params": {
+        "family": "TEMA_RSI",
+        "family_params": {
+          "fast_len": 5,
+          "slow_len": 200,
+          "rsi_len": 14,
+          "rsi_thr": 25,
+          "tp_pct_strat": 1.2,
+          "sl_pct_strat": 1.5,
+          "activation_pct": 0.5,
+          "trail_ticks": 400,
+          "mintick": 0.1,
+          "act_max": 2.0,
+          "act_step": 0.5,
+          "tr_tick_min": 200,
+          "tr_tick_max": 1200,
+          "tr_tick_step": 200,
+          "stake_pct": 95.0
+        },
+        "tp": 0.0,
+        "sl": 0.0,
+        "max_hold": 240
+      },
+      "metrics": {
+        "total_return_pct": 209.1874,
+        "max_drawdown_pct": 11.068,
+        "sharpe": 3.6969,
+        "trades": 1174,
+        "win_rate_pct": 75.2129
+      }
+    },
+    {
+      "id": 196,
+      "score": 221.0112,
+      "params": {
+        "family": "TEMA_RSI",
+        "family_params": {
+          "fast_len": 6,
+          "slow_len": 200,
+          "rsi_len": 14,
+          "rsi_thr": 40,
+          "tp_pct_strat": 1.5,
+          "sl_pct_strat": 1.5,
+          "activation_pct": 0.5,
+          "trail_ticks": 400,
+          "mintick": 0.1,
+          "act_max": 2.0,
+          "act_step": 0.5,
+          "tr_tick_min": 200,
+          "tr_tick_max": 1200,
+          "tr_tick_step": 200,
+          "stake_pct": 95.0
+        },
+        "tp": 0.0,
+        "sl": 0.0,
+        "max_hold": 360
+      },
+      "metrics": {
+        "total_return_pct": 210.4648,
+        "max_drawdown_pct": 13.0335,
+        "sharpe": 3.6733,
+        "trades": 1206,
+        "win_rate_pct": 75.3731
+      }
+    },
+    {
+      "id": 197,
+      "score": 219.50672,
+      "params": {
+        "family": "TEMA_RSI",
+        "family_params": {
+          "fast_len": 5,
+          "slow_len": 200,
+          "rsi_len": 14,
+          "rsi_thr": 25,
+          "tp_pct_strat": 1.2,
+          "sl_pct_strat": 1.5,
+          "activation_pct": 0.5,
+          "trail_ticks": 400,
+          "mintick": 0.1,
+          "act_max": 2.0,
+          "act_step": 0.5,
+          "tr_tick_min": 200,
+          "tr_tick_max": 1200,
+          "tr_tick_step": 200,
+          "stake_pct": 95.0
+        },
+        "tp": 0.0,
+        "sl": 0.0,
+        "max_hold": 120
+      },
+      "metrics": {
+        "total_return_pct": 208.1345,
+        "max_drawdown_pct": 11.7413,
+        "sharpe": 3.6834,
+        "trades": 1207,
+        "win_rate_pct": 74.1508
+      }
+    },
+    {
+      "id": 198,
+      "score": 219.49428,
+      "params": {
+        "family": "TEMA_RSI",
+        "family_params": {
+          "fast_len": 6,
+          "slow_len": 200,
+          "rsi_len": 14,
+          "rsi_thr": 40,
+          "tp_pct_strat": 1.5,
+          "sl_pct_strat": 1.5,
+          "activation_pct": 0.5,
+          "trail_ticks": 400,
+          "mintick": 0.1,
+          "act_max": 2.0,
+          "act_step": 0.5,
+          "tr_tick_min": 200,
+          "tr_tick_max": 1200,
+          "tr_tick_step": 200,
+          "stake_pct": 95.0
+        },
+        "tp": 0.0,
+        "sl": 0.0,
+        "max_hold": 240
+      },
+      "metrics": {
+        "total_return_pct": 209.2023,
+        "max_drawdown_pct": 13.3492,
+        "sharpe": 3.6603,
+        "trades": 1210,
+        "win_rate_pct": 75.2066
+      }
+    },
+    {
+      "id": 199,
+      "score": 218.69129999999998,
+      "params": {
+        "family": "TEMA_RSI",
+        "family_params": {
+          "fast_len": 5,
+          "slow_len": 200,
+          "rsi_len": 14,
+          "rsi_thr": 25,
+          "tp_pct_strat": 1.2,
+          "sl_pct_strat": 1.5,
+          "activation_pct": 0.5,
+          "trail_ticks": 400,
+          "mintick": 0.1,
+          "act_max": 2.0,
+          "act_step": 0.5,
+          "tr_tick_min": 200,
+          "tr_tick_max": 1200,
+          "tr_tick_step": 200,
+          "stake_pct": 95.0
+        },
+        "tp": 0.0,
+        "sl": 0.0,
+        "max_hold": 420
+      },
+      "metrics": {
+        "total_return_pct": 206.9751,
+        "max_drawdown_pct": 11.068,
+        "sharpe": 3.6714,
+        "trades": 1169,
+        "win_rate_pct": 75.3636
+      }
+    },
+    {
+      "id": 200,
+      "score": 218.69129999999998,
+      "params": {
+        "family": "TEMA_RSI",
+        "family_params": {
+          "fast_len": 5,
+          "slow_len": 200,
+          "rsi_len": 14,
+          "rsi_thr": 25,
+          "tp_pct_strat": 1.2,
+          "sl_pct_strat": 1.5,
+          "activation_pct": 0.5,
+          "trail_ticks": 400,
+          "mintick": 0.1,
+          "act_max": 2.0,
+          "act_step": 0.5,
+          "tr_tick_min": 200,
+          "tr_tick_max": 1200,
+          "tr_tick_step": 200,
+          "stake_pct": 95.0
+        },
+        "tp": 0.0,
+        "sl": 0.0,
+        "max_hold": 480
+      },
+      "metrics": {
+        "total_return_pct": 206.9751,
+        "max_drawdown_pct": 11.068,
+        "sharpe": 3.6714,
+        "trades": 1169,
+        "win_rate_pct": 75.3636
+      }
+    },
+    {
+      "id": 201,
+      "score": 218.69129999999998,
+      "params": {
+        "family": "TEMA_RSI",
+        "family_params": {
+          "fast_len": 5,
+          "slow_len": 200,
+          "rsi_len": 14,
+          "rsi_thr": 25,
+          "tp_pct_strat": 1.2,
+          "sl_pct_strat": 1.5,
+          "activation_pct": 0.5,
+          "trail_ticks": 400,
+          "mintick": 0.1,
+          "act_max": 2.0,
+          "act_step": 0.5,
+          "tr_tick_min": 200,
+          "tr_tick_max": 1200,
+          "tr_tick_step": 200,
+          "stake_pct": 95.0
+        },
+        "tp": 0.0,
+        "sl": 0.0,
+        "max_hold": 540
+      },
+      "metrics": {
+        "total_return_pct": 206.9751,
+        "max_drawdown_pct": 11.068,
+        "sharpe": 3.6714,
+        "trades": 1169,
+        "win_rate_pct": 75.3636
+      }
+    },
+    {
+      "id": 202,
+      "score": 218.69129999999998,
+      "params": {
+        "family": "TEMA_RSI",
+        "family_params": {
+          "fast_len": 5,
+          "slow_len": 200,
+          "rsi_len": 14,
+          "rsi_thr": 25,
+          "tp_pct_strat": 1.2,
+          "sl_pct_strat": 1.5,
+          "activation_pct": 0.5,
+          "trail_ticks": 400,
+          "mintick": 0.1,
+          "act_max": 2.0,
+          "act_step": 0.5,
+          "tr_tick_min": 200,
+          "tr_tick_max": 1200,
+          "tr_tick_step": 200,
+          "stake_pct": 95.0
+        },
+        "tp": 0.0,
+        "sl": 0.0,
+        "max_hold": 600
+      },
+      "metrics": {
+        "total_return_pct": 206.9751,
+        "max_drawdown_pct": 11.068,
+        "sharpe": 3.6714,
+        "trades": 1169,
+        "win_rate_pct": 75.3636
+      }
+    },
+    {
+      "id": 203,
+      "score": 218.69129999999998,
+      "params": {
+        "family": "TEMA_RSI",
+        "family_params": {
+          "fast_len": 5,
+          "slow_len": 200,
+          "rsi_len": 14,
+          "rsi_thr": 25,
+          "tp_pct_strat": 1.2,
+          "sl_pct_strat": 1.5,
+          "activation_pct": 0.5,
+          "trail_ticks": 400,
+          "mintick": 0.1,
+          "act_max": 2.0,
+          "act_step": 0.5,
+          "tr_tick_min": 200,
+          "tr_tick_max": 1200,
+          "tr_tick_step": 200,
+          "stake_pct": 95.0
+        },
+        "tp": 0.0,
+        "sl": 0.0,
+        "max_hold": 660
+      },
+      "metrics": {
+        "total_return_pct": 206.9751,
+        "max_drawdown_pct": 11.068,
+        "sharpe": 3.6714,
+        "trades": 1169,
+        "win_rate_pct": 75.3636
+      }
+    },
+    {
+      "id": 204,
+      "score": 218.69129999999998,
+      "params": {
+        "family": "TEMA_RSI",
+        "family_params": {
+          "fast_len": 5,
+          "slow_len": 200,
+          "rsi_len": 14,
+          "rsi_thr": 25,
+          "tp_pct_strat": 1.2,
+          "sl_pct_strat": 1.5,
+          "activation_pct": 0.5,
+          "trail_ticks": 400,
+          "mintick": 0.1,
+          "act_max": 2.0,
+          "act_step": 0.5,
+          "tr_tick_min": 200,
+          "tr_tick_max": 1200,
+          "tr_tick_step": 200,
+          "stake_pct": 95.0
+        },
+        "tp": 0.0,
+        "sl": 0.0,
+        "max_hold": 720
+      },
+      "metrics": {
+        "total_return_pct": 206.9751,
+        "max_drawdown_pct": 11.068,
+        "sharpe": 3.6714,
+        "trades": 1169,
+        "win_rate_pct": 75.3636
+      }
+    }
+  ]
+}
