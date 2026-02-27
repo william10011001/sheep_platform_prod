@@ -2,3 +2,7 @@
 # SQLite temp files
 *.db-shm
 *.db-wal
+
+# runtime storage
+app/data/storage/
+
