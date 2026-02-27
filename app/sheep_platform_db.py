@@ -6,6 +6,9 @@ import time
 import math
 import html
 import base64
+import atexit
+import socket
+from urllib.parse import urlparse, urlunparse
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -38,8 +41,109 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _in_docker() -> bool:
+    # 目的：判斷目前程式是否在 docker/container 裡，避免把 compose 專用的 host 規則套到本機直跑
+    try:
+        if os.path.exists("/.dockerenv"):
+            return True
+    except Exception:
+        pass
+    try:
+        with open("/proc/1/cgroup", "rt", encoding="utf-8", errors="ignore") as f:
+            cg = f.read()
+        cg_l = cg.lower()
+        if ("docker" in cg_l) or ("kubepods" in cg_l) or ("containerd" in cg_l):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _mask_dsn(dsn: str) -> str:
+    # 只遮密碼，不遮 user/host/dbname，避免你 debug 只看到一團黑
+    try:
+        u = urlparse(str(dsn or ""))
+        if u.password:
+            return str(dsn).replace(u.password, "***")
+    except Exception:
+        pass
+    try:
+        return re.sub(r"://([^:]+):([^@]+)@", r"://\1:***@", str(dsn))
+    except Exception:
+        return str(dsn)
+
+
+def _rewrite_pg_host(dsn: str, new_host: str) -> str:
+    # 將 postgresql://user:pass@HOST:PORT/db 的 HOST 改成 new_host
+    try:
+        u = urlparse(str(dsn or ""))
+        if not u.scheme or not u.netloc:
+            return str(dsn)
+
+        netloc = str(u.netloc)
+        userinfo = ""
+        hostport = netloc
+
+        if "@" in hostport:
+            userinfo, hostport = hostport.rsplit("@", 1)
+
+        host = hostport
+        port = ""
+
+        if hostport.startswith("["):
+            m = re.match(r"^\[(?P<h>.+)\](?::(?P<p>\d+))?$", hostport)
+            if m:
+                host = str(m.group("h") or "")
+                port = str(m.group("p") or "")
+        else:
+            if ":" in hostport:
+                host, port = hostport.split(":", 1)
+
+        # IPv6 host 需要加 []
+        nh = str(new_host or "").strip()
+        if ":" in nh and not nh.startswith("["):
+            nh2 = f"[{nh}]"
+        else:
+            nh2 = nh
+
+        new_hostport = f"{nh2}:{port}" if port else nh2
+        new_netloc = f"{userinfo}@{new_hostport}" if userinfo else new_hostport
+
+        u2 = u._replace(netloc=new_netloc)
+        return urlunparse(u2)
+    except Exception:
+        return str(dsn)
+
+
 def _db_url() -> str:
-    return str(os.environ.get("SHEEP_DB_URL", "") or "").strip()
+    # 主來源：SHEEP_DB_URL（你原本就用這個）:contentReference[oaicite:3]{index=3}
+    u = str(os.environ.get("SHEEP_DB_URL", "") or "").strip()
+
+    # 次要來源：DATABASE_URL（很多 PaaS 預設用這個）
+    if not u:
+        u = str(os.environ.get("DATABASE_URL", "") or "").strip()
+
+    if not u:
+        return ""
+
+    low = u.lower()
+    if low.startswith("postgresql://") or low.startswith("postgres://"):
+        # 允許顯式 override host：適用「本機直跑 UI、DB 在另一台/或已 publish port」等情境
+        override = str(os.environ.get("SHEEP_PG_HOST", "") or os.environ.get("PGHOST", "") or "").strip()
+
+        # 若你不在 docker/container 裡，還寫 host=db，那幾乎一定炸；直接幫你改成 127.0.0.1（可再被 override 覆蓋）
+        try:
+            host = str(urlparse(u).hostname or "")
+        except Exception:
+            host = ""
+
+        if override:
+            u = _rewrite_pg_host(u, override)
+        else:
+            if host == "db" and (not _in_docker()):
+                u = _rewrite_pg_host(u, "127.0.0.1")
+
+    return u
 
 
 def _db_kind() -> str:
@@ -180,28 +284,113 @@ _PG_POOL = None
 _PG_POOL_LOCK = threading.Lock()
 
 
+def _close_pg_pool() -> None:
+    global _PG_POOL
+    p = _PG_POOL
+    if p is None:
+        return
+    try:
+        p.closeall()
+    except Exception:
+        pass
+    _PG_POOL = None
+
+
+try:
+    atexit.register(_close_pg_pool)
+except Exception:
+    pass
+
+
 def _pg_pool():
     global _PG_POOL
     if _PG_POOL is not None:
         return _PG_POOL
+
     with _PG_POOL_LOCK:
         if _PG_POOL is not None:
             return _PG_POOL
-        url = _db_url()
-        if not url:
+
+        url0 = _db_url()
+        if not url0:
             raise RuntimeError("SHEEP_DB_URL is empty but postgres backend requested")
+
         maxconn = 30
         try:
             maxconn = int(os.environ.get("SHEEP_PG_MAXCONN", "30") or "30")
         except Exception:
             maxconn = 30
         maxconn = max(5, min(200, int(maxconn)))
-        _PG_POOL = psycopg2.pool.ThreadedConnectionPool(
-            minconn=1,
-            maxconn=maxconn,
-            dsn=url,
-        )
-        return _PG_POOL
+
+        # 建立候選 DSN（同一個密碼、同一個 DB，只改 host）
+        candidates = []
+
+        # 先把「override 後的 DSN」放最前面（_db_url 已處理 SHEEP_PG_HOST / 非 docker 時 host=db -> 127.0.0.1）
+        candidates.append(url0)
+
+        # 若仍然是 host=db，這代表：
+        # - 你真的在 docker/compose 裡（通常 OK）
+        # - 或你單獨跑 container / 本機跑但 override 沒設（通常會炸）
+        try:
+            p0 = urlparse(url0)
+            host0 = str(p0.hostname or "")
+        except Exception:
+            host0 = ""
+
+        # 額外 fallback：在 docker 內但解析不到 db，最常見就是你根本沒進 compose network
+        if host0 == "db":
+            if _in_docker():
+                for h in ("host.docker.internal", "localhost"):
+                    u1 = _rewrite_pg_host(url0, h)
+                    if u1 not in candidates:
+                        candidates.append(u1)
+            else:
+                # 本機直跑：127.0.0.1/localhost 都試一下（前面可能已經是 127.0.0.1，這裡再補齊）
+                for h in ("127.0.0.1", "localhost"):
+                    u1 = _rewrite_pg_host(url0, h)
+                    if u1 not in candidates:
+                        candidates.append(u1)
+
+        last_err = None
+
+        for dsn in candidates:
+            try:
+                # 先測 DNS（可讀性比 psycopg2 的報錯好很多）
+                try:
+                    hh = str(urlparse(dsn).hostname or "")
+                    if hh:
+                        socket.getaddrinfo(hh, None)
+                except Exception:
+                    pass
+
+                _PG_POOL = psycopg2.pool.ThreadedConnectionPool(
+                    minconn=1,
+                    maxconn=maxconn,
+                    dsn=dsn,
+                )
+                return _PG_POOL
+
+            except Exception as e:
+                last_err = e
+                _PG_POOL = None
+                continue
+
+        # 全部候選都失敗：把「你需要的根因」完整印出來（但不洩漏密碼）
+        try:
+            import traceback as _tb
+            tried = [_mask_dsn(x) for x in candidates]
+            print("[DB FATAL] Postgres connection pool init failed.", file=_sys.stderr, flush=True)
+            print(f"[DB FATAL] in_docker={_in_docker()} candidates={tried}", file=_sys.stderr, flush=True)
+            print(f"[DB FATAL] hint: if you are running outside docker-compose, do NOT use host=db; set SHEEP_PG_HOST=localhost and publish 5432 if needed.", file=_sys.stderr, flush=True)
+            print(_tb.format_exc(), file=_sys.stderr, flush=True)
+        except Exception:
+            pass
+
+        raise RuntimeError(
+            "Postgres 連線失敗：目前 DSN host 無法解析或無法連線。"
+            "若你用 docker compose，請確認服務都在同一個 compose network（service 名稱 db 才會解析）。"
+            "若你本機直跑 streamlit，請把 SHEEP_DB_URL 的 host 改成 localhost/127.0.0.1，或設定 SHEEP_PG_HOST=localhost。"
+        ) from last_err
 
 
 def _release_conn(kind: str, raw) -> None:

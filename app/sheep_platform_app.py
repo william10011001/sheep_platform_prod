@@ -8391,9 +8391,6 @@ def main() -> None:
                 unsafe_allow_html=True,
             )
             st.markdown(
-                "<div id='sheepPerfHud'><div class='t'>PERF</div><div class='r'>"
-                + "<br>".join([html.escape(x) for x in hud_items])
-                + "</div></div>",
                 unsafe_allow_html=True,
             )
     except Exception:

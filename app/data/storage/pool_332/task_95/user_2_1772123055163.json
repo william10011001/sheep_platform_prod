@@ -1,0 +1,26 @@
+{
+  "task_info": {
+    "id": 95,
+    "user_id": 2,
+    "pool_id": 332,
+    "cycle_id": 1,
+    "partition_idx": 7,
+    "num_partitions": 8,
+    "status": "queued",
+    "progress_json": "{\"phase\": \"queued\", \"phase_msg\": \"等待排程分配...\", \"updated_at\": \"2026-02-26T16:24:02.930010+00:00\", \"queue_pos\": 1, \"queue_total\": 1, \"combos_total\": 768, \"combos_done\": 720, \"best_score\": null, \"best_candidate_id\": null, \"best_any_score\": -160.52087999999998, \"best_any_metrics\": {\"total_return_pct\": -94.8008, \"max_drawdown_pct\": 97.3118, \"sharpe\": -1.4666, \"trades\": 9660, \"win_rate_pct\": 26.1801}, \"best_any_params\": {\"family\": \"CMF_Threshold\", \"family_params\": {\"period\": 30, \"enter_thr\": 0.0}, \"tp\": 0.012, \"sl\": 0.004, \"max_hold\": 210}, \"best_any_passed\": false, \"best_pass\": [], \"phase_progress\": 0.0, \"last_error\": null, \"elapsed_s\": 30.413, \"speed_cps\": 23.67384, \"eta_s\": 2.028}",
+    "last_heartbeat": "2026-02-26T16:24:02.930659+00:00",
+    "created_at": "2026-02-26T16:20:27.141254+00:00",
+    "updated_at": "2026-02-26T16:24:02.930653+00:00",
+    "family": "CMF_Threshold",
+    "symbol": "ETH_USDT",
+    "timeframe_min": 15,
+    "years": 1,
+    "grid_spec_json": "{\"p_min\": 10, \"p_max\": 30, \"p_step\": 5, \"thr_min\": 0.0, \"thr_max\": 0.15, \"thr_step\": 0.05}",
+    "risk_spec_json": "{\"tp_min\": 0.3, \"tp_max\": 1.2, \"tp_step\": 0.3, \"sl_min\": 0.4, \"sl_max\": 1.6, \"sl_step\": 0.4, \"max_hold_min\": 30, \"max_hold_max\": 720, \"max_hold_step\": 30, \"fee_side\": 0.0002, \"slippage\": 0.0, \"worst_case\": true, \"reverse_mode\": false}",
+    "seed": 1790723358,
+    "pool_name": "CMF_Threshold | BTC_USDT | 1m [ETH_USDT_15m]"
+  },
+  "timestamp": "2026-02-26T16:24:15.162483+00:00",
+  "best_pass_count": 0,
+  "candidates": []
+}
