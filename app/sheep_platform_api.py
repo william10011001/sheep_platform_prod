@@ -23,6 +23,29 @@ from sheep_platform_version import semver_gte
 if hasattr(db, "init_db"):
     db.init_db()
 
+# [極致修復] 自動對齊 Compute 算力節點的系統帳號與權限
+try:
+    _c_user = os.environ.get("SHEEP_COMPUTE_USER", "sheep").strip()
+    _c_pass = os.environ.get("SHEEP_COMPUTE_PASS", "").strip()
+    if _c_user and _c_pass:
+        from sheep_platform_security import hash_password, normalize_username
+        _c_norm = normalize_username(_c_user)
+        _u = db.get_user_by_username(_c_user)
+        _pw_hashed = hash_password(_c_pass)
+        _pw_str = _pw_hashed.decode('utf-8') if isinstance(_pw_hashed, bytes) else str(_pw_hashed)
+        if not _u:
+            db.create_user(_c_user, _pw_str, role="admin")
+        else:
+            _conn = db._conn()
+            try:
+                # 霸道覆寫密碼，確保與 .env 絕對一致，並強制解鎖、給予 admin 權限
+                _conn.execute("UPDATE users SET password_hash = ?, role = 'admin', run_enabled = 1, disabled = 0 WHERE username_norm = ?", (_pw_str, _c_norm))
+                _conn.commit()
+            finally:
+                _conn.close()
+except Exception as e:
+    print(f"[BOOT WARN] Auto-provision compute user failed: {e}")
+
 API_ROOT_PATH = os.environ.get("SHEEP_API_ROOT_PATH", "").strip()
 
 app = FastAPI(title="sheep-platform-api", root_path=API_ROOT_PATH)
