@@ -43,8 +43,20 @@ def _now_iso() -> str:
 
 def _in_docker() -> bool:
     # 目的：判斷目前程式是否在 docker/container 裡，避免把 compose 專用的 host 規則套到本機直跑
+    # [專家級修復] 增加環境變數與 DNS 解析的啟發式判斷，防止較新版本的 container 引擎沒有 /.dockerenv
     try:
         if os.path.exists("/.dockerenv"):
+            return True
+    except Exception:
+        pass
+    try:
+        import socket
+        socket.gethostbyname("db")
+        return True
+    except Exception:
+        pass
+    try:
+        if os.environ.get("SHEEP_DB_URL", "").find("@db:") != -1:
             return True
     except Exception:
         pass
@@ -324,32 +336,36 @@ def _pg_pool():
 
         # 建立候選 DSN（同一個密碼、同一個 DB，只改 host）
         candidates = []
+        detailed_errors = [] # 儲存每個連線的詳細錯誤以便除錯
 
-        # 先把「override 後的 DSN」放最前面（_db_url 已處理 SHEEP_PG_HOST / 非 docker 時 host=db -> 127.0.0.1）
-        candidates.append(url0)
+        # [專家級修復] 強制保留原始環境變數 DSN 作為第一優先。
+        # 避免 _in_docker() 誤判導致 "db" 被強制替換為 "127.0.0.1"，造成 Docker 內無法連線。
+        raw_url = str(os.environ.get("SHEEP_DB_URL", "")).strip()
+        if raw_url and raw_url not in candidates:
+            candidates.append(raw_url)
 
-        # 若仍然是 host=db，這代表：
-        # - 你真的在 docker/compose 裡（通常 OK）
-        # - 或你單獨跑 container / 本機跑但 override 沒設（通常會炸）
+        # 再加入經過 _db_url 處理的 DSN
+        if url0 and url0 not in candidates:
+            candidates.append(url0)
+
+        # 解析目前首選的 host
         try:
-            p0 = urlparse(url0)
+            p0 = urlparse(candidates[0])
             host0 = str(p0.hostname or "")
         except Exception:
             host0 = ""
 
-        # 額外 fallback：在 docker 內但解析不到 db，最常見就是你根本沒進 compose network
+        # 擴充 fallback 清單，保證所有可能性都被涵蓋
         if host0 == "db":
-            if _in_docker():
-                for h in ("host.docker.internal", "localhost"):
-                    u1 = _rewrite_pg_host(url0, h)
-                    if u1 not in candidates:
-                        candidates.append(u1)
-            else:
-                # 本機直跑：127.0.0.1/localhost 都試一下（前面可能已經是 127.0.0.1，這裡再補齊）
-                for h in ("127.0.0.1", "localhost"):
-                    u1 = _rewrite_pg_host(url0, h)
-                    if u1 not in candidates:
-                        candidates.append(u1)
+            for h in ("db", "127.0.0.1", "localhost", "host.docker.internal"):
+                u1 = _rewrite_pg_host(candidates[0], h)
+                if u1 not in candidates:
+                    candidates.append(u1)
+        else:
+            for h in ("127.0.0.1", "localhost"):
+                u1 = _rewrite_pg_host(candidates[0], h)
+                if u1 not in candidates:
+                    candidates.append(u1)
 
         last_err = None
 
@@ -372,24 +388,29 @@ def _pg_pool():
 
             except Exception as e:
                 last_err = e
+                masked = _mask_dsn(dsn)
+                detailed_errors.append(f"嘗試連線 {masked} 失敗: {e}")
                 _PG_POOL = None
                 continue
 
-        # 全部候選都失敗：把「你需要的根因」完整印出來（但不洩漏密碼）
+        # 全部候選都失敗：把「你需要的根因」與所有嘗試過程完整印出來（但不洩漏密碼）
+        error_details_str = "\n".join([f"  - {err}" for err in detailed_errors])
         try:
             import traceback as _tb
             tried = [_mask_dsn(x) for x in candidates]
             print("[DB FATAL] Postgres connection pool init failed.", file=_sys.stderr, flush=True)
-            print(f"[DB FATAL] in_docker={_in_docker()} candidates={tried}", file=_sys.stderr, flush=True)
+            print(f"[DB FATAL] in_docker={_in_docker()}", file=_sys.stderr, flush=True)
+            print(f"[DB FATAL] 嘗試連線歷程:\n{error_details_str}", file=_sys.stderr, flush=True)
             print(f"[DB FATAL] hint: if you are running outside docker-compose, do NOT use host=db; set SHEEP_PG_HOST=localhost and publish 5432 if needed.", file=_sys.stderr, flush=True)
-            print(_tb.format_exc(), file=_sys.stderr, flush=True)
         except Exception:
             pass
 
         raise RuntimeError(
-            "Postgres 連線失敗：目前 DSN host 無法解析或無法連線。"
-            "若你用 docker compose，請確認服務都在同一個 compose network（service 名稱 db 才會解析）。"
-            "若你本機直跑 streamlit，請把 SHEEP_DB_URL 的 host 改成 localhost/127.0.0.1，或設定 SHEEP_PG_HOST=localhost。"
+            "Postgres 連線失敗：目前 DSN host 無法解析或無法連線。\n\n"
+            f"以下是系統嘗試過的所有連線與對應失敗原因：\n{error_details_str}\n\n"
+            "【排解建議】\n"
+            "1. 若你使用 docker-compose，請確認 db 容器已成功啟動且 Healthcheck 通過。\n"
+            "2. 若你本機直接執行 Python，請把 SHEEP_DB_URL 的 host 改成 localhost/127.0.0.1，或設定 SHEEP_PG_HOST=localhost。"
         ) from last_err
 
 
