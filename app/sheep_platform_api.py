@@ -27,6 +27,14 @@ API_ROOT_PATH = os.environ.get("SHEEP_API_ROOT_PATH", "").strip()
 
 app = FastAPI(title="sheep-platform-api", root_path=API_ROOT_PATH)
 
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 支援前端與後端分離的跨網域請求 (掛載 Cloudflare 後安全性由 CDN 邊緣規則接管)
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # In-memory rate limiters (cheap + good enough for a single API instance)
 _token_limiter = RateLimiter(rate_per_minute=600.0, burst=120.0)
@@ -323,6 +331,11 @@ class TokenResponse(BaseModel):
     issued_at: str
     expires_at: str
 
+class WebRegisterIn(BaseModel):
+    username: str
+    password: str
+    tos_ok: bool
+
 
 class TaskOut(BaseModel):
     task_id: int
@@ -595,6 +608,77 @@ def issue_token(req: Request, body: TokenRequest):
         issued_at=str(token.get("issued_at")),
         expires_at=str(token.get("expires_at")),
     )
+
+@app.post("/api/auth/register")
+def web_register(req: Request, body: WebRegisterIn):
+    from sheep_platform_security import normalize_username, hash_password
+    uname = normalize_username(body.username)
+    if not uname or len(uname) > 64:
+        raise HTTPException(status_code=400, detail="invalid_username")
+    if not body.tos_ok:
+        raise HTTPException(status_code=400, detail="must_accept_tos")
+    if len(body.password) < 6:
+        raise HTTPException(status_code=400, detail="password_too_short")
+    
+    if db.get_user_by_username(uname):
+        raise HTTPException(status_code=400, detail="user_exists")
+        
+    try:
+        pw_hashed = hash_password(body.password)
+        pw_hash_str = pw_hashed.decode('utf-8') if isinstance(pw_hashed, bytes) else str(pw_hashed)
+        uid = db.create_user(username=uname, password_hash=pw_hash_str, role="user", wallet_address="", wallet_chain="TRC20")
+        db.write_audit_log(uid, "register", {"username": uname})
+    except Exception as e:
+        logger.error(f"Register error: {e}")
+        raise HTTPException(status_code=500, detail="register_failed")
+        
+    return {"ok": True, "user_id": uid}
+
+@app.get("/api/user/me")
+def web_get_me(request: Request, authorization: Optional[str] = Header(None)):
+    ctx = _auth_ctx(request, authorization)
+    user = ctx["user"]
+    fresh_user = db.get_user_by_id(int(user["id"]))
+    if not fresh_user:
+        raise HTTPException(status_code=401, detail="user_not_found")
+        
+    return {
+        "id": fresh_user["id"],
+        "username": fresh_user["username"],
+        "role": fresh_user.get("role", "user"),
+        "wallet_address": fresh_user.get("wallet_address", ""),
+        "wallet_chain": fresh_user.get("wallet_chain", "TRC20"),
+        "disabled": fresh_user.get("disabled", 0)
+    }
+
+@app.get("/api/leaderboard")
+def web_leaderboard(period_hours: int = 24):
+    try:
+        stats = db.get_leaderboard_stats(period_hours)
+        return {"ok": True, "data": stats}
+    except Exception as e:
+        logger.error(f"Leaderboard error: {e}")
+        raise HTTPException(status_code=500, detail="fetch_leaderboard_failed")
+
+@app.get("/api/dashboard")
+def web_dashboard(request: Request, authorization: Optional[str] = Header(None)):
+    ctx = _auth_ctx(request, authorization)
+    uid = int(ctx["user"]["id"])
+    cycle = db.get_active_cycle()
+    cycle_id = int(cycle["id"]) if cycle else 0
+    
+    tasks = db.list_tasks_for_user(uid, cycle_id=cycle_id)
+    strategies = db.list_strategies(user_id=uid, limit=200)
+    payouts = db.list_payouts(user_id=uid, limit=200)
+    
+    return {
+        "ok": True,
+        "cycle_id": cycle_id,
+        "tasks_count": len(tasks),
+        "strategies_active": len([s for s in strategies if s["status"] == "active"]),
+        "payouts_unpaid": len([p for p in payouts if p["status"] == "unpaid"]),
+        "recent_tasks": tasks[:10]
+    }
 
 
 @app.get("/flags")

@@ -57,31 +57,6 @@ services:
         limits:
           cpus: '1.5'          # 限制最多只能使用 1.5 個 CPU 核心
           memory: 2G           # 限制最多只能使用 2GB 記憶體
-  ui:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile.ui
-    environment:
-      SHEEP_DB_URL: postgresql://sheep:${POSTGRES_PASSWORD}@db:5432/sheep
-      SHEEP_BOOTSTRAP_ADMIN_USER: ${SHEEP_BOOTSTRAP_ADMIN_USER}
-      SHEEP_BOOTSTRAP_ADMIN_PASS: ${SHEEP_BOOTSTRAP_ADMIN_PASS}
-      SHEEP_CAPTCHA: "1"
-      SHEEP_CAPTCHA_MIN_S: "0.8"
-      SHEEP_ROLLOVER_CHECK_S: "30"
-      SHEEP_GIT_SHA: ${SHEEP_GIT_SHA}
-      SHEEP_RUN_SCHEDULER: "0"
-
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-    volumes:
-      - ${SHEEP_HOST_DATA_DIR:-../app/data}:/app/data
-    restart: always
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8501/app/_stcore/health"]
-      interval: 10s
-      timeout: 3s
-      retries: 20
 
   worker:
     build:
@@ -134,7 +109,6 @@ services:
       - certbot_www:/var/www/certbot
       - certbot_conf:/etc/letsencrypt
     depends_on:
-      - ui
       - api
     restart: always
 
