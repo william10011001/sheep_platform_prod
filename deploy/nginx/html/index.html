@@ -249,33 +249,52 @@
                                 </tr>
                             </thead>
                             <tbody>
-                                <tr v-for="t in completedTasks" :key="t.id" class="border-b border-white/5 hover:bg-white/5 transition-colors">
-                                    <td class="py-4 px-6 text-slate-400">#{{ t.id }}</td>
-                                    <td class="py-4 px-6 text-white font-medium">{{ getShortPoolName(t) }}</td>
-                                    <td class="py-4 px-6 text-right">
-                                        <span :class="getScoreColorClass(t)" class="font-bold">{{ getScore(t) }}</span>
-                                        <span class="text-slate-500 mx-1">/</span>
-                                        <span class="text-slate-300">{{ Number(dashData.min_sharpe || 0.6).toFixed(6) }}</span>
-                                    </td>
-                                    <td class="py-4 px-6 text-center">
-                                        <template v-if="!getOosStatus(t)">
-                                            <button @click="submitReview(t.id)" class="text-[13px] px-3 py-1 border border-white/20 text-slate-300 hover:text-white hover:bg-white/10 rounded transition-colors">
-                                                提交審核
-                                            </button>
-                                        </template>
-                                        <span v-else-if="getOosStatus(t) === 'queued'" class="text-[13px] text-slate-400">排隊中</span>
-                                        <span v-else-if="getOosStatus(t) === 'running'" class="text-[13px] text-slate-400">運算中</span>
-                                        <span v-else-if="getOosStatus(t) === 'passed'" class="text-[13px] text-slate-400">已通過</span>
-                                        <span v-else class="text-[13px] text-slate-400">{{ getOosStatus(t) }}</span>
-                                    </td>
-                                </tr>
-                                <tr v-if="!completedTasks || completedTasks.length === 0">
-                                    <td colspan="4" class="text-center py-12 text-slate-500 font-sans text-sm">目前尚無已完成的任務與評分</td>
-                                </tr>
-                            </tbody>
-                        </table>
+                                    <tr v-for="t in paginatedCompletedTasks" :key="t.id" class="border-b border-white/5 hover:bg-white/5 transition-colors">
+                                        <td class="py-4 px-6 text-slate-400">#{{ t.id }}</td>
+                                        <td class="py-4 px-6 text-white font-medium">{{ getShortPoolName(t) }}</td>
+                                        <td class="py-4 px-6 text-right">
+                                            <span :class="getScoreColorClass(t)" class="font-bold">{{ getScore(t) }}</span>
+                                            <span class="text-slate-500 mx-1">/</span>
+                                            <span class="text-slate-300">{{ Number(dashData.min_sharpe || 0.6).toFixed(6) }}</span>
+                                        </td>
+                                        <td class="py-4 px-6 text-center">
+                                            <template v-if="getScoreNumber(t) >= 0">
+                                                <template v-if="!getOosStatus(t)">
+                                                    <button @click="submitReview(t.id)" class="text-[13px] px-3 py-1 border border-white/20 text-slate-300 hover:text-white hover:bg-white/10 rounded transition-colors">
+                                                        提交審核
+                                                    </button>
+                                                </template>
+                                                <span v-else-if="getOosStatus(t) === 'queued'" class="text-[13px] text-slate-400">排隊中</span>
+                                                <span v-else-if="getOosStatus(t) === 'running'" class="text-[13px] text-amber-400">用戶端運算中</span>
+                                                <span v-else-if="getOosStatus(t) === 'passed'" class="text-[13px] text-emerald-400">已通過</span>
+                                                <span v-else class="text-[13px] text-slate-400">{{ getOosStatus(t) }}</span>
+                                            </template>
+                                            <template v-else>
+                                                <span class="text-[13px] text-red-500/50">未達標</span>
+                                            </template>
+                                        </td>
+                                    </tr>
+                                    <tr v-if="!paginatedCompletedTasks || paginatedCompletedTasks.length === 0">
+                                        <td colspan="4" class="text-center py-12 text-slate-500 font-sans text-sm">目前尚無已完成的任務與評分</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                            
+                            <div v-if="totalRatingPages > 1" class="flex items-center justify-between mt-4 pt-4 border-t border-white/10">
+                                <div class="text-sm text-slate-400 font-sans">
+                                    第 <span class="text-white font-medium mx-1">{{ ratingCurrentPage }}</span> 頁，共 <span class="text-white font-medium mx-1">{{ totalRatingPages }}</span> 頁
+                                </div>
+                                <div class="flex gap-2 font-sans">
+                                    <button @click="changeRatingPage(-1)" :disabled="ratingCurrentPage <= 1" class="px-3 py-1.5 text-sm border border-white/20 rounded hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed text-slate-300 transition-colors">
+                                        上一頁
+                                    </button>
+                                    <button @click="changeRatingPage(1)" :disabled="ratingCurrentPage >= totalRatingPages" class="px-3 py-1.5 text-sm border border-white/20 rounded hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed text-slate-300 transition-colors">
+                                        下一頁
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                </div>
 
                 <div v-if="currentTab === 'leaderboard'" class="cyber-card p-6 animate-fade-in">
                     <h3 class="text-xl font-bold text-white mb-4">排行榜 ▪ 3月</h3>
@@ -301,7 +320,7 @@
     <script>
         const { createApp, ref, reactive, onMounted, onUnmounted, computed } = Vue;
         // 註：這行維持你原本的設定，確保你本地 Live Server 能抓到資料
-        const API_BASE = 'https://sheep123.com/api'; 
+        const API_BASE = '/api'; 
 
         createApp({
             setup() {
@@ -317,6 +336,10 @@
                 const dashData = reactive({ tasks_count: 0, strategies_active: 0, payouts_unpaid: 0, strategies: [], payouts: [], min_sharpe: 0.6 });
                 const tasksData = reactive({ tasks: [], run_enabled: false });
                 const leaderboard = reactive({ combos: [] });
+
+                // 分頁相關狀態
+                const ratingCurrentPage = ref(1);
+                const ratingPageSize = 10;
 
                 // 解析資料庫中的真實 OOS 狀態
                 const getOosStatus = (t) => {
@@ -353,6 +376,26 @@
                             return scoreB - scoreA;
                         });
                 });
+
+                // 計算總頁數
+                const totalRatingPages = computed(() => {
+                    const total = completedTasks.value.length;
+                    return total === 0 ? 1 : Math.ceil(total / ratingPageSize);
+                });
+
+                // 取出當前頁要顯示的 10 筆資料
+                const paginatedCompletedTasks = computed(() => {
+                    const start = (ratingCurrentPage.value - 1) * ratingPageSize;
+                    return completedTasks.value.slice(start, start + ratingPageSize);
+                });
+
+                // 切換分頁函式
+                const changeRatingPage = (delta) => {
+                    const newPage = ratingCurrentPage.value + delta;
+                    if (newPage >= 1 && newPage <= totalRatingPages.value) {
+                        ratingCurrentPage.value = newPage;
+                    }
+                };
 
                 // 時間格式化工具
                 const formatDate = (isoStr) => {
@@ -402,15 +445,15 @@
                     } catch(e) {}
                 };
 
+                // 極致修復的驗證邏輯：完整解析後端錯誤，避免誤報
                 const handleAuth = async () => {
                     errorMsg.value = ''; isLoading.value = true;
                     try {
                         const endpoint = isLoginMode.value ? '/token' : '/auth/register';
                         const body = isLoginMode.value 
-                            ? { username: authForm.username, password: authForm.password, ttl_seconds: 86400 * 30 }
+                            ? { username: authForm.username, password: authForm.password, ttl_seconds: 86400 * 30, name: "worker" }
                             : { username: authForm.username, password: authForm.password, tos_ok: true };
                             
-                        // 修正：補上 API_BASE 確保跨域請求到正式伺服器
                         const res = await fetch(`${API_BASE}${endpoint}`, { 
                             method: 'POST', 
                             headers: { 'Content-Type': 'application/json' }, 
@@ -418,16 +461,23 @@
                         });
                         
                         if (!res.ok) {
-                            // 修正：動態判斷錯誤訊息，避免誤導
-                            throw new Error(isLoginMode.value ? '登入失敗：帳號或密碼錯誤' : '註冊失敗：該帳號可能已被使用');
+                            let detail = '';
+                            try { 
+                                const errData = await res.json(); 
+                                detail = errData.detail; 
+                            } catch(e){}
+                            
+                            if(detail === 'user_exists') throw new Error('註冊失敗：該帳號已被其他人註冊');
+                            if(detail === 'password_too_short') throw new Error('註冊失敗：密碼至少需要6個字元');
+                            if(detail === 'invalid_username') throw new Error('註冊失敗：帳號格式無效');
+                            throw new Error(isLoginMode.value ? '登入失敗：帳號或密碼錯誤' : '連線失敗或發生未知錯誤');
                         }
                         
                         if(!isLoginMode.value) {
-                            // 註冊成功後，自動打登入 API 取得 token
                             const lRes = await fetch(`${API_BASE}/token`, { 
                                 method: 'POST', 
                                 headers: { 'Content-Type': 'application/json' }, 
-                                body: JSON.stringify({ username: authForm.username, password: authForm.password, ttl_seconds: 86400 * 30 }) 
+                                body: JSON.stringify({ username: authForm.username, password: authForm.password, ttl_seconds: 86400 * 30, name: "worker" }) 
                             });
                             const data = await lRes.json();
                             localStorage.setItem('sheep_token', data.token);
@@ -436,7 +486,8 @@
                             localStorage.setItem('sheep_token', data.token);
                         }
                         await checkAuth();
-                    } catch (e) { errorMsg.value = e.message; isLoading.value = false; }
+                    } catch (e) { errorMsg.value = e.message; }
+                    finally { isLoading.value = false; }
                 };
 
                 const startMining = async () => {
@@ -482,7 +533,15 @@
                     } catch(e) { return 0; } 
                 };
 
-                const getScore = (t) => { try { const p = JSON.parse(t.progress_json||'{}'); return p.best_any_score ? Number(p.best_any_score).toFixed(6) : '-'; } catch(e){return '-';} };
+                const getScoreNumber = (t) => { 
+                    try { return Number(JSON.parse(t.progress_json||'{}').best_any_score || -9999); } 
+                    catch(e) { return -9999; } 
+                };
+
+                const getScore = (t) => { 
+                    const num = getScoreNumber(t);
+                    return num !== -9999 ? num.toFixed(6) : '-';
+                };
                 
                 const getShortPoolName = (t) => {
                     let name = t.pool_name || t.family || '-';
@@ -492,12 +551,9 @@
                 };
 
                 const getScoreColorClass = (t) => {
-                    try {
-                        const p = JSON.parse(t.progress_json || '{}');
-                        if (p.best_any_score == null) return 'text-slate-500';
-                        const s = Number(p.best_any_score);
-                        return s > 0 ? 'text-emerald-400' : (s < 0 ? 'text-red-400' : 'text-slate-300');
-                    } catch(e) { return 'text-slate-500'; }
+                    const s = getScoreNumber(t);
+                    if (s === -9999) return 'text-slate-500';
+                    return s >= 0 ? 'text-emerald-400' : 'text-red-400';
                 };
 
                 onMounted(() => {
@@ -508,12 +564,12 @@
 
                 // 👉 修復：確保 return 內輸出的函數名稱與上面定義的完全一致，不包含多餘殘留變數
                 return { 
-                    user, isLoading, isLoginMode, currentTab, authForm, errorMsg, 
-                    handleAuth, logout, dashData, tasksData, leaderboard, pingMs, 
-                    startMining, stopMining, getStatusText, getPhaseText, 
-                    getProgress, getProgressPercent, getScore, loadTasks, 
-                    getShortPoolName, getScoreColorClass, formatDate, completedTasks,
-                    getOosStatus, submitReview, activeTasks
+                    user, isLoading, isLoginMode, currentTab, authForm, errorMsg, handleAuth, logout, 
+                    dashData, tasksData, leaderboard, pingMs, startMining, stopMining, 
+                    getStatusText, getPhaseText, getProgress, getProgressPercent, getScore, getScoreNumber,
+                    loadTasks, getShortPoolName, getScoreColorClass, formatDate,
+                    activeTasks, paginatedCompletedTasks, ratingCurrentPage, totalRatingPages, changeRatingPage,
+                    getOosStatus, submitReview
                 };
             }
         }).mount('#app');
