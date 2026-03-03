@@ -29,6 +29,9 @@ services:
       SHEEP_DB_URL: ""
       SHEEP_DB_PATH: /app/data/sheep.db
       SHEEP_DB_MIGRATION: none
+      # [極致修復] 同步傳入管理員憑證，確保資料庫初始化時能一併處理權限
+      SHEEP_COMPUTE_USER: ${SHEEP_BOOTSTRAP_ADMIN_USER}
+      SHEEP_COMPUTE_PASS: ${SHEEP_BOOTSTRAP_ADMIN_PASS}
     volumes:
       - ${SHEEP_HOST_DATA_DIR:-../app/data}:/app/data
     restart: "no"
@@ -49,6 +52,9 @@ services:
       # 確保 FastAPI 穩定綁定全域介面
       HOST: "0.0.0.0"
       PORT: "8000"
+      # [極致修復] api 容器必須也要拿到管理員帳密，否則無法驗證 compute 節點發來的特權 token 請求，導致 401 bad_credentials
+      SHEEP_COMPUTE_USER: ${SHEEP_BOOTSTRAP_ADMIN_USER}
+      SHEEP_COMPUTE_PASS: ${SHEEP_BOOTSTRAP_ADMIN_PASS}
     # 關鍵修正 2：解除對 migrate 的強制等待，讓 API 瞬間啟動
     depends_on:
       db:
