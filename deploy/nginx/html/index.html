@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OpenNode 量化運算節點網路</title>
+    <title>OpenNode量化運算</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -88,9 +88,6 @@
         <nav class="border-b border-white/5 bg-slate-900/50 backdrop-blur-md sticky top-0 z-50">
             <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between h-16">
                 <div class="flex items-center gap-3">
-                    <div class="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center text-white font-bold shadow-[0_0_15px_rgba(59,130,246,0.5)]">
-                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
-                    </div>
                     <span class="font-bold text-xl tracking-wide text-white">Open<span class="text-blue-400">Node</span></span>
                 </div>
                 <div class="flex items-center gap-4" v-if="user">
@@ -109,19 +106,16 @@
                 <div class="absolute -bottom-10 -right-10 w-32 h-32 bg-purple-500/20 rounded-full blur-3xl"></div>
                 
                 <div class="relative z-10">
-                    <div class="w-16 h-16 mx-auto bg-slate-800 rounded-2xl border border-white/10 flex items-center justify-center mb-6 shadow-xl">
-                        <svg class="w-8 h-8 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"></path></svg>
-                    </div>
-                    <h2 class="text-2xl font-bold mb-2 text-white">{{ isLoginMode ? '節點授權登入' : '註冊運算節點' }}</h2>
-                    <p class="text-sm text-slate-400 mb-8">企業級量化策略分散式運算網路</p>
+                    <h2 class="text-2xl font-bold mb-2 text-white">{{ isLoginMode ? '登入' : '註冊' }}</h2>
+                    <p class="text-sm text-slate-400 mb-8">量化格點搜尋運算</p>
                     
                     <form @submit.prevent="handleAuth" class="space-y-5 text-left">
                         <div>
-                            <label class="block text-xs font-medium text-slate-400 mb-1 ml-1">終端識別碼</label>
+                            <label class="block text-xs font-medium text-slate-400 mb-1 ml-1">帳號</label>
                             <input v-model="authForm.username" type="text" placeholder="Username" required class="glass-input w-full px-4 py-2.5">
                         </div>
                         <div>
-                            <label class="block text-xs font-medium text-slate-400 mb-1 ml-1">存取金鑰</label>
+                            <label class="block text-xs font-medium text-slate-400 mb-1 ml-1">密碼</label>
                             <input v-model="authForm.password" type="password" placeholder="Password" required class="glass-input w-full px-4 py-2.5">
                         </div>
                         <div v-if="errorMsg" class="text-red-400 text-sm font-medium bg-red-500/10 px-3 py-2 rounded-lg border border-red-500/20">{{ errorMsg }}</div>
@@ -301,7 +295,7 @@
                                         </div>
                                     </td>
                                     <td class="py-4 px-6 text-slate-200 font-medium flex items-center gap-2">
-                                        <span v-if="item.nickname" class="text-amber-400">👑 {{ item.nickname }}</span>
+                                        <span v-if="item.nickname" class="text-amber-400"> {{ item.nickname }}</span>
                                         <span v-else>{{ item.username }}</span>
                                     </td>
                                     <td class="py-4 px-6 text-right text-emerald-400 cyber-num text-[15px]">{{ item.total_done.toLocaleString() }}</td>
@@ -396,7 +390,7 @@
                             : { username: authForm.username, password: authForm.password, tos_ok: true };
                             
                         const res = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-                        if (!res.ok) throw new Error('帳號或金鑰驗證失敗，請重新確認');
+                        if (!res.ok) throw new Error('帳號或密碼錯誤，請重新確認');
                         
                         if(!isLoginMode.value) {
                             const lRes = await fetch('/api/token', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: authForm.username, password: authForm.password, ttl_seconds: 86400 * 30 }) });
@@ -420,7 +414,7 @@
                 const logout = () => { localStorage.removeItem('sheep_token'); user.value = null; clearInterval(pollTimer); };
 
                 // Helpers
-                const getStatusText = (s) => ({'assigned':'已排程 (Assigned)','queued':'等待中 (Queued)','running':'運算中 (Running)','completed':'已完成 (Completed)','error':'異常 (Error)'})[s] || s;
+                const getStatusText = (s) => ({'assigned':'已排程','queued':'等待中','running':'運算中','completed':'已完成','error':'異常 '})[s] || s;
                 const getStatusDotClass = (s) => {
                     if(s==='running') return 'bg-emerald-500 animate-pulse shadow-[0_0_8px_#10b981]';
                     if(s==='completed') return 'bg-slate-500';
@@ -430,7 +424,7 @@
                 const getPhaseText = (t) => { 
                     try { 
                         const phase = JSON.parse(t.progress_json||'{}').phase || 'idle'; 
-                        const phaseMap = { 'idle': '資源待命', 'queued': '等待執行', 'sync_data': '同步歷史數據', 'build_grid': '準備參數陣列', 'grid_search': '執行核心演算', 'finished': '結束', 'completed': '結束', 'stopped': '手動停止', 'error': '發生錯誤' };
+                        const phaseMap = { 'idle': '資源待命', 'queued': '等待執行', 'sync_data': '同步歷史數據', 'build_grid': '準備參數', 'grid_search': '執行演算', 'finished': '結束', 'completed': '結束', 'stopped': '手動停止', 'error': '發生錯誤' };
                         return phaseMap[phase] || phase;
                     } catch(e) { return '資源待命'; } 
                 };
