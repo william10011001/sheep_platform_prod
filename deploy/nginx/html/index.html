@@ -78,10 +78,10 @@
                 <div v-if="currentTab === 'tasks'" class="space-y-6 animate-fade-in">
                     <div class="cyber-card p-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                         <div>
-                            <h3 class="text-xl font-bold text-white mb-2">算力節點控制面板</h3>
-                            <p class="text-sm text-gray-400">目前節點狀態: 
+                            <h3 class="text-xl font-bold text-white mb-2">控制面板</h3>
+                            <p class="text-sm text-gray-400">目前參數搜尋狀態: 
                                 <span :class="tasksData.run_enabled ? 'text-emerald-400 font-bold' : 'text-amber-400 font-bold'">
-                                    {{ tasksData.run_enabled ? '授權運算中 (Running)' : '待命靜置 (Idle)' }}
+                                    {{ tasksData.run_enabled ? '授權中' : '待命中' }}
                                 </span>
                             </p>
                         </div>
@@ -247,7 +247,7 @@
                 const logout = () => { localStorage.removeItem('sheep_token'); user.value = null; clearInterval(pollTimer); };
 
                 // Helpers
-                const getStatusText = (s) => ({'assigned':'配置完畢','queued':'排程等待','running':'演算執行','completed':'程序完成','error':'程序異常'})[s] || s;
+                const getStatusText = (s) => ({'assigned':'配置完畢','queued':'排程中','running':'執行中','completed':'已完成','error':'程序異常'})[s] || s;
                 const getStatusClass = (s) => {
                     if(s==='running') return 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
                     if(s==='completed') return 'bg-gray-500/20 text-gray-400 border border-gray-500/30';
