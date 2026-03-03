@@ -229,7 +229,7 @@
                     try {
                         if (isLoginMode.value) {
                             // 使用原有的 /token 端點
-                            const res = await fetch('/token', {
+                            const res = await fetch('/api/token', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ username: authForm.username, password: authForm.password, ttl_seconds: 86400 * 30 })
@@ -244,7 +244,7 @@
                                 body: JSON.stringify({ username: authForm.username, password: authForm.password, tos_ok: authForm.tos_ok })
                             });
                             // 註冊後自動登入
-                            const res = await fetch('/token', {
+                            const res = await fetch('/api/token', {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ username: authForm.username, password: authForm.password, ttl_seconds: 86400 * 30 })

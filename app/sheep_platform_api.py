@@ -609,7 +609,7 @@ def issue_token(req: Request, body: TokenRequest):
         expires_at=str(token.get("expires_at")),
     )
 
-@app.post("/api/auth/register")
+@app.post("/auth/register")
 def web_register(req: Request, body: WebRegisterIn):
     from sheep_platform_security import normalize_username, hash_password
     uname = normalize_username(body.username)
@@ -634,7 +634,7 @@ def web_register(req: Request, body: WebRegisterIn):
         
     return {"ok": True, "user_id": uid}
 
-@app.get("/api/user/me")
+@app.get("/user/me")
 def web_get_me(request: Request, authorization: Optional[str] = Header(None)):
     ctx = _auth_ctx(request, authorization)
     user = ctx["user"]
@@ -651,7 +651,7 @@ def web_get_me(request: Request, authorization: Optional[str] = Header(None)):
         "disabled": fresh_user.get("disabled", 0)
     }
 
-@app.get("/api/leaderboard")
+@app.get("/leaderboard")
 def web_leaderboard(period_hours: int = 24):
     try:
         stats = db.get_leaderboard_stats(period_hours)
@@ -660,7 +660,7 @@ def web_leaderboard(period_hours: int = 24):
         logger.error(f"Leaderboard error: {e}")
         raise HTTPException(status_code=500, detail="fetch_leaderboard_failed")
 
-@app.get("/api/dashboard")
+@app.get("/dashboard")
 def web_dashboard(request: Request, authorization: Optional[str] = Header(None)):
     ctx = _auth_ctx(request, authorization)
     uid = int(ctx["user"]["id"])
