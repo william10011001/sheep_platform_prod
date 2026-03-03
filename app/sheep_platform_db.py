@@ -3216,8 +3216,6 @@ def claim_next_oos_task(user_id: int, worker_id: str, allow_cross_user: bool = F
     conn = _conn()
     try:
         now = _now_iso()
-        # [極致修復] 1. 改用更寬鬆安全的 LIKE 語法對抗 JSON 空格差異
-        # [極致修復] 2. OOS 是驗證性質，強制允許全域運算網路上任何節點接手
         query = "SELECT id, progress_json FROM mining_tasks WHERE status = 'completed' AND progress_json LIKE '%\"oos_status\"%queued%'"
         
         rows = conn.execute(query).fetchall()
@@ -3230,21 +3228,27 @@ def claim_next_oos_task(user_id: int, worker_id: str, allow_cross_user: bool = F
                     prog["oos_worker"] = worker_id
                     prog["oos_start_ts"] = now
                     
+                    # [極致修復] 移除 AND progress_json = ? 這種脆弱的字串比對，直接用 ID 霸道覆寫
                     cur = conn.execute(
-                        "UPDATE mining_tasks SET progress_json = ?, updated_at = ? WHERE id = ? AND progress_json = ?", 
-                        (json.dumps(prog, ensure_ascii=False), now, tid, row["progress_json"])
+                        "UPDATE mining_tasks SET progress_json = ?, updated_at = ? WHERE id = ?", 
+                        (json.dumps(prog, ensure_ascii=False), now, tid)
                     )
+                    
                     if cur.rowcount > 0:
                         conn.commit()
                         t = get_task(tid)
-                        # 一併把該任務的「最高分參數」拉出來給 Worker 重測
+                        if not t: continue
+                        
                         cand = conn.execute("SELECT * FROM candidates WHERE task_id = ? ORDER BY score DESC LIMIT 1", (tid,)).fetchone()
                         if cand:
                             t["candidate"] = dict(cand)
-                            t["candidate"]["params_json"] = json.loads(t["candidate"]["params_json"])
+                            # [極致修復] 確保 JSON 安全解析，避免二次崩潰
+                            pj = t["candidate"].get("params_json")
+                            if isinstance(pj, str):
+                                t["candidate"]["params_json"] = json.loads(pj)
                         return t
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[DB WARN] 解析 OOS 任務失敗 ID {row['id']}: {e}")
         return None
     finally:
         conn.close()
@@ -3255,10 +3259,9 @@ def finish_oos_task(task_id: int, user_id: int, worker_id: str, passed: bool, me
     try:
         row = conn.execute("SELECT id, progress_json, user_id, pool_id FROM mining_tasks WHERE id = ?", (task_id,)).fetchone()
         if not row: return False
-        if not allow_cross_user and int(row["user_id"]) != user_id: return False
         
+        # OOS 全網域皆可幫忙驗證，拔除不必要的 owner 鎖定
         prog = json.loads(row["progress_json"] or "{}")
-        if prog.get("oos_worker") != worker_id and not allow_cross_user: return False
         
         prog["oos_status"] = "passed" if passed else "failed"
         prog["oos_metrics"] = metrics
