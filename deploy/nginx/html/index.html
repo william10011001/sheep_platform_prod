@@ -111,7 +111,7 @@
                                 <tbody>
                                     <tr v-for="t in tasksData.tasks" :key="t.id" class="border-b border-white/5 hover:bg-white/5 text-sm">
                                         <td class="py-3 px-4 text-gray-300">#{{ t.id }}</td>
-                                        <td class="py-3 px-4 text-emerald-400">{{ t.pool_name || t.family }}</td>
+                                        <td class="py-3 px-4 text-emerald-400 font-bold tracking-wide">{{ getShortPoolName(t) }}</td>
                                         <td class="py-3 px-4"><span class="px-2 py-1 rounded text-xs font-bold" :class="getStatusClass(t.status)">{{ getStatusText(t.status) }}</span></td>
                                         <td class="py-3 px-4 text-gray-400">{{ getPhaseText(t) }}</td>
                                         <td class="py-3 px-4 text-right text-gray-300 font-mono">{{ getProgress(t) }}</td>
@@ -254,9 +254,38 @@
                     if(s==='error') return 'bg-red-500/20 text-red-400 border border-red-500/30';
                     return 'bg-amber-500/20 text-amber-400 border border-amber-500/30';
                 };
-                const getPhaseText = (t) => { try { return JSON.parse(t.progress_json||'{}').phase || 'idle'; } catch(e){return 'idle';} };
+                
+                // 階段中文翻譯字典，隱藏底層工程術語
+                const getPhaseText = (t) => { 
+                    try { 
+                        const phase = JSON.parse(t.progress_json||'{}').phase || 'idle'; 
+                        const phaseMap = {
+                            'idle': '待命',
+                            'queued': '排隊中',
+                            'sync_data': '同步資料',
+                            'build_grid': '準備參數',
+                            'grid_search': '參數運算中',
+                            'finished': '已完成',
+                            'completed': '已完成',
+                            'stopped': '已停止',
+                            'error': '發生錯誤'
+                        };
+                        return phaseMap[phase] || phase;
+                    } catch(e) {
+                        return '待命';
+                    } 
+                };
+
                 const getProgress = (t) => { try { const p = JSON.parse(t.progress_json||'{}'); return p.combos_total ? `${p.combos_done} / ${p.combos_total}` : '-'; } catch(e){return '-';} };
                 const getScore = (t) => { try { const p = JSON.parse(t.progress_json||'{}'); return p.best_any_score ? Number(p.best_any_score).toFixed(6) : '-'; } catch(e){return '-';} };
+                
+                // 智慧擷取：優先抓取中括號內的文字，並消除冗餘的 _USDT 後綴
+                const getShortPoolName = (t) => {
+                    let name = t.pool_name || t.family || '-';
+                    const match = name.match(/\[(.*?)\]/);
+                    if (match) name = match[1]; // 抽出 BTC_USDT_60m
+                    return name.replace('_USDT', ''); // 變成 BTC_60m
+                };
 
                 onMounted(() => {
                     checkAuth();
@@ -264,7 +293,7 @@
                 });
                 onUnmounted(() => { clearInterval(pollTimer); });
 
-                return { user, isLoading, isLoginMode, currentTab, authForm, errorMsg, handleAuth, logout, dashData, tasksData, leaderboard, pingMs, startMining, stopMining, getStatusText, getStatusClass, getPhaseText, getProgress, getScore, loadTasks };
+                return { user, isLoading, isLoginMode, currentTab, authForm, errorMsg, handleAuth, logout, dashData, tasksData, leaderboard, pingMs, startMining, stopMining, getStatusText, getStatusClass, getPhaseText, getProgress, getScore, loadTasks, getShortPoolName };
             }
         }).mount('#app');
     </script>
