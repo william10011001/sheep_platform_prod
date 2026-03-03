@@ -103,6 +103,67 @@ def main() -> None:
 
             assert api is not None
 
+            # ── [極致系統升級] 優先檢查是否有排隊中的 OOS (過擬合) 驗證任務 ──
+            try:
+                # 動態構建安全標頭，跨過 client 封裝直接打真實 API
+                headers = {
+                    "Authorization": f"Bearer {token}", 
+                    "X-Worker-Id": worker_id, 
+                    "X-Worker-Version": "2.0.0", 
+                    "X-Worker-Protocol": "2"
+                }
+                oos_res = requests.post(f"{base_url}/tasks/oos/claim", headers=headers, timeout=10)
+                
+                if oos_res.status_code == 200:
+                    oos_task = oos_res.json().get("task")
+                    if oos_task:
+                        print(f"[*] 接收到 OOS 真實驗證任務 (Task #{oos_task.get('id')})，啟動本地全域回測...", flush=True)
+                        try:
+                            cand = dict(oos_task.get("candidate") or {})
+                            params = dict(cand.get("params_json") or {})
+                            family = str(oos_task.get("family", "KAMA_Cross"))
+                            symbol = str(oos_task.get("symbol", "BTC_USDT"))
+                            tf = int(oos_task.get("timeframe_min", 15))
+                            years = int(oos_task.get("years", 3))
+                            
+                            import backtest_panel2 as bt
+                            # 1. 真實讀取本地/下載歷史 K 線，VM 伺服器維持 0% 負擔！
+                            csv_main, _ = bt.ensure_bitmart_data(symbol, tf, years, auto_sync=True, skip_1m=True)
+                            df = bt.load_and_validate_csv(csv_main)
+                            
+                            # 2. 啟動用戶端 CPU 進行核心回測引擎重組與演算
+                            family_params = dict(params.get("family_params") or {})
+                            if not family_params:
+                                family_params = {k: v for k, v in params.items() if k not in ["family", "tp", "sl", "max_hold"]}
+                                
+                            res = bt.run_backtest(
+                                df, params.get("family", family), family_params, 
+                                float(params.get("tp", 1.0)), float(params.get("sl", 1.0)), int(params.get("max_hold", 100))
+                            )
+                            
+                            metrics = {
+                                "total_return_pct": float(res.get("total_return_pct", 0.0)),
+                                "max_drawdown_pct": float(res.get("max_drawdown_pct", 0.0)),
+                                "sharpe": float(res.get("sharpe", 0.0)),
+                                "trades": int(res.get("trades", 0))
+                            }
+                            
+                            # 3. 嚴苛標準防禦：Sharpe 必須仍維持在 0.3 以上，且具備真實交易次數
+                            passed = bool(metrics["sharpe"] > 0.3 and metrics["total_return_pct"] > 0 and metrics["trades"] > 5)
+                            print(f"[*]驗證結束: {'通過 ' if passed else '失敗'} (Sharpe: {metrics['sharpe']:.4f})", flush=True)
+                            
+                            # 4. 將真實算出的數據回傳伺服器審核
+                            requests.post(f"{base_url}/tasks/oos/{oos_task['id']}/finish", json={"passed": passed, "metrics": metrics}, headers=headers, timeout=10)
+                        except Exception as e:
+                            print(f"[!] 驗證發生異常: {e}", flush=True)
+                            requests.post(f"{base_url}/tasks/oos/{oos_task['id']}/finish", json={"passed": False, "metrics": {"error": str(e)}}, headers=headers, timeout=10)
+                        
+                        time.sleep(2)
+                        continue # OOS 執行完畢，提早進入下一輪迴圈，避免跟一般運算任務卡撞
+            except Exception as e:
+                print(f"OOS Polling Error: {e}", flush=True)
+            # ────────────────────────────────────────────────────────
+
             # claim next task (compute token -> server will dispatch across all users)
             task = api.claim_task()
             if not task:

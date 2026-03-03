@@ -3194,3 +3194,79 @@ def set_user_run_enabled(user_id: int, enabled: bool) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+def claim_next_oos_task(user_id: int, worker_id: str, allow_cross_user: bool = False) -> Optional[dict]:
+    """讓節點 (Worker) 領取正在排隊等待 OOS 審核的任務"""
+    conn = _conn()
+    try:
+        now = _now_iso()
+        # 用 LIKE 做快速預篩選，避免拉出整個資料庫
+        query = "SELECT id, progress_json FROM mining_tasks WHERE status = 'completed' AND progress_json LIKE '%\"oos_status\": \"queued\"%'"
+        params = []
+        if not allow_cross_user:
+            query += " AND user_id = ?"
+            params.append(user_id)
+        
+        rows = conn.execute(query, params).fetchall()
+        for row in rows:
+            try:
+                prog = json.loads(row["progress_json"] or "{}")
+                if prog.get("oos_status") == "queued":
+                    tid = row["id"]
+                    prog["oos_status"] = "running"
+                    prog["oos_worker"] = worker_id
+                    prog["oos_start_ts"] = now
+                    
+                    cur = conn.execute(
+                        "UPDATE mining_tasks SET progress_json = ?, updated_at = ? WHERE id = ? AND progress_json = ?", 
+                        (json.dumps(prog, ensure_ascii=False), now, tid, row["progress_json"])
+                    )
+                    if cur.rowcount > 0:
+                        conn.commit()
+                        t = get_task(tid)
+                        # 一併把該任務的「最高分參數」拉出來給 Worker 重測
+                        cand = conn.execute("SELECT * FROM candidates WHERE task_id = ? ORDER BY score DESC LIMIT 1", (tid,)).fetchone()
+                        if cand:
+                            t["candidate"] = dict(cand)
+                            t["candidate"]["params_json"] = json.loads(t["candidate"]["params_json"])
+                        return t
+            except Exception:
+                pass
+        return None
+    finally:
+        conn.close()
+
+def finish_oos_task(task_id: int, user_id: int, worker_id: str, passed: bool, metrics: dict, allow_cross_user: bool = False) -> bool:
+    """接收 Worker 的真實 OOS 回測結果，若通過則自動創建上線策略"""
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT id, progress_json, user_id, pool_id FROM mining_tasks WHERE id = ?", (task_id,)).fetchone()
+        if not row: return False
+        if not allow_cross_user and int(row["user_id"]) != user_id: return False
+        
+        prog = json.loads(row["progress_json"] or "{}")
+        if prog.get("oos_worker") != worker_id and not allow_cross_user: return False
+        
+        prog["oos_status"] = "passed" if passed else "failed"
+        prog["oos_metrics"] = metrics
+        prog["oos_finish_ts"] = _now_iso()
+        
+        conn.execute("UPDATE mining_tasks SET progress_json = ?, updated_at = ? WHERE id = ?", (json.dumps(prog, ensure_ascii=False), _now_iso(), task_id))
+        
+        # OOS 通過！自動升級為實盤策略
+        if passed:
+            cand = conn.execute("SELECT id, params_json FROM candidates WHERE task_id = ? ORDER BY score DESC LIMIT 1", (task_id,)).fetchone()
+            if cand:
+                cid = cand["id"]
+                sub = conn.execute("SELECT id FROM submissions WHERE candidate_id = ?", (cid,)).fetchone()
+                if not sub:
+                    cur = conn.execute("INSERT INTO submissions (candidate_id, user_id, pool_id, status, audit_json, submitted_at) VALUES (?, ?, ?, 'approved', '{}', ?)", (cid, row["user_id"], row["pool_id"], _now_iso()))
+                    sub_id = cur.lastrowid
+                    conn.execute("UPDATE candidates SET is_submitted = 1 WHERE id = ?", (cid,))
+                    conn.execute("INSERT INTO strategies (submission_id, user_id, pool_id, params_json, status, allocation_pct, note, created_at, expires_at) VALUES (?, ?, ?, ?, 'active', 1.0, 'OOS Passed Auto-Deploy', ?, ?)", (sub_id, row["user_id"], row["pool_id"], cand["params_json"], _now_iso(), "2099-12-31T23:59:59Z"))
+
+        conn.commit()
+        return True
+    finally:
+        conn.close()

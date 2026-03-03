@@ -366,7 +366,9 @@ class FinishIn(BaseModel):
     candidates: List[Dict[str, Any]]
     final_progress: Dict[str, Any]
     data_hash: str = ""
-
+class OosFinishIn(BaseModel):
+    passed: bool
+    metrics: Dict[str, Any]
 
 class ReleaseIn(BaseModel):
     lease_id: str
@@ -713,7 +715,39 @@ def web_start_tasks(request: Request, authorization: Optional[str] = Header(None
     uid = int(ctx["user"]["id"])
     db.set_user_run_enabled(uid, True)
     return {"ok": True}
+@app.post("/tasks/oos/claim")
+def api_claim_oos(
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    x_worker_id: Optional[str] = Header(None),
+    x_worker_version: Optional[str] = Header(None),
+    x_worker_protocol: Optional[int] = Header(None),
+):
+    ctx = _auth_ctx(request, authorization)
+    w = _require_worker(request, ctx, x_worker_id, x_worker_version, x_worker_protocol)
+    cross = _is_compute_token(ctx)
+    
+    task = db.claim_next_oos_task(int(ctx["user"]["id"]), w["worker_id"], allow_cross_user=cross)
+    return {"task": task}
 
+@app.post("/tasks/oos/{task_id}/finish")
+def api_finish_oos(
+    task_id: int,
+    body: OosFinishIn,
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    x_worker_id: Optional[str] = Header(None),
+    x_worker_version: Optional[str] = Header(None),
+    x_worker_protocol: Optional[int] = Header(None),
+):
+    ctx = _auth_ctx(request, authorization)
+    w = _require_worker(request, ctx, x_worker_id, x_worker_version, x_worker_protocol)
+    cross = _is_compute_token(ctx)
+    
+    ok = db.finish_oos_task(task_id, int(ctx["user"]["id"]), w["worker_id"], body.passed, body.metrics, allow_cross_user=cross)
+    if not ok:
+        raise HTTPException(status_code=400, detail="oos_finish_failed")
+    return {"ok": True}
 @app.post("/tasks/{task_id}/submit_oos")
 def web_submit_oos(task_id: int, request: Request, authorization: Optional[str] = Header(None)):
     ctx = _auth_ctx(request, authorization)
