@@ -725,9 +725,9 @@ def api_claim_oos(
 ):
     ctx = _auth_ctx(request, authorization)
     w = _require_worker(request, ctx, x_worker_id, x_worker_version, x_worker_protocol)
-    cross = _is_compute_token(ctx)
     
-    task = db.claim_next_oos_task(int(ctx["user"]["id"]), w["worker_id"], allow_cross_user=cross)
+    # [極致修復] 放寬跨用戶認證：OOS 屬於全域運算驗證，任何合法連線的 Worker 皆可提取
+    task = db.claim_next_oos_task(int(ctx["user"]["id"]), w["worker_id"], allow_cross_user=True)
     return {"task": task}
 
 @app.post("/tasks/oos/{task_id}/finish")
@@ -742,9 +742,9 @@ def api_finish_oos(
 ):
     ctx = _auth_ctx(request, authorization)
     w = _require_worker(request, ctx, x_worker_id, x_worker_version, x_worker_protocol)
-    cross = _is_compute_token(ctx)
     
-    ok = db.finish_oos_task(task_id, int(ctx["user"]["id"]), w["worker_id"], body.passed, body.metrics, allow_cross_user=cross)
+    # [極致修復] 允許跨用戶回報 OOS 結果
+    ok = db.finish_oos_task(task_id, int(ctx["user"]["id"]), w["worker_id"], body.passed, body.metrics, allow_cross_user=True)
     if not ok:
         raise HTTPException(status_code=400, detail="oos_finish_failed")
     return {"ok": True}

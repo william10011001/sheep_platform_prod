@@ -2654,26 +2654,41 @@ def clean_zombie_tasks(timeout_minutes: int = 15) -> int:
         cutoff_dt = datetime.now(timezone.utc) - timedelta(minutes=timeout_minutes)
         cutoff_iso = cutoff_dt.isoformat()
         
+        # [極致修復] 同時抓出僵屍任務與崩潰卡死的 error 任務
         rows = conn.execute(
-            "SELECT id, progress_json FROM mining_tasks WHERE status = 'running' AND last_heartbeat < ?", 
+            "SELECT id, progress_json, status, attempt FROM mining_tasks WHERE (status = 'running' AND last_heartbeat < ?) OR status = 'error'", 
             (cutoff_iso,)
         ).fetchall()
         
+        now = _now_iso()
         for row in rows:
             tid = row["id"]
+            attempt = int(row["attempt"] or 0) + 1
             try:
                 prog = json.loads(row["progress_json"] or "{}")
             except Exception:
                 prog = {}
-            prog["phase"] = "queued"
-            prog["phase_msg"] = "任務因超時或節點斷線，已由系統自動回收並等待重新分配。"
-            prog["last_error"] = "執行超時系統強制回收"
-            prog["updated_at"] = _now_iso()
             
-            conn.execute(
-                "UPDATE mining_tasks SET status = 'assigned', updated_at = ?, progress_json = ? WHERE id = ?", 
-                (_now_iso(), json.dumps(prog, ensure_ascii=False), tid)
-            )
+            if attempt >= 4:
+                # 失敗超過 3 次，強制終止並移出活躍列表
+                prog["phase"] = "error"
+                prog["phase_msg"] = "終止"
+                prog["last_error"] = "執行異常"
+                prog["updated_at"] = now
+                conn.execute(
+                    "UPDATE mining_tasks SET status = 'completed', attempt = ?, updated_at = ?, progress_json = ? WHERE id = ?", 
+                    (attempt, now, json.dumps(prog, ensure_ascii=False), tid)
+                )
+            else:
+                # 給予重試機會
+                prog["phase"] = "queued"
+                prog["phase_msg"] = f"任務因異常中斷 (第 {attempt} 次)"
+                prog["last_error"] = "重試"
+                prog["updated_at"] = now
+                conn.execute(
+                    "UPDATE mining_tasks SET status = 'assigned', attempt = ?, updated_at = ?, progress_json = ? WHERE id = ?", 
+                    (attempt, now, json.dumps(prog, ensure_ascii=False), tid)
+                )
             count += 1
             
         if count > 0:
@@ -3201,14 +3216,11 @@ def claim_next_oos_task(user_id: int, worker_id: str, allow_cross_user: bool = F
     conn = _conn()
     try:
         now = _now_iso()
-        # 用 LIKE 做快速預篩選，避免拉出整個資料庫
-        query = "SELECT id, progress_json FROM mining_tasks WHERE status = 'completed' AND progress_json LIKE '%\"oos_status\": \"queued\"%'"
-        params = []
-        if not allow_cross_user:
-            query += " AND user_id = ?"
-            params.append(user_id)
+        # [極致修復] 1. 改用更寬鬆安全的 LIKE 語法對抗 JSON 空格差異
+        # [極致修復] 2. OOS 是驗證性質，強制允許全域運算網路上任何節點接手
+        query = "SELECT id, progress_json FROM mining_tasks WHERE status = 'completed' AND progress_json LIKE '%\"oos_status\"%queued%'"
         
-        rows = conn.execute(query, params).fetchall()
+        rows = conn.execute(query).fetchall()
         for row in rows:
             try:
                 prog = json.loads(row["progress_json"] or "{}")
