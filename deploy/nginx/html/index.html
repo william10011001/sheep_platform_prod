@@ -47,6 +47,33 @@
         .tab-active { color: #FF003C; font-weight: 800; border-bottom-color: #FF003C; }
         .tab-inactive { color: #8b949e; }
         .tab-inactive:hover { color: white; }
+
+        /* Tooltip 隱藏與懸浮顯示邏輯 */
+        .custom-tooltip { position: relative; display: inline-flex; align-items: center; cursor: help; margin-left: 6px; vertical-align: middle; }
+        .custom-tooltip .tooltip-icon { width: 14px; height: 14px; border-radius: 50%; background: rgba(255,255,255,0.2); font-size: 10px; display: inline-flex; align-items: center; justify-content: center; color: #e2e8f0; transition: all 0.2s; }
+        .custom-tooltip .tooltip-text {
+            visibility: hidden; width: 240px; background-color: #1e293b; color: #e2e8f0;
+            text-align: left; border-radius: 8px; padding: 10px 12px; font-size: 12px;
+            position: absolute; z-index: 99999; bottom: 150%; left: 50%; transform: translateX(-50%);
+            opacity: 0; transition: opacity 0.2s; border: 1px solid rgba(255,255,255,0.1);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.8); font-weight: normal; white-space: normal; line-height: 1.5;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+        /* 畫出提示框下方的小三角形 */
+        .custom-tooltip .tooltip-text::after {
+            content: ""; position: absolute; top: 100%; left: 50%; margin-left: -5px;
+            border-width: 5px; border-style: solid; border-color: #1e293b transparent transparent transparent;
+        }
+        .custom-tooltip:hover .tooltip-text { visibility: visible; opacity: 1; }
+        .custom-tooltip:hover .tooltip-icon { background: #3b82f6; color: white; box-shadow: 0 0 8px rgba(59,130,246,0.6); }
+        
+        /* 防裁切修飾：靠右側邊緣的提示框 */
+        .custom-tooltip.tooltip-right-edge .tooltip-text {
+            left: auto; right: -10px; transform: none;
+        }
+        .custom-tooltip.tooltip-right-edge .tooltip-text::after {
+            left: auto; right: 12px; margin-left: 0;
+        }
     </style>
 </head>
 <body>
@@ -70,7 +97,13 @@
                     <div><input v-model="authForm.username" type="text" placeholder="帳號" required class="cyber-input w-full px-4 py-2 rounded-md"></div>
                     <div><input v-model="authForm.password" type="password" placeholder="密碼" required class="cyber-input w-full px-4 py-2 rounded-md"></div>
                     <div v-if="errorMsg" class="text-red-500 text-sm font-bold">{{ errorMsg }}</div>
-                    <button type="submit" class="cyber-btn w-full py-2.5 rounded-md font-bold mt-4">{{ isLoginMode ? '授權連線' : '建立節點' }}</button>
+                    <button type="submit" class="cyber-btn w-full py-2.5 rounded-md font-bold mt-4">{{ isLoginMode ? '登入' : '註冊' }}</button>
+                    
+                    <div class="text-center pt-2">
+                        <button type="button" @click="isLoginMode = !isLoginMode; errorMsg = ''" class="text-sm text-gray-400 hover:text-white transition-colors">
+                            {{ isLoginMode ? '還沒有帳號？點此註冊' : '已有帳號？返回登入' }}
+                        </button>
+                    </div>
                 </form>
             </div>
 
@@ -78,9 +111,10 @@
                 <div class="flex gap-2 border-b border-white/10 mb-6 overflow-x-auto">
                     <button @click="currentTab = 'tasks'" :class="currentTab === 'tasks' ? 'tab-active' : 'tab-inactive'" class="tab-btn">挖礦任務</button>
                     <button @click="currentTab = 'dashboard'" :class="currentTab === 'dashboard' ? 'tab-active' : 'tab-inactive'" class="tab-btn">總覽</button>
+                    <button @click="currentTab = 'rewards'" :class="currentTab === 'rewards' ? 'tab-active' : 'tab-inactive'" class="tab-btn">獎勵結算</button>
+                    <button @click="currentTab = 'rating'" :class="currentTab === 'rating' ? 'tab-active' : 'tab-inactive'" class="tab-btn">評分專區</button>
                     <button @click="currentTab = 'leaderboard'" :class="currentTab === 'leaderboard' ? 'tab-active' : 'tab-inactive'" class="tab-btn">排行榜</button>
                 </div>
-
                 <div v-if="currentTab === 'tasks'" class="space-y-6 animate-fade-in">
                     <div class="cyber-card p-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                         <div>
@@ -92,8 +126,8 @@
                             </p>
                         </div>
                         <div class="flex gap-3">
-                            <button v-if="!tasksData.run_enabled" @click="startMining" class="cyber-btn px-6 py-2 rounded-md font-bold text-white bg-red-600 hover:bg-red-500">啟動全域挖礦</button>
-                            <button v-else @click="stopMining" class="px-6 py-2 rounded-md font-bold text-gray-300 border border-gray-600 hover:bg-gray-800">暫停節點分配</button>
+                            <button v-if="!tasksData.run_enabled" @click="startMining" class="cyber-btn px-6 py-2 rounded-md font-bold text-white bg-red-600 hover:bg-red-500">開始挖礦</button>
+                            <button v-else @click="stopMining" class="px-6 py-2 rounded-md font-bold text-gray-300 border border-gray-600 hover:bg-gray-800">結束挖礦</button>
                         </div>
                     </div>
 
@@ -102,7 +136,7 @@
                             <h3 class="text-lg font-bold text-white">派發任務列表</h3>
                             <button @click="loadTasks" class="text-xs text-gray-400 hover:text-white border border-gray-600 px-2 py-1 rounded">↻ 刷新</button>
                         </div>
-                        <div class="overflow-x-auto">
+                        <div class="w-full">
                             <table class="w-full text-left border-collapse whitespace-nowrap cyber-num text-[14px]">
                                 <thead>
                                     <tr class="bg-slate-900/50 text-slate-400">
@@ -111,22 +145,22 @@
                                             所屬策略池
                                             <div class="custom-tooltip">
                                                 <div class="tooltip-icon">?</div>
-                                                <div class="tooltip-text">目前進行運算的標的與策略組合種類。固定策略池有助於提高運算效率。</div>
+                                                <div class="tooltip-text">目前進行運算的標的與策略組合種類。</div>
                                             </div>
                                         </th>
                                         <th class="py-4 px-6 border-b border-white/5 font-normal">狀態</th>
                                         <th class="py-4 px-6 border-b border-white/5 text-right font-normal">運算進度</th>
                                         <th class="py-4 px-6 border-b border-white/5 text-right font-normal">
                                             最佳分數
-                                            <div class="custom-tooltip">
+                                            <div class="custom-tooltip tooltip-right-edge">
                                                 <div class="tooltip-icon">?</div>
-                                                <div class="tooltip-text">本機目前算出的最高夏普值。分數達標後將有資格提交至伺服器獲取積分。</div>
+                                                <div class="tooltip-text">本機目前算出的最高夏普值。分數達標後將有資格提交至伺服器獲取獎勵。</div>
                                             </div>
                                         </th>
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    <tr v-for="t in tasksData.tasks" :key="t.id" class="border-b border-white/5 hover:bg-white/5 transition-colors">
+                                    <tr v-for="t in activeTasks" :key="t.id" class="border-b border-white/5 hover:bg-white/5 transition-colors">
                                         <td class="py-4 px-6 text-slate-400">#{{ t.id }}</td>
                                         <td class="py-4 px-6 text-white">{{ getShortPoolName(t) }}</td>
                                         <td class="py-4 px-6">
@@ -146,10 +180,10 @@
                                         </td>
                                         <td class="py-4 px-6 text-right" :class="getScoreColorClass(t)">{{ getScore(t) }}</td>
                                     </tr>
-                                    <tr v-if="!tasksData.tasks || tasksData.tasks.length === 0">
+                                    <tr v-if="!activeTasks || activeTasks.length === 0">
                                         <td colspan="5" class="text-center py-12 text-slate-500">
                                             <div class="flex flex-col items-center gap-2">
-                                                <span class="font-sans text-sm">目前尚無分配任務，請點擊上方按鈕啟動。</span>
+                                                <span class="font-sans text-sm">目前尚無執行中的任務，請點擊上方按鈕啟動。</span>
                                             </div>
                                         </td>
                                     </tr>
@@ -159,17 +193,94 @@
                     </div>
                 </div>
 
-                <div v-if="currentTab === 'dashboard'" class="grid grid-cols-1 md:grid-cols-4 gap-4 animate-fade-in">
-                    <div class="cyber-card p-4 flex flex-col justify-center items-center"><div class="text-xs text-gray-400 mb-1">任務總數</div><div class="text-3xl text-white cyber-num">{{ dashData.tasks_count || 0 }}</div></div>
-                    <div class="cyber-card p-4 flex flex-col justify-center items-center"><div class="text-xs text-gray-400 mb-1">活躍策略</div><div class="text-3xl text-emerald-400 cyber-num">{{ dashData.strategies_active || 0 }}</div></div>
-                    <div class="cyber-card p-4 flex flex-col justify-center items-center"><div class="text-xs text-gray-400 mb-1">待發放結算</div><div class="text-3xl text-amber-400 cyber-num">{{ dashData.payouts_unpaid || 0 }}</div></div>
-                    <div class="cyber-card p-4 flex flex-col justify-center items-center"><div class="text-xs text-gray-400 mb-1">系統延遲</div><div class="text-3xl text-blue-400 cyber-num">{{ pingMs }} <span class="text-sm">ms</span></div></div>
+                <div v-if="currentTab === 'dashboard'" class="grid grid-cols-1 md:grid-cols-3 gap-4 animate-fade-in">
+                    <div class="cyber-card p-4 flex flex-col justify-center items-center"><div class="text-xs text-white mb-1">已完成任務</div><div class="text-3xl text-white cyber-num">{{ dashData.tasks_count || 0 }}</div></div>
+                    <div class="cyber-card p-4 flex flex-col justify-center items-center"><div class="text-xs text-white mb-1">已過審策略</div><div class="text-3xl text-white cyber-num">{{ dashData.strategies_active || 0 }}</div></div>
+                    <div class="cyber-card p-4 flex flex-col justify-center items-center"><div class="text-xs text-white mb-1">待發放獎勵(USDT)</div><div class="text-3xl text-white cyber-num">{{ dashData.payouts_unpaid || 0 }}</div></div>
+                </div>
+
+                <div v-if="currentTab === 'rewards'" class="cyber-card p-6 animate-fade-in">
+                    <h3 class="text-xl font-bold text-white mb-4">獎勵結算明細</h3>
+                    <div class="w-full">
+                        <table class="w-full text-left border-collapse whitespace-nowrap cyber-num text-[14px]">
+                            <thead>
+                                <tr class="bg-slate-900/50 text-slate-400">
+                                    <th class="py-4 px-6 border-b border-white/5 font-normal">結算週期</th>
+                                    <th class="py-4 px-6 border-b border-white/5 font-normal">狀態</th>
+                                    <th class="py-4 px-6 border-b border-white/5 text-right font-normal">積分數量</th>
+                                    <th class="py-4 px-6 border-b border-white/5 text-right font-normal">時間紀錄</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="p in dashData.payouts" :key="p.id" class="border-b border-white/5 hover:bg-white/5 transition-colors">
+                                    <td class="py-4 px-6 text-slate-400">Cycle #{{ p.cycle_id || '-' }}</td>
+                                    <td class="py-4 px-6">
+                                        <span :class="p.status === 'paid' ? 'text-emerald-400' : 'text-amber-400'">
+                                            {{ p.status === 'paid' ? '已發放' : '待結算' }}
+                                        </span>
+                                    </td>
+                                    <td class="py-4 px-6 text-right text-white font-medium">{{ p.amount || 0 }}</td>
+                                    <td class="py-4 px-6 text-right text-slate-500">{{ formatDate(p.created_at || p.updated_at) }}</td>
+                                </tr>
+                                <tr v-if="!dashData.payouts || dashData.payouts.length === 0">
+                                    <td colspan="4" class="text-center py-12 text-slate-500 font-sans text-sm">目前尚無結算紀錄</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div v-if="currentTab === 'rating'" class="cyber-card p-6 animate-fade-in">
+                    <h3 class="text-xl font-bold text-white mb-4">達標策略與評分</h3>
+                    <div class="w-full">
+                        <table class="w-full text-left border-collapse whitespace-nowrap cyber-num text-[14px]">
+                            <thead>
+                                <tr class="bg-slate-900/50 text-slate-400">
+                                    <th class="py-4 px-6 border-b border-white/5 font-normal">任務編號</th>
+                                    <th class="py-4 px-6 border-b border-white/5 font-normal">所屬策略池</th>
+                                    <th class="py-4 px-6 border-b border-white/5 text-right font-normal">
+                                        評分 (目前 / 門檻)
+                                        <div class="custom-tooltip tooltip-right-edge">
+                                            <div class="tooltip-icon">?</div>
+                                            <div class="tooltip-text">當目前評分超越門檻(白字)，代表該策略組合成功達標並可獲取積分。</div>
+                                        </div>
+                                    </th>
+                                    <th class="py-4 px-6 border-b border-white/5 text-center font-normal">後續操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="t in completedTasks" :key="t.id" class="border-b border-white/5 hover:bg-white/5 transition-colors">
+                                    <td class="py-4 px-6 text-slate-400">#{{ t.id }}</td>
+                                    <td class="py-4 px-6 text-white font-medium">{{ getShortPoolName(t) }}</td>
+                                    <td class="py-4 px-6 text-right">
+                                        <span :class="getScoreColorClass(t)" class="font-bold">{{ getScore(t) }}</span>
+                                        <span class="text-slate-500 mx-1">/</span>
+                                        <span class="text-slate-300">{{ Number(dashData.min_sharpe || 0.6).toFixed(6) }}</span>
+                                    </td>
+                                    <td class="py-4 px-6 text-center">
+                                        <template v-if="!getOosStatus(t)">
+                                            <button @click="submitReview(t.id)" class="text-[13px] px-3 py-1 border border-white/20 text-slate-300 hover:text-white hover:bg-white/10 rounded transition-colors">
+                                                提交審核
+                                            </button>
+                                        </template>
+                                        <span v-else-if="getOosStatus(t) === 'queued'" class="text-[13px] text-slate-400">排隊中</span>
+                                        <span v-else-if="getOosStatus(t) === 'running'" class="text-[13px] text-slate-400">運算中</span>
+                                        <span v-else-if="getOosStatus(t) === 'passed'" class="text-[13px] text-slate-400">已通過</span>
+                                        <span v-else class="text-[13px] text-slate-400">{{ getOosStatus(t) }}</span>
+                                    </td>
+                                </tr>
+                                <tr v-if="!completedTasks || completedTasks.length === 0">
+                                    <td colspan="4" class="text-center py-12 text-slate-500 font-sans text-sm">目前尚無已完成的任務與評分</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
 
                 <div v-if="currentTab === 'leaderboard'" class="cyber-card p-6 animate-fade-in">
-                    <h3 class="text-xl font-bold text-white mb-4">全域算力排行榜 (月榜)</h3>
+                    <h3 class="text-xl font-bold text-white mb-4">排行榜 ▪ 3月</h3>
                     <table class="w-full text-left border-collapse">
-                        <thead><tr class="border-b border-white/10 text-gray-400 text-sm"><th class="py-3 px-4">排名</th><th class="py-3 px-4">節點代號</th><th class="py-3 px-4 text-right">貢獻組合數</th></tr></thead>
+                        <thead><tr class="border-b border-white/10 text-gray-400 text-sm"><th class="py-3 px-4">排名</th><th class="py-3 px-4">暱稱</th><th class="py-3 px-4 text-right">任務總數</th></tr></thead>
                         <tbody>
                             <tr v-for="(item, idx) in leaderboard.combos" :key="idx" class="border-b border-white/5 hover:bg-white/5">
                                 <td class="py-3 px-4 text-amber-400 cyber-num text-lg">#{{ idx + 1 }}</td>
@@ -188,7 +299,7 @@
     </div>
 
     <script>
-        const { createApp, ref, reactive, onMounted, onUnmounted } = Vue;
+        const { createApp, ref, reactive, onMounted, onUnmounted, computed } = Vue;
         // 註：這行維持你原本的設定，確保你本地 Live Server 能抓到資料
         const API_BASE = 'https://sheep123.com/api'; 
 
@@ -203,9 +314,52 @@
                 let pollTimer = null;
                 
                 const authForm = reactive({ username: '', password: '' });
-                const dashData = reactive({ tasks_count: 0, strategies_active: 0, payouts_unpaid: 0 });
+                const dashData = reactive({ tasks_count: 0, strategies_active: 0, payouts_unpaid: 0, strategies: [], payouts: [], min_sharpe: 0.6 });
                 const tasksData = reactive({ tasks: [], run_enabled: false });
                 const leaderboard = reactive({ combos: [] });
+
+                // 解析資料庫中的真實 OOS 狀態
+                const getOosStatus = (t) => {
+                    try { return JSON.parse(t.progress_json || '{}').oos_status || null; }
+                    catch(e) { return null; }
+                };
+
+                // 發送真實 API 請求修改資料庫狀態，無假動畫
+                const submitReview = async (taskId) => {
+                    try {
+                        await fetchApi(`/tasks/${taskId}/submit_oos`, { method: 'POST' });
+                        await loadTasks(); // 真實從資料庫拉取最新狀態
+                    } catch(e) {
+                        alert("提交失敗：" + e.message);
+                    }
+                };
+
+                // 派發任務列表：過濾掉已完成的歷史任務，只顯示正在進行或排程中的任務
+                const activeTasks = computed(() => {
+                    if (!tasksData.tasks) return [];
+                    return tasksData.tasks.filter(t => t.status !== 'completed');
+                });
+
+                // 排序並過濾出「已完成」的任務清單，按照最佳分數由高至低排列
+                const completedTasks = computed(() => {
+                    if (!tasksData.tasks) return [];
+                    return tasksData.tasks
+                        .filter(t => t.status === 'completed')
+                        .sort((a, b) => {
+                            let scoreA = -9999;
+                            let scoreB = -9999;
+                            try { scoreA = Number(JSON.parse(a.progress_json||'{}').best_any_score || -9999); } catch(e){}
+                            try { scoreB = Number(JSON.parse(b.progress_json||'{}').best_any_score || -9999); } catch(e){}
+                            return scoreB - scoreA;
+                        });
+                });
+
+                // 時間格式化工具
+                const formatDate = (isoStr) => {
+                    if (!isoStr) return '-';
+                    const d = new Date(isoStr);
+                    return isNaN(d) ? isoStr : d.toLocaleString('zh-TW', { hour12: false });
+                };
 
                 const fetchApi = async (endpoint, options = {}) => {
                     const token = localStorage.getItem('sheep_token');
@@ -251,16 +405,30 @@
                 const handleAuth = async () => {
                     errorMsg.value = ''; isLoading.value = true;
                     try {
-                        const endpoint = isLoginMode.value ? '/api/token' : '/api/auth/register';
+                        const endpoint = isLoginMode.value ? '/token' : '/auth/register';
                         const body = isLoginMode.value 
                             ? { username: authForm.username, password: authForm.password, ttl_seconds: 86400 * 30 }
                             : { username: authForm.username, password: authForm.password, tos_ok: true };
                             
-                        const res = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-                        if (!res.ok) throw new Error('帳號或密碼錯誤');
+                        // 修正：補上 API_BASE 確保跨域請求到正式伺服器
+                        const res = await fetch(`${API_BASE}${endpoint}`, { 
+                            method: 'POST', 
+                            headers: { 'Content-Type': 'application/json' }, 
+                            body: JSON.stringify(body) 
+                        });
+                        
+                        if (!res.ok) {
+                            // 修正：動態判斷錯誤訊息，避免誤導
+                            throw new Error(isLoginMode.value ? '登入失敗：帳號或密碼錯誤' : '註冊失敗：該帳號可能已被使用');
+                        }
                         
                         if(!isLoginMode.value) {
-                            const lRes = await fetch('/api/token', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: authForm.username, password: authForm.password, ttl_seconds: 86400 * 30 }) });
+                            // 註冊成功後，自動打登入 API 取得 token
+                            const lRes = await fetch(`${API_BASE}/token`, { 
+                                method: 'POST', 
+                                headers: { 'Content-Type': 'application/json' }, 
+                                body: JSON.stringify({ username: authForm.username, password: authForm.password, ttl_seconds: 86400 * 30 }) 
+                            });
                             const data = await lRes.json();
                             localStorage.setItem('sheep_token', data.token);
                         } else {
@@ -344,7 +512,8 @@
                     handleAuth, logout, dashData, tasksData, leaderboard, pingMs, 
                     startMining, stopMining, getStatusText, getPhaseText, 
                     getProgress, getProgressPercent, getScore, loadTasks, 
-                    getShortPoolName, getScoreColorClass 
+                    getShortPoolName, getScoreColorClass, formatDate, completedTasks,
+                    getOosStatus, submitReview, activeTasks
                 };
             }
         }).mount('#app');

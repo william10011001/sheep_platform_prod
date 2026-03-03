@@ -671,13 +671,22 @@ def web_dashboard(request: Request, authorization: Optional[str] = Header(None))
     strategies = db.list_strategies(user_id=uid, limit=200)
     payouts = db.list_payouts(user_id=uid, limit=200)
     
+    conn = db._conn()
+    try:
+        min_sharpe = float(db.get_setting(conn, "min_sharpe", 0.6))
+    finally:
+        conn.close()
+    
     return {
         "ok": True,
         "cycle_id": cycle_id,
         "tasks_count": len(tasks),
         "strategies_active": len([s for s in strategies if s["status"] == "active"]),
         "payouts_unpaid": len([p for p in payouts if p["status"] == "unpaid"]),
-        "recent_tasks": tasks[:10]
+        "recent_tasks": tasks[:10],
+        "strategies": strategies,
+        "payouts": payouts,
+        "min_sharpe": min_sharpe
     }
 
 @app.get("/tasks")
@@ -705,11 +714,29 @@ def web_start_tasks(request: Request, authorization: Optional[str] = Header(None
     db.set_user_run_enabled(uid, True)
     return {"ok": True}
 
-@app.post("/tasks/stop")
-def web_stop_tasks(request: Request, authorization: Optional[str] = Header(None)):
+@app.post("/tasks/{task_id}/submit_oos")
+def web_submit_oos(task_id: int, request: Request, authorization: Optional[str] = Header(None)):
     ctx = _auth_ctx(request, authorization)
     uid = int(ctx["user"]["id"])
-    db.set_user_run_enabled(uid, False)
+    
+    task = db.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="not_found")
+        
+    # 確保只有該任務的擁有者可以提交審核
+    if int(task.get("user_id") or 0) != uid and not _is_compute_token(ctx):
+        raise HTTPException(status_code=403, detail="forbidden")
+        
+    # 真實寫入資料庫：將任務進度中的 OOS 狀態標記為排隊中
+    # 伺服器不佔用 CPU，而是讓用戶端 Worker 抓取並執行
+    try:
+        prog = json.loads(task.get("progress_json") or "{}")
+    except Exception:
+        prog = {}
+        
+    prog["oos_status"] = "queued"
+    db.update_task_progress(task_id, prog)
+    
     return {"ok": True}
 
 
