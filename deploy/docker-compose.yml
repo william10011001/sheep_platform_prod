@@ -35,23 +35,33 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.api
+    image: sheep-platform-api
+    container_name: deploy-api-1
+    restart: always
+    # 關鍵修正 1：開放 8000 連接埠給 Nginx 存取，徹底擊殺 502
+    ports:
+      - "8000:8000"
     environment:
-      SHEEP_DB_URL: postgresql://sheep:${POSTGRES_PASSWORD}@db:5432/sheep
-      SHEEP_API_ROOT_PATH: /api
-      SHEEP_GIT_SHA: ${SHEEP_GIT_SHA}
-      SHEEP_RUN_SCHEDULER: "0"
-
+      # 確保監聽全域地址並對齊 Nginx 設定
+      - HOST=0.0.0.0
+      - PORT=8000
+      - SHEEP_API_ROOT_PATH=/api
+      - SHEEP_GIT_SHA=${SHEEP_GIT_SHA}
+      - SHEEP_RUN_SCHEDULER=0
+      # 關鍵修正 2：強制退回使用 SQLite 舊資料庫路徑，找回所有帳號資料
+      - SHEEP_DB_PATH=/app/data/sheep.db
+      # 清空 Postgres URL 避免系統因密碼錯誤而崩潰
+      - SHEEP_DB_URL=
     depends_on:
-      migrate:
-        condition: service_completed_successfully
+      db:
+        condition: service_healthy
     volumes:
       - ${SHEEP_HOST_DATA_DIR:-../app/data}:/app/data
-    restart: always
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/healthz || exit 1"]
       interval: 10s
-      timeout: 3s
-      retries: 20
+      timeout: 5s
+      retries: 5
     # deploy:
     #   resources:
     #     limits:
