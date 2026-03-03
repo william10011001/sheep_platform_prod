@@ -70,9 +70,9 @@
 
             <div v-else-if="user" class="space-y-6">
                 <div class="flex gap-2 border-b border-white/10 mb-6 overflow-x-auto">
-                    <button @click="currentTab = 'tasks'" :class="currentTab === 'tasks' ? 'tab-active' : 'tab-inactive'" class="tab-btn">⛏️ 挖礦任務</button>
-                    <button @click="currentTab = 'dashboard'" :class="currentTab === 'dashboard' ? 'tab-active' : 'tab-inactive'" class="tab-btn">📊 總覽</button>
-                    <button @click="currentTab = 'leaderboard'" :class="currentTab === 'leaderboard' ? 'tab-active' : 'tab-inactive'" class="tab-btn">🏆 排行榜</button>
+                    <button @click="currentTab = 'tasks'" :class="currentTab === 'tasks' ? 'tab-active' : 'tab-inactive'" class="tab-btn">挖礦任務</button>
+                    <button @click="currentTab = 'dashboard'" :class="currentTab === 'dashboard' ? 'tab-active' : 'tab-inactive'" class="tab-btn">總覽</button>
+                    <button @click="currentTab = 'leaderboard'" :class="currentTab === 'leaderboard' ? 'tab-active' : 'tab-inactive'" class="tab-btn">排行榜</button>
                 </div>
 
                 <div v-if="currentTab === 'tasks'" class="space-y-6 animate-fade-in">
@@ -81,13 +81,13 @@
                             <h3 class="text-xl font-bold text-white mb-2">算力節點控制面板</h3>
                             <p class="text-sm text-gray-400">目前節點狀態: 
                                 <span :class="tasksData.run_enabled ? 'text-emerald-400 font-bold' : 'text-amber-400 font-bold'">
-                                    {{ tasksData.run_enabled ? '🟢 授權運算中 (Running)' : '🟡 待命靜置 (Idle)' }}
+                                    {{ tasksData.run_enabled ? '授權運算中 (Running)' : '待命靜置 (Idle)' }}
                                 </span>
                             </p>
                         </div>
                         <div class="flex gap-3">
-                            <button v-if="!tasksData.run_enabled" @click="startMining" class="cyber-btn px-6 py-2 rounded-md font-bold text-white bg-red-600 hover:bg-red-500">▶️ 啟動全域挖礦</button>
-                            <button v-else @click="stopMining" class="px-6 py-2 rounded-md font-bold text-gray-300 border border-gray-600 hover:bg-gray-800">⏸️ 暫停節點分配</button>
+                            <button v-if="!tasksData.run_enabled" @click="startMining" class="cyber-btn px-6 py-2 rounded-md font-bold text-white bg-red-600 hover:bg-red-500">啟動全域挖礦</button>
+                            <button v-else @click="stopMining" class="px-6 py-2 rounded-md font-bold text-gray-300 border border-gray-600 hover:bg-gray-800">暫停節點分配</button>
                         </div>
                     </div>
 
