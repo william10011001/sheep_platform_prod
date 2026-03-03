@@ -25,7 +25,9 @@ services:
       db:
         condition: service_healthy
     environment:
-      SHEEP_DB_URL: postgresql://sheep:${POSTGRES_PASSWORD}@db:5432/sheep
+      # 徹底清空 Postgres 連線，強制所有服務讀取包含舊帳號的 SQLite
+      SHEEP_DB_URL: ""
+      SHEEP_DB_PATH: /app/data/sheep.db
       SHEEP_DB_MIGRATION: none
     volumes:
       - ${SHEEP_HOST_DATA_DIR:-../app/data}:/app/data
@@ -35,33 +37,30 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.api
-    image: sheep-platform-api
-    container_name: deploy-api-1
-    restart: always
-    # 關鍵修正 1：開放 8000 連接埠給 Nginx 存取，徹底擊殺 502
+    # 關鍵修正 1：對外開放 8000 埠號，打通 Nginx 的連線通道，徹底解決 502 錯誤
     ports:
       - "8000:8000"
     environment:
-      # 確保監聽全域地址並對齊 Nginx 設定
-      - HOST=0.0.0.0
-      - PORT=8000
-      - SHEEP_API_ROOT_PATH=/api
-      - SHEEP_GIT_SHA=${SHEEP_GIT_SHA}
-      - SHEEP_RUN_SCHEDULER=0
-      # 關鍵修正 2：強制退回使用 SQLite 舊資料庫路徑，找回所有帳號資料
-      - SHEEP_DB_PATH=/app/data/sheep.db
-      # 清空 Postgres URL 避免系統因密碼錯誤而崩潰
-      - SHEEP_DB_URL=
+      SHEEP_DB_URL: ""
+      SHEEP_DB_PATH: /app/data/sheep.db
+      SHEEP_API_ROOT_PATH: /api
+      SHEEP_GIT_SHA: ${SHEEP_GIT_SHA}
+      SHEEP_RUN_SCHEDULER: "0"
+      # 確保 FastAPI 穩定綁定全域介面
+      HOST: "0.0.0.0"
+      PORT: "8000"
+    # 關鍵修正 2：解除對 migrate 的強制等待，讓 API 瞬間啟動
     depends_on:
       db:
         condition: service_healthy
     volumes:
       - ${SHEEP_HOST_DATA_DIR:-../app/data}:/app/data
+    restart: always
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8000/healthz || exit 1"]
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
       interval: 10s
-      timeout: 5s
-      retries: 5
+      timeout: 3s
+      retries: 20
     # deploy:
     #   resources:
     #     limits:
@@ -73,15 +72,16 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile.ui
     environment:
-      SHEEP_DB_URL: postgresql://sheep:${POSTGRES_PASSWORD}@db:5432/sheep
+      SHEEP_DB_URL: ""
+      SHEEP_DB_PATH: /app/data/sheep.db
       SHEEP_GIT_SHA: ${SHEEP_GIT_SHA}
       SHEEP_RUN_SCHEDULER: "1"
       SHEEP_ASSIGN_INTERVAL_S: "15"
       SHEEP_MIN_TASKS: "2"
       SHEEP_MAX_TASKS: "6"
     depends_on:
-      migrate:
-        condition: service_completed_successfully
+      api:
+        condition: service_healthy
     volumes:
       - ${SHEEP_HOST_DATA_DIR:-../app/data}:/app/data
     restart: always
@@ -92,7 +92,8 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile.api
     environment:
-      SHEEP_DB_URL: postgresql://sheep:${POSTGRES_PASSWORD}@db:5432/sheep
+      SHEEP_DB_URL: ""
+      SHEEP_DB_PATH: /app/data/sheep.db
       SHEEP_COMPUTE_API_URL: http://api:8000
       SHEEP_COMPUTE_USER: ${SHEEP_BOOTSTRAP_ADMIN_USER}
       SHEEP_COMPUTE_PASS: ${SHEEP_BOOTSTRAP_ADMIN_PASS}
