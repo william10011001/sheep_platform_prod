@@ -680,6 +680,38 @@ def web_dashboard(request: Request, authorization: Optional[str] = Header(None))
         "recent_tasks": tasks[:10]
     }
 
+@app.get("/tasks")
+def web_get_tasks(request: Request, authorization: Optional[str] = Header(None)):
+    ctx = _auth_ctx(request, authorization)
+    uid = int(ctx["user"]["id"])
+    cycle = db.get_active_cycle()
+    cycle_id = int(cycle["id"]) if cycle else 0
+    
+    # 自動為前端用戶分配任務保底
+    try:
+        min_tasks = int(db.get_setting(db._conn(), "min_tasks_per_user", 2))
+        db.assign_tasks_for_user(uid, cycle_id=cycle_id, min_tasks=min_tasks)
+    except Exception:
+        pass
+        
+    tasks = db.list_tasks_for_user(uid, cycle_id=cycle_id)
+    run_enabled = db.get_user_run_enabled(uid)
+    return {"ok": True, "tasks": tasks, "run_enabled": bool(run_enabled)}
+
+@app.post("/tasks/start")
+def web_start_tasks(request: Request, authorization: Optional[str] = Header(None)):
+    ctx = _auth_ctx(request, authorization)
+    uid = int(ctx["user"]["id"])
+    db.set_user_run_enabled(uid, True)
+    return {"ok": True}
+
+@app.post("/tasks/stop")
+def web_stop_tasks(request: Request, authorization: Optional[str] = Header(None)):
+    ctx = _auth_ctx(request, authorization)
+    uid = int(ctx["user"]["id"])
+    db.set_user_run_enabled(uid, False)
+    return {"ok": True}
+
 
 @app.get("/flags")
 def flags(

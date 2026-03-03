@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>羊肉爐團隊 挖礦系統 (Client-Side)</title>
+    <title>羊肉爐團隊 挖礦系統</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -12,13 +12,7 @@
             theme: {
                 extend: {
                     colors: {
-                        cyber: {
-                            bg: '#050007',
-                            card: 'rgba(18, 2, 5, 0.85)',
-                            accent: '#FF003C',
-                            text: '#f8fafc',
-                            muted: '#8b949e'
-                        }
+                        cyber: { bg: '#050007', card: 'rgba(18, 2, 5, 0.85)', accent: '#FF003C' }
                     }
                 }
             }
@@ -26,57 +20,39 @@
     </script>
     <style>
         body { 
-            background-color: #050007; 
-            color: #f8fafc; 
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+            background-color: #050007; color: #f8fafc; 
+            font-family: ui-monospace, SFMono-Regular, "Segoe UI", Roboto, sans-serif; 
             background-image: radial-gradient(circle at 50% 20%, rgba(255,0,60,0.15) 0%, transparent 60%), linear-gradient(rgba(255,0,60,0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(255,0,60,0.08) 1px, transparent 1px);
             background-size: 100% 100%, 40px 40px, 40px 40px;
         }
         .cyber-card {
-            background: var(--tw-colors-cyber-card);
-            border: 1px solid rgba(255, 0, 60, 0.3);
-            border-radius: 12px;
-            backdrop-filter: blur(10px);
-            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            background: var(--tw-colors-cyber-card); border: 1px solid rgba(255, 0, 60, 0.3);
+            border-radius: 12px; backdrop-filter: blur(10px); box-shadow: 0 4px 20px rgba(0,0,0,0.5);
         }
-        .cyber-input {
-            background: rgba(0,0,0,0.4);
-            border: 1px solid rgba(255,0,60,0.3);
-            color: white;
-            transition: all 0.3s ease;
-        }
-        .cyber-input:focus {
-            outline: none;
-            border-color: #FF003C;
-            box-shadow: 0 0 0 2px rgba(255,0,60,0.2);
-        }
+        .cyber-input { background: rgba(0,0,0,0.4); border: 1px solid rgba(255,0,60,0.3); color: white; transition: all 0.3s; }
+        .cyber-input:focus { outline: none; border-color: #FF003C; box-shadow: 0 0 0 2px rgba(255,0,60,0.2); }
         .cyber-btn {
             background: linear-gradient(135deg, rgba(255,0,60,0.2) 0%, rgba(138,0,32,0.4) 100%);
-            border: 1px solid #FF003C;
-            color: #FF003C;
-            transition: all 0.3s ease;
-            text-shadow: 0 0 5px rgba(255,0,60,0.5);
+            border: 1px solid #FF003C; color: #FF003C; text-shadow: 0 0 5px rgba(255,0,60,0.5); transition: all 0.3s;
         }
-        .cyber-btn:hover {
-            background: rgba(255,0,60,0.4);
-            color: white;
-            box-shadow: 0 0 15px rgba(255,0,60,0.5);
-        }
+        .cyber-btn:hover { background: rgba(255,0,60,0.4); color: white; box-shadow: 0 0 15px rgba(255,0,60,0.5); }
+        .tab-btn { padding: 8px 16px; transition: all 0.2s; border-bottom: 2px solid transparent; }
+        .tab-active { color: #FF003C; font-weight: 800; border-bottom-color: #FF003C; }
+        .tab-inactive { color: #8b949e; }
+        .tab-inactive:hover { color: white; }
     </style>
 </head>
 <body>
     <div id="app" class="min-h-screen flex flex-col">
         <nav class="border-b border-red-900/50 bg-black/50 backdrop-blur-md sticky top-0 z-50">
-            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                <div class="flex items-center justify-between h-16">
-                    <div class="flex items-center gap-3">
-                        <div class="w-8 h-8 rounded-full border border-red-500 flex items-center justify-center text-red-500 font-bold shadow-[0_0_10px_rgba(255,0,60,0.5)]">ON</div>
-                        <span class="font-black text-xl tracking-wider text-white">Open<span class="text-[#FF003C]">Node</span></span>
-                    </div>
-                    <div class="flex items-center gap-4" v-if="user">
-                        <span class="text-sm text-gray-400">{{ user.username }} ({{ user.role }})</span>
-                        <button @click="logout" class="text-xs px-3 py-1 border border-gray-600 rounded hover:bg-gray-800 transition">登出</button>
-                    </div>
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between h-16">
+                <div class="flex items-center gap-3">
+                    <div class="w-8 h-8 rounded-full border border-red-500 flex items-center justify-center text-red-500 font-bold shadow-[0_0_10px_rgba(255,0,60,0.5)]">ON</div>
+                    <span class="font-black text-xl tracking-wider text-white">Open<span class="text-[#FF003C]">Node</span></span>
+                </div>
+                <div class="flex items-center gap-4" v-if="user">
+                    <span class="text-sm text-gray-400">{{ user.username }}</span>
+                    <button @click="logout" class="text-xs px-3 py-1 border border-gray-600 rounded hover:bg-gray-800">登出</button>
                 </div>
             </div>
         </nav>
@@ -85,76 +61,90 @@
             <div v-if="!user && !isLoading" class="max-w-md mx-auto mt-20 cyber-card p-8">
                 <h2 class="text-2xl font-black mb-6 text-white">{{ isLoginMode ? '系統登入' : '節點註冊' }}</h2>
                 <form @submit.prevent="handleAuth" class="space-y-4">
-                    <div>
-                        <label class="block text-xs font-bold text-gray-400 mb-1">終端識別碼 (帳號)</label>
-                        <input v-model="authForm.username" type="text" required class="cyber-input w-full px-4 py-2 rounded-md">
-                    </div>
-                    <div>
-                        <label class="block text-xs font-bold text-gray-400 mb-1">存取金鑰 (密碼)</label>
-                        <input v-model="authForm.password" type="password" required class="cyber-input w-full px-4 py-2 rounded-md">
-                    </div>
-                    <div v-if="!isLoginMode" class="flex items-center mt-2">
-                        <input type="checkbox" v-model="authForm.tos_ok" id="tos" class="mr-2">
-                        <label for="tos" class="text-xs text-gray-400">我已閱讀並同意平台服務條款與分潤規則</label>
-                    </div>
-                    <div v-if="errorMsg" class="text-red-500 text-sm font-bold bg-red-500/10 p-2 rounded">{{ errorMsg }}</div>
-                    <button type="submit" class="cyber-btn w-full py-2.5 rounded-md font-bold tracking-wider mt-4">
-                        {{ isLoginMode ? '授權連線' : '建立節點' }}
-                    </button>
+                    <div><input v-model="authForm.username" type="text" placeholder="終端識別碼 (帳號)" required class="cyber-input w-full px-4 py-2 rounded-md"></div>
+                    <div><input v-model="authForm.password" type="password" placeholder="存取金鑰 (密碼)" required class="cyber-input w-full px-4 py-2 rounded-md"></div>
+                    <div v-if="errorMsg" class="text-red-500 text-sm font-bold">{{ errorMsg }}</div>
+                    <button type="submit" class="cyber-btn w-full py-2.5 rounded-md font-bold mt-4">{{ isLoginMode ? '授權連線' : '建立節點' }}</button>
                 </form>
-                <div class="mt-6 text-center">
-                    <button @click="isLoginMode = !isLoginMode; errorMsg=''" class="text-xs text-gray-400 hover:text-white transition">
-                        {{ isLoginMode ? '尚未註冊？點此申請節點' : '已有帳號？返回登入' }}
-                    </button>
-                </div>
             </div>
 
             <div v-else-if="user" class="space-y-6">
-                <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
-                    <div class="cyber-card p-4 flex flex-col justify-center items-center">
-                        <div class="text-xs text-gray-400 font-bold mb-1">任務總數</div>
-                        <div class="text-3xl font-black text-white">{{ dashData.tasks_count || 0 }}</div>
+                <div class="flex gap-2 border-b border-white/10 mb-6 overflow-x-auto">
+                    <button @click="currentTab = 'tasks'" :class="currentTab === 'tasks' ? 'tab-active' : 'tab-inactive'" class="tab-btn">⛏️ 挖礦任務</button>
+                    <button @click="currentTab = 'dashboard'" :class="currentTab === 'dashboard' ? 'tab-active' : 'tab-inactive'" class="tab-btn">📊 總覽</button>
+                    <button @click="currentTab = 'leaderboard'" :class="currentTab === 'leaderboard' ? 'tab-active' : 'tab-inactive'" class="tab-btn">🏆 排行榜</button>
+                </div>
+
+                <div v-if="currentTab === 'tasks'" class="space-y-6 animate-fade-in">
+                    <div class="cyber-card p-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                        <div>
+                            <h3 class="text-xl font-bold text-white mb-2">算力節點控制面板</h3>
+                            <p class="text-sm text-gray-400">目前節點狀態: 
+                                <span :class="tasksData.run_enabled ? 'text-emerald-400 font-bold' : 'text-amber-400 font-bold'">
+                                    {{ tasksData.run_enabled ? '🟢 授權運算中 (Running)' : '🟡 待命靜置 (Idle)' }}
+                                </span>
+                            </p>
+                        </div>
+                        <div class="flex gap-3">
+                            <button v-if="!tasksData.run_enabled" @click="startMining" class="cyber-btn px-6 py-2 rounded-md font-bold text-white bg-red-600 hover:bg-red-500">▶️ 啟動全域挖礦</button>
+                            <button v-else @click="stopMining" class="px-6 py-2 rounded-md font-bold text-gray-300 border border-gray-600 hover:bg-gray-800">⏸️ 暫停節點分配</button>
+                        </div>
                     </div>
-                    <div class="cyber-card p-4 flex flex-col justify-center items-center">
-                        <div class="text-xs text-gray-400 font-bold mb-1">活躍策略</div>
-                        <div class="text-3xl font-black text-emerald-400">{{ dashData.strategies_active || 0 }}</div>
-                    </div>
-                    <div class="cyber-card p-4 flex flex-col justify-center items-center">
-                        <div class="text-xs text-gray-400 font-bold mb-1">待發放結算</div>
-                        <div class="text-3xl font-black text-amber-400">{{ dashData.payouts_unpaid || 0 }}</div>
-                    </div>
-                    <div class="cyber-card p-4 flex flex-col justify-center items-center">
-                        <div class="text-xs text-gray-400 font-bold mb-1">系統延遲</div>
-                        <div class="text-3xl font-black text-blue-400">{{ pingMs }} <span class="text-sm">ms</span></div>
+
+                    <div class="cyber-card p-6">
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="text-lg font-bold text-white">派發任務列表</h3>
+                            <button @click="loadTasks" class="text-xs text-gray-400 hover:text-white border border-gray-600 px-2 py-1 rounded">↻ 刷新</button>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left border-collapse whitespace-nowrap">
+                                <thead>
+                                    <tr class="border-b border-white/10 text-gray-400 text-sm">
+                                        <th class="py-3 px-4">任務ID</th>
+                                        <th class="py-3 px-4">策略池</th>
+                                        <th class="py-3 px-4">狀態</th>
+                                        <th class="py-3 px-4">階段</th>
+                                        <th class="py-3 px-4 text-right">運算進度</th>
+                                        <th class="py-3 px-4 text-right">最佳分數</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="t in tasksData.tasks" :key="t.id" class="border-b border-white/5 hover:bg-white/5 text-sm">
+                                        <td class="py-3 px-4 text-gray-300">#{{ t.id }}</td>
+                                        <td class="py-3 px-4 text-emerald-400">{{ t.pool_name || t.family }}</td>
+                                        <td class="py-3 px-4"><span class="px-2 py-1 rounded text-xs font-bold" :class="getStatusClass(t.status)">{{ getStatusText(t.status) }}</span></td>
+                                        <td class="py-3 px-4 text-gray-400">{{ getPhaseText(t) }}</td>
+                                        <td class="py-3 px-4 text-right text-gray-300 font-mono">{{ getProgress(t) }}</td>
+                                        <td class="py-3 px-4 text-right text-blue-400 font-mono font-bold">{{ getScore(t) }}</td>
+                                    </tr>
+                                    <tr v-if="!tasksData.tasks || tasksData.tasks.length === 0">
+                                        <td colspan="6" class="text-center py-8 text-gray-500">目前尚無分配任務...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
 
-                <div class="cyber-card p-6">
-                    <h3 class="text-xl font-bold text-white mb-4 flex items-center gap-2">
-                        <div class="w-2 h-6 bg-red-500 rounded-full"></div>
-                        全域算力排行榜
-                    </h3>
-                    <div class="overflow-x-auto">
-                        <table class="w-full text-left border-collapse">
-                            <thead>
-                                <tr class="border-b border-white/10 text-gray-400 text-sm">
-                                    <th class="py-3 px-4 font-bold">排名</th>
-                                    <th class="py-3 px-4 font-bold">節點代號</th>
-                                    <th class="py-3 px-4 font-bold text-right">貢獻組合數</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <tr v-for="(item, idx) in leaderboard.combos" :key="idx" class="border-b border-white/5 hover:bg-white/5 transition">
-                                    <td class="py-3 px-4 text-amber-400 font-black">#{{ idx + 1 }}</td>
-                                    <td class="py-3 px-4 text-gray-200">{{ item.nickname || item.username }}</td>
-                                    <td class="py-3 px-4 text-right text-emerald-400 font-mono">{{ item.total_done.toLocaleString() }}</td>
-                                </tr>
-                                <tr v-if="!leaderboard.combos || leaderboard.combos.length === 0">
-                                    <td colspan="3" class="text-center py-8 text-gray-500">資料同步中或尚無紀錄...</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
+                <div v-if="currentTab === 'dashboard'" class="grid grid-cols-1 md:grid-cols-4 gap-4 animate-fade-in">
+                    <div class="cyber-card p-4 flex flex-col justify-center items-center"><div class="text-xs text-gray-400 mb-1">任務總數</div><div class="text-3xl font-black text-white">{{ dashData.tasks_count || 0 }}</div></div>
+                    <div class="cyber-card p-4 flex flex-col justify-center items-center"><div class="text-xs text-gray-400 mb-1">活躍策略</div><div class="text-3xl font-black text-emerald-400">{{ dashData.strategies_active || 0 }}</div></div>
+                    <div class="cyber-card p-4 flex flex-col justify-center items-center"><div class="text-xs text-gray-400 mb-1">待發放結算</div><div class="text-3xl font-black text-amber-400">{{ dashData.payouts_unpaid || 0 }}</div></div>
+                    <div class="cyber-card p-4 flex flex-col justify-center items-center"><div class="text-xs text-gray-400 mb-1">系統延遲</div><div class="text-3xl font-black text-blue-400">{{ pingMs }} <span class="text-sm">ms</span></div></div>
+                </div>
+
+                <div v-if="currentTab === 'leaderboard'" class="cyber-card p-6 animate-fade-in">
+                    <h3 class="text-xl font-bold text-white mb-4">全域算力排行榜 (月榜)</h3>
+                    <table class="w-full text-left border-collapse">
+                        <thead><tr class="border-b border-white/10 text-gray-400 text-sm"><th class="py-3 px-4">排名</th><th class="py-3 px-4">節點代號</th><th class="py-3 px-4 text-right">貢獻組合數</th></tr></thead>
+                        <tbody>
+                            <tr v-for="(item, idx) in leaderboard.combos" :key="idx" class="border-b border-white/5 hover:bg-white/5">
+                                <td class="py-3 px-4 text-amber-400 font-black">#{{ idx + 1 }}</td>
+                                <td class="py-3 px-4 text-gray-200">{{ item.nickname || item.username }}</td>
+                                <td class="py-3 px-4 text-right text-emerald-400 font-mono">{{ item.total_done.toLocaleString() }}</td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
             
@@ -165,8 +155,7 @@
     </div>
 
     <script>
-        const { createApp, ref, reactive, onMounted } = Vue;
-        // 將此處替換為你實際部署的後端 API 網址，若同源則留空。
+        const { createApp, ref, reactive, onMounted, onUnmounted } = Vue;
         const API_BASE = '/api'; 
 
         createApp({
@@ -174,27 +163,24 @@
                 const user = ref(null);
                 const isLoading = ref(true);
                 const isLoginMode = ref(true);
+                const currentTab = ref('tasks');
                 const errorMsg = ref('');
                 const pingMs = ref(0);
+                let pollTimer = null;
                 
-                const authForm = reactive({ username: '', password: '', tos_ok: false });
+                const authForm = reactive({ username: '', password: '' });
                 const dashData = reactive({ tasks_count: 0, strategies_active: 0, payouts_unpaid: 0 });
+                const tasksData = reactive({ tasks: [], run_enabled: false });
                 const leaderboard = reactive({ combos: [] });
 
-                // 核心：攜帶 Token 請求
                 const fetchApi = async (endpoint, options = {}) => {
                     const token = localStorage.getItem('sheep_token');
                     const headers = { 'Content-Type': 'application/json' };
                     if (token) headers['Authorization'] = `Bearer ${token}`;
-                    
                     const start = performance.now();
                     const res = await fetch(`${API_BASE}${endpoint}`, { ...options, headers });
                     pingMs.value = Math.round(performance.now() - start);
-                    
-                    if (!res.ok) {
-                        const err = await res.json().catch(() => ({}));
-                        throw new Error(err.detail || `HTTP Error ${res.status}`);
-                    }
+                    if (!res.ok) throw new Error(await res.text());
                     return res.json();
                 };
 
@@ -202,75 +188,83 @@
                     try {
                         if (!localStorage.getItem('sheep_token')) throw new Error('No token');
                         user.value = await fetchApi('/user/me');
-                        await loadDashboard();
-                    } catch (e) {
-                        user.value = null;
-                        localStorage.removeItem('sheep_token');
-                    } finally {
-                        isLoading.value = false;
-                    }
+                        await loadAllData();
+                    } catch (e) { user.value = null; localStorage.removeItem('sheep_token'); } 
+                    finally { isLoading.value = false; }
                 };
 
-                const loadDashboard = async () => {
+                const loadAllData = async () => {
                     try {
-                        const [dashRes, lbRes] = await Promise.all([
-                            fetchApi('/dashboard'),
-                            fetchApi('/leaderboard?period_hours=720')
+                        const [dashRes, lbRes, tRes] = await Promise.all([
+                            fetchApi('/dashboard'), fetchApi('/leaderboard?period_hours=720'), fetchApi('/tasks')
                         ]);
                         Object.assign(dashData, dashRes);
                         if (lbRes.data) leaderboard.combos = lbRes.data.combos || [];
-                    } catch (e) {
-                        console.error('Failed to load dashboard data', e);
-                    }
+                        tasksData.tasks = tRes.tasks || [];
+                        tasksData.run_enabled = tRes.run_enabled;
+                    } catch (e) { console.error('Failed to load data', e); }
+                };
+
+                const loadTasks = async () => {
+                    if(!user.value) return;
+                    try {
+                        const res = await fetchApi('/tasks');
+                        tasksData.tasks = res.tasks || [];
+                        tasksData.run_enabled = res.run_enabled;
+                    } catch(e) {}
                 };
 
                 const handleAuth = async () => {
-                    errorMsg.value = '';
+                    errorMsg.value = ''; isLoading.value = true;
                     try {
-                        if (isLoginMode.value) {
-                            // 使用原有的 /token 端點
-                            const res = await fetch('/api/token', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ username: authForm.username, password: authForm.password, ttl_seconds: 86400 * 30 })
-                            });
-                            if (!res.ok) throw new Error('帳號或密碼錯誤');
-                            const data = await res.json();
+                        const endpoint = isLoginMode.value ? '/api/token' : '/api/auth/register';
+                        const body = isLoginMode.value 
+                            ? { username: authForm.username, password: authForm.password, ttl_seconds: 86400 * 30 }
+                            : { username: authForm.username, password: authForm.password, tos_ok: true };
+                            
+                        const res = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+                        if (!res.ok) throw new Error('帳號或密碼錯誤');
+                        
+                        if(!isLoginMode.value) {
+                            const lRes = await fetch('/api/token', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: authForm.username, password: authForm.password, ttl_seconds: 86400 * 30 }) });
+                            const data = await lRes.json();
                             localStorage.setItem('sheep_token', data.token);
                         } else {
-                            // 使用我們新增的註冊 API
-                            await fetchApi('/auth/register', {
-                                method: 'POST',
-                                body: JSON.stringify({ username: authForm.username, password: authForm.password, tos_ok: authForm.tos_ok })
-                            });
-                            // 註冊後自動登入
-                            const res = await fetch('/api/token', {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ username: authForm.username, password: authForm.password, ttl_seconds: 86400 * 30 })
-                            });
                             const data = await res.json();
                             localStorage.setItem('sheep_token', data.token);
                         }
-                        isLoading.value = true;
                         await checkAuth();
-                    } catch (e) {
-                        errorMsg.value = e.message;
-                    }
+                    } catch (e) { errorMsg.value = e.message; isLoading.value = false; }
                 };
 
-                const logout = () => {
-                    localStorage.removeItem('sheep_token');
-                    user.value = null;
+                const startMining = async () => {
+                    try { await fetchApi('/tasks/start', { method: 'POST' }); await loadTasks(); } catch(e) { alert(e.message); }
                 };
+                const stopMining = async () => {
+                    try { await fetchApi('/tasks/stop', { method: 'POST' }); await loadTasks(); } catch(e) { alert(e.message); }
+                };
+
+                const logout = () => { localStorage.removeItem('sheep_token'); user.value = null; clearInterval(pollTimer); };
+
+                // Helpers
+                const getStatusText = (s) => ({'assigned':'配置完畢','queued':'排程等待','running':'演算執行','completed':'程序完成','error':'程序異常'})[s] || s;
+                const getStatusClass = (s) => {
+                    if(s==='running') return 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
+                    if(s==='completed') return 'bg-gray-500/20 text-gray-400 border border-gray-500/30';
+                    if(s==='error') return 'bg-red-500/20 text-red-400 border border-red-500/30';
+                    return 'bg-amber-500/20 text-amber-400 border border-amber-500/30';
+                };
+                const getPhaseText = (t) => { try { return JSON.parse(t.progress_json||'{}').phase || 'idle'; } catch(e){return 'idle';} };
+                const getProgress = (t) => { try { const p = JSON.parse(t.progress_json||'{}'); return p.combos_total ? `${p.combos_done} / ${p.combos_total}` : '-'; } catch(e){return '-';} };
+                const getScore = (t) => { try { const p = JSON.parse(t.progress_json||'{}'); return p.best_any_score ? Number(p.best_any_score).toFixed(6) : '-'; } catch(e){return '-';} };
 
                 onMounted(() => {
                     checkAuth();
-                    // 定期刷新數據
-                    setInterval(() => { if(user.value) loadDashboard(); }, 30000);
+                    pollTimer = setInterval(() => { if(currentTab.value === 'tasks') loadTasks(); }, 3000);
                 });
+                onUnmounted(() => { clearInterval(pollTimer); });
 
-                return { user, isLoading, isLoginMode, authForm, errorMsg, handleAuth, logout, dashData, leaderboard, pingMs };
+                return { user, isLoading, isLoginMode, currentTab, authForm, errorMsg, handleAuth, logout, dashData, tasksData, leaderboard, pingMs, startMining, stopMining, getStatusText, getStatusClass, getPhaseText, getProgress, getScore, loadTasks };
             }
         }).mount('#app');
     </script>
