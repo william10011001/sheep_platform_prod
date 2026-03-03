@@ -115,7 +115,7 @@
                                         <td class="py-3 px-4"><span class="px-2 py-1 rounded text-xs font-bold" :class="getStatusClass(t.status)">{{ getStatusText(t.status) }}</span></td>
                                         <td class="py-3 px-4 text-gray-400">{{ getPhaseText(t) }}</td>
                                         <td class="py-3 px-4 text-right text-gray-300 font-mono">{{ getProgress(t) }}</td>
-                                        <td class="py-3 px-4 text-right text-blue-400 font-mono font-bold">{{ getScore(t) }}</td>
+                                        <td class="py-3 px-4 text-right text-blue-400 font-light tabular-nums tracking-tight text-[15px]" style="font-family: 'DIN Pro', 'Roboto', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;">{{ getScore(t) }}</td>
                                     </tr>
                                     <tr v-if="!tasksData.tasks || tasksData.tasks.length === 0">
                                         <td colspan="6" class="text-center py-8 text-gray-500">目前尚無分配任務...</td>
