@@ -3216,6 +3216,7 @@ def claim_next_oos_task(user_id: int, worker_id: str, allow_cross_user: bool = F
     conn = _conn()
     try:
         now = _now_iso()
+        # [極致修復] 改用安全 LIKE，對抗 JSON 的空格差異
         query = "SELECT id, progress_json FROM mining_tasks WHERE status = 'completed' AND progress_json LIKE '%\"oos_status\"%queued%'"
         
         rows = conn.execute(query).fetchall()
@@ -3228,7 +3229,7 @@ def claim_next_oos_task(user_id: int, worker_id: str, allow_cross_user: bool = F
                     prog["oos_worker"] = worker_id
                     prog["oos_start_ts"] = now
                     
-                    # [極致修復] 移除 AND progress_json = ? 這種脆弱的字串比對，直接用 ID 霸道覆寫
+                    # [極致修復] 移除 AND progress_json = ?，直接霸道覆寫，防止併發鎖死
                     cur = conn.execute(
                         "UPDATE mining_tasks SET progress_json = ?, updated_at = ? WHERE id = ?", 
                         (json.dumps(prog, ensure_ascii=False), now, tid)
@@ -3242,7 +3243,6 @@ def claim_next_oos_task(user_id: int, worker_id: str, allow_cross_user: bool = F
                         cand = conn.execute("SELECT * FROM candidates WHERE task_id = ? ORDER BY score DESC LIMIT 1", (tid,)).fetchone()
                         if cand:
                             t["candidate"] = dict(cand)
-                            # [極致修復] 確保 JSON 安全解析，避免二次崩潰
                             pj = t["candidate"].get("params_json")
                             if isinstance(pj, str):
                                 t["candidate"]["params_json"] = json.loads(pj)
@@ -3260,7 +3260,6 @@ def finish_oos_task(task_id: int, user_id: int, worker_id: str, passed: bool, me
         row = conn.execute("SELECT id, progress_json, user_id, pool_id FROM mining_tasks WHERE id = ?", (task_id,)).fetchone()
         if not row: return False
         
-        # OOS 全網域皆可幫忙驗證，拔除不必要的 owner 鎖定
         prog = json.loads(row["progress_json"] or "{}")
         
         prog["oos_status"] = "passed" if passed else "failed"
@@ -3269,7 +3268,6 @@ def finish_oos_task(task_id: int, user_id: int, worker_id: str, passed: bool, me
         
         conn.execute("UPDATE mining_tasks SET progress_json = ?, updated_at = ? WHERE id = ?", (json.dumps(prog, ensure_ascii=False), _now_iso(), task_id))
         
-        # OOS 通過！自動升級為實盤策略
         if passed:
             cand = conn.execute("SELECT id, params_json FROM candidates WHERE task_id = ? ORDER BY score DESC LIMIT 1", (task_id,)).fetchone()
             if cand:
