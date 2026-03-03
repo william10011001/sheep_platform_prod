@@ -3211,6 +3211,46 @@ def set_user_run_enabled(user_id: int, enabled: bool) -> None:
         conn.close()
 
 
+def get_all_candidates_detailed(limit: int = 1000) -> list:
+    """專家級：撈取全域策略與關聯的 OOS 績效，供 Web Excel 總表使用"""
+    conn = _conn()
+    try:
+        query = """
+        SELECT c.id as candidate_id, c.score, c.params_json, c.metrics_json, c.created_at, c.is_submitted,
+               u.username, u.nickname, u.role,
+               p.name as pool_name, p.symbol, p.timeframe_min,
+               t.progress_json as task_progress
+        FROM candidates c
+        LEFT JOIN users u ON c.user_id = u.id
+        LEFT JOIN factor_pools p ON c.pool_id = p.id
+        LEFT JOIN mining_tasks t ON c.task_id = t.id
+        ORDER BY c.score DESC
+        LIMIT ?
+        """
+        rows = conn.execute(query, (limit,)).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            try: d["params"] = json.loads(d.get("params_json") or "{}")
+            except Exception: d["params"] = {}
+            try: d["metrics"] = json.loads(d.get("metrics_json") or "{}")
+            except Exception: d["metrics"] = {}
+            try:
+                tprog = json.loads(d.get("task_progress") or "{}")
+                d["oos_status"] = tprog.get("oos_status", "")
+                d["oos_metrics"] = tprog.get("oos_metrics", {})
+            except Exception:
+                d["oos_status"] = ""
+                d["oos_metrics"] = {}
+            out.append(d)
+        return out
+    except Exception as e:
+        import traceback
+        print(f"[DB ERROR] get_all_candidates_detailed failed: {e}\n{traceback.format_exc()}")
+        return []
+    finally:
+        conn.close()
+
 def claim_next_oos_task(user_id: int, worker_id: str, allow_cross_user: bool = False) -> Optional[dict]:
     """讓節點 (Worker) 領取正在排隊等待 OOS 審核的任務"""
     conn = _conn()

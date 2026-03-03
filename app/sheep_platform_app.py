@@ -8183,6 +8183,136 @@ def _render_user_hud(user: Dict[str, Any]) -> None:
 
 
 
+def _page_global_monitor(user: Dict[str, Any]) -> None:
+    """專家級 Web Excel 主控台，支援 KOL 權限分級與即時熱重載"""
+    try:
+        role = str(user.get("role") or "user")
+        is_admin = (role == "admin")
+        
+        st.markdown(
+            """
+            <div style="background: linear-gradient(135deg, rgba(31, 111, 235, 0.1) 0%, rgba(15, 23, 42, 0.9) 100%); 
+                        border: 1px solid rgba(31, 111, 235, 0.3); 
+                        border-radius: 12px; padding: 20px; margin-bottom: 24px;
+                        box-shadow: 0 4px 20px rgba(0,0,0,0.3);">
+                <h3 style="margin-top:0; color:#58a6ff; display:flex; align-items:center;">全域監控中心 (Web Excel)</h3>
+                <div style="color:#8b949e; font-size:14px; margin-top:8px;">提供類似 Excel 的高併發試算表介面，直接讀寫資料庫，所有設定修改後皆可瞬間套用至全系統運算節點。</div>
+            </div>
+            """, unsafe_allow_html=True
+        )
+        
+        tabs = st.tabs(["全網用戶策略與OOS績效", "系統參數 (手續費/門檻)"])
+        
+        with tabs[0]:
+            st.markdown("#### 用戶提交參數與績效總表")
+            if not is_admin:
+                st.info("KOL 權限：您可以檢視所有用戶的績效，但為保護策略智慧財產權，核心參數已自動隱藏。")
+            else:
+                st.info("Admin 權限：您可以完整檢視所有用戶的參數與 OOS 驗證結果。")
+                
+            cands = db.get_all_candidates_detailed(limit=500)
+            if not cands:
+                st.markdown('<div class="small-muted">目前沒有任何候選數據。</div>', unsafe_allow_html=True)
+            else:
+                rows = []
+                for c in cands:
+                    p_json = c.get("params", {})
+                    # [權限分級防護] KOL 隱藏詳細參數
+                    if not is_admin:
+                        p_display = "【權限不足，核心參數已隱藏】"
+                    else:
+                        p_display = json.dumps(p_json, ensure_ascii=False)
+                    
+                    m = c.get("metrics", {})
+                    om = c.get("oos_metrics", {})
+                    
+                    rows.append({
+                        "ID": c["candidate_id"],
+                        "用戶": str(c.get("username", "")),
+                        "策略池": str(c.get("pool_name", "")),
+                        "總報酬(%)": round(float(m.get("total_return_pct", 0)), 2),
+                        "最大回撤(%)": round(float(m.get("max_drawdown_pct", 0)), 2),
+                        "夏普值": round(float(m.get("sharpe", 0)), 4),
+                        "OOS狀態": str(c.get("oos_status") or "未測"),
+                        "OOS報酬(%)": round(float(om.get("total_return_pct", 0)), 2) if om and isinstance(om, dict) else None,
+                        "OOS夏普": round(float(om.get("sharpe", 0)), 4) if om and isinstance(om, dict) else None,
+                        "核心參數": p_display,
+                    })
+                
+                df = pd.DataFrame(rows)
+                # 使用 st.data_editor 呈現唯讀的 Excel 般體驗 (為防竄改，歷史資料區僅供觀看、排序與複製)
+                st.data_editor(
+                    df,
+                    use_container_width=True,
+                    num_rows="fixed",
+                    disabled=True, 
+                    hide_index=True,
+                    key="cand_editor_view"
+                )
+                
+        with tabs[1]:
+            st.markdown("#### 動態參數與 OOS 門檻控制")
+            if not is_admin:
+                st.error("您目前的權限 (KOL) 僅供檢視，無權修改系統核心參數。")
+            else:
+                st.success("直接在下方表格內雙擊修改「當前數值」，點擊「同步儲存」即可熱重載生效！")
+                
+            conn = db._conn()
+            try:
+                # 讀取當前資料庫內的設定
+                current_fee = float(db.get_setting(conn, "default_fee_side", 0.0002))
+                current_slip = float(db.get_setting(conn, "default_slippage", 0.0))
+                current_oos_sh = float(db.get_setting(conn, "oos_min_sharpe", 0.3))
+                current_oos_ret = float(db.get_setting(conn, "oos_min_return", 0.0))
+                current_oos_tr = float(db.get_setting(conn, "oos_min_trades", 5.0))
+            finally:
+                conn.close()
+                
+            settings_data = [
+                {"設定鍵值": "default_fee_side", "當前數值": current_fee, "說明": "單邊手續費率 (預設 0.0002 代表萬分之二)"},
+                {"設定鍵值": "default_slippage", "當前數值": current_slip, "說明": "滑點設定 (預設 0.0 代表無滑點)"},
+                {"設定鍵值": "oos_min_sharpe", "當前數值": current_oos_sh, "說明": "OOS 檢測：最低通過夏普值"},
+                {"設定鍵值": "oos_min_return", "當前數值": current_oos_ret, "說明": "OOS 檢測：最低總報酬(%)"},
+                {"設定鍵值": "oos_min_trades", "當前數值": current_oos_tr, "說明": "OOS 檢測：最少交易次數"},
+            ]
+            
+            df_set = pd.DataFrame(settings_data)
+            
+            # 若為 KOL 則全鎖定，若為 Admin 則開放修改「當前數值」欄位
+            disabled_cols = ["設定鍵值", "當前數值", "說明"] if not is_admin else ["設定鍵值", "說明"]
+            
+            edited_set = st.data_editor(
+                df_set,
+                use_container_width=True,
+                disabled=disabled_cols,
+                hide_index=True,
+                key="settings_editor"
+            )
+            
+            if is_admin and st.button("同步儲存至伺服器", type="primary"):
+                conn = db._conn()
+                try:
+                    for idx, row in edited_set.iterrows():
+                        key = row["設定鍵值"]
+                        val = float(row["當前數值"])
+                        db.set_setting(conn, key, val)
+                    conn.commit()
+                    db.write_audit_log(int(user["id"]), "update_global_settings_via_excel", {})
+                    st.success("參數已更新！算力節點將在下一次運算自動套用最新標準。")
+                    time.sleep(1)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"更新失敗: {e}")
+                    import traceback
+                    st.code(traceback.format_exc(), language="python")
+                finally:
+                    conn.close()
+    except Exception as page_err:
+        st.error("全域監控頁面發生錯誤，已觸發除錯防護。")
+        import traceback
+        st.code(traceback.format_exc(), language="python")
+
+
 def main() -> None:
     _perf_init()
     _perf_hud_bootstrap_once()
@@ -8216,7 +8346,11 @@ def main() -> None:
     role = str(user.get("role") or "user")
 
     # [新增] 主頁分離與排行榜頁面入口
-    pages = ["主頁", "控制台", "排行榜", "任務", "提交", "結算", "新手教學"] + (["管理"] if role == "admin" else [])
+    pages = ["主頁", "控制台", "排行榜", "任務", "提交", "結算", "新手教學"]
+    if role in ["admin", "kol"]:
+        pages.append("全域監控")
+    if role == "admin":
+        pages.append("管理")
 
     # [新增] 強制重新載入(動畫播放前)回到主頁，避免停留在其他頁面
     if "_sheep_fresh_load" not in st.session_state:
@@ -8323,6 +8457,8 @@ def main() -> None:
             _page_rewards(user)
         elif page == "管理" and role == "admin":
             _page_admin(user, job_mgr)
+        elif page == "全域監控" and role in ("admin", "kol"):
+            _page_global_monitor(user)
     except Exception as route_err:
         import uuid
         from datetime import datetime, timezone
