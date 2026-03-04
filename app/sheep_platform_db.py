@@ -1521,18 +1521,20 @@ def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, m
                             part_idx = random.randint(0, max(0, int(p["num_partitions"]) - 1))
                             # [專家級修復] 徹底避免同一個 user 在同一個 pool/cycle 反覆拿到同一個分割
                             # 移除 status 過濾，只要派發過（包含 completed 或 error）就不再派發
-                            conn.execute(
-                                """
-                                INSERT INTO mining_tasks (user_id, pool_id, cycle_id, partition_idx, num_partitions, status, created_at, updated_at)
-                                SELECT ?, ?, ?, ?, ?, 'assigned', ?, ?
-                                WHERE NOT EXISTS (
-                                    SELECT 1 FROM mining_tasks
-                                    WHERE user_id = ? AND pool_id = ? AND cycle_id = ? AND partition_idx = ?
+                            # [專家級修復] 解決 PostgreSQL 語法錯誤 (SELECT without FROM) 並保持 SQLite 相容
+                            exists = conn.execute(
+                                "SELECT 1 FROM mining_tasks WHERE user_id = ? AND pool_id = ? AND cycle_id = ? AND partition_idx = ?", 
+                                (user_id, int(p["id"]), cycle_id, int(part_idx))
+                            ).fetchone()
+                            
+                            if not exists:
+                                conn.execute(
+                                    """
+                                    INSERT INTO mining_tasks (user_id, pool_id, cycle_id, partition_idx, num_partitions, status, created_at, updated_at)
+                                    VALUES (?, ?, ?, ?, ?, 'assigned', ?, ?)
+                                    """,
+                                    (user_id, int(p["id"]), cycle_id, int(part_idx), int(p["num_partitions"]), _now_iso(), _now_iso())
                                 )
-                                """,
-                                (user_id, int(p["id"]), cycle_id, int(part_idx), int(p["num_partitions"]), _now_iso(), _now_iso(),
-                                 user_id, int(p["id"]), cycle_id, int(part_idx)),
-                            )
                     conn.commit()
                 break
             finally:

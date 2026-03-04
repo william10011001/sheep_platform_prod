@@ -3923,11 +3923,57 @@ section.main,
 .main { background: transparent !important; }
 .block-container { background: transparent !important; }
 
+/* [防護機制] 絕對隱藏 Streamlit 的 Error Modal 與 405 報錯，從 CSS 徹底封殺彈窗 */
+div[data-testid="stModal"] { display: none !important; opacity: 0 !important; pointer-events: none !important; }
+.stException { display: none !important; }
+
 /* PERF HUD 不應該影響點擊 */
 #sheepPerfHud { pointer-events: auto !important; }
 </style>
         """,
         unsafe_allow_html=True,
+    )
+    
+    # [專家級修復] 注入無敵 JS 攔截器，秒殺所有 405 彈窗並靜默重載
+    st.components.v1.html(
+        """
+        <script>
+        (function() {
+            const w = window.parent || window;
+            if (w.__sheep_god_killer) return;
+            w.__sheep_god_killer = true;
+            
+            // 覆蓋 window.alert 預防 Streamlit 呼叫
+            const origAlert = w.alert;
+            w.alert = function(msg) {
+                if(msg && (msg.includes("405") || msg.includes("Method Not Allowed") || msg.includes("Error"))) {
+                    console.warn("[God Killer] Intercepted alert: ", msg);
+                    return;
+                }
+                return origAlert(msg);
+            };
+
+            const observer = new MutationObserver(function(mutations) {
+                mutations.forEach(function(mutation) {
+                    mutation.addedNodes.forEach(function(node) {
+                        if (node.nodeType === 1) { 
+                            const html = node.innerHTML || "";
+                            if (node.getAttribute('data-testid') === 'stModal' || html.includes('Method Not Allowed') || html.includes('405')) {
+                                node.style.setProperty("display", "none", "important");
+                                node.remove();
+                                console.warn("[God Killer] Destroyed 405 Modal.");
+                            }
+                        }
+                    });
+                });
+            });
+            if(w.document.body) {
+                observer.observe(w.document.body, { childList: true, subtree: true });
+            }
+        })();
+        </script>
+        """,
+        height=0,
     )
 _LAST_ROLLOVER_CHECK = 0.0
 

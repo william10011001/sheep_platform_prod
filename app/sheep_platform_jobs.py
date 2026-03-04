@@ -298,12 +298,13 @@ class JobManager:
         try:
             import backtest_panel2
         except Exception as e:
+            import sys
             print(f"[CRITICAL] backtest_panel2 import failed: {e}", file=sys.stderr)
             return
 
         conn = db._conn()
         try:
-            # [專家級修復] 僅撈取狀態，嚴格禁止在此迴圈中讀寫龐大的 progress_json
+            # [專家級修復] 僅撈取狀態，嚴格禁止在此迴圈中讀寫龐大的 progress_json，徹底消滅 Write Storm
             rows = conn.execute(
                 """
                 SELECT t.id, t.user_id, t.status
@@ -352,22 +353,22 @@ class JobManager:
         for uid, tids in to_enqueue.items():
             self.enqueue_many(int(uid), tids, backtest_panel2)
 
-        # 2. [專家級修復] 批次更新 assigned -> queued，徹底消除寫入風暴 (Write Storm)
+        # 2. [專家級修復] 批次更新 assigned -> queued，將數千次 I/O 壓縮成極少數批次，徹底消除資料庫鎖死
         if to_mark_queued:
-            conn = db._conn()
+            conn2 = db._conn()
             try:
                 now = db.utc_now_iso()
                 chunk_size = 100
                 for i in range(0, len(to_mark_queued), chunk_size):
                     chunk = to_mark_queued[i:i+chunk_size]
                     ph = ",".join(["?"] * len(chunk))
-                    conn.execute(f"UPDATE mining_tasks SET status='queued', updated_at=? WHERE id IN ({ph})", [now] + chunk)
-                conn.commit()
+                    conn2.execute(f"UPDATE mining_tasks SET status='queued', updated_at=? WHERE id IN ({ph})", [now] + chunk)
+                conn2.commit()
             except Exception as e:
                 import sys
                 print(f"[DB WARN] _auto_enqueue_orphans batch update failed: {e}", file=sys.stderr)
             finally:
-                conn.close()
+                conn2.close()
 
     def _scheduler_loop(self) -> None:
         try:
