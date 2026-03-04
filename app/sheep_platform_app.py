@@ -888,18 +888,24 @@ def _inject_meta(title: str, description: str) -> None:
 <script>
 (function() {{
   try {{
-    document.title = {json.dumps(t)};
-    var head = document.getElementsByTagName('head')[0];
+    /* [專家級防護] 穿透 iframe 限制，直接對父層 Streamlit 網頁封殺 Google 翻譯，防止 DOM 結構被破壞導致按鈕失效 */
+    const w = window.parent || window;
+    w.document.documentElement.setAttribute("translate", "no");
+    w.document.documentElement.classList.add("notranslate");
+
+    w.document.title = {json.dumps(t)};
+    var head = w.document.getElementsByTagName('head')[0];
     function upsert(name, attr, value) {{
       var sel = attr + "='" + name + "'";
       var el = head.querySelector("meta[" + sel + "]");
       if (!el) {{
-        el = document.createElement('meta');
+        el = w.document.createElement('meta');
         el.setAttribute(attr, name);
         head.appendChild(el);
       }}
       el.setAttribute('content', value);
     }}
+    upsert('google', 'name', 'notranslate');
     if ({json.dumps(d)}.length > 0) {{
       upsert('description', 'name', {json.dumps(d)});
       upsert('og:description', 'property', {json.dumps(d)});
@@ -912,6 +918,7 @@ def _inject_meta(title: str, description: str) -> None:
 </script>
 """
     st.components.v1.html(js, height=0)
+
 
 
 
@@ -6144,7 +6151,17 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
         tasks = [t for t in tasks if int(t.get("pool_id") or 0) in set(allowed_pool_ids)]
 
     if not tasks:
-        st.info("無任務。")
+        st.warning("系統目前未分配任何任務給您。請嘗試點擊下方按鈕強制分配，或確認該策略池是否已被挖空。")
+        if st.button("🔧 強制請求系統分配新任務", type="primary", use_container_width=True):
+            try:
+                db.assign_tasks_for_user(int(user["id"]), cycle_id=int(cycle["id"]), min_tasks=2, max_tasks=6)
+                st.session_state[_task_assign_key] = 0
+                st.toast("已發送強制分配請求！")
+                import time
+                time.sleep(0.5)
+                st.rerun()
+            except Exception as e:
+                st.error(f"分配失敗: {e}")
         return
 
     assigned_cnt = 0
@@ -6794,7 +6811,8 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                 elif job_mgr.is_queued(int(user["id"]), _tid) and st_raw == "assigned":
                     view_status = "queued"
 
-            if view_status in ("running", "queued", "assigned"):
+            # [專家級修復] 必須把 'error' 狀態也顯示在主畫面，否則任務閃退後會憑空消失，誤導使用者以為沒任務
+            if view_status in ("running", "queued", "assigned", "error"):
                 active2.append((t, view_status))
 
         if active2:
