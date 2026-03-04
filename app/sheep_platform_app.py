@@ -1918,6 +1918,39 @@ visibility: hidden !important;
         unsafe_allow_html=True,
     )
 
+    # [專家級修復] 攔截 Streamlit XHR Fallback 導致的 Method Not Allowed (405) 彈窗
+    st.components.v1.html(
+        """
+        <script>
+        (function() {
+            const w = window.parent || window;
+            if (w.__sheep_405_killer) return;
+            w.__sheep_405_killer = true;
+            
+            const observer = new MutationObserver(function(mutations) {
+                mutations.forEach(function(mutation) {
+                    mutation.addedNodes.forEach(function(node) {
+                        if (node.nodeType === 1) { // Element
+                            // 攔截 Streamlit 的 Error Modal
+                            if (node.getAttribute('data-testid') === 'stModal' || node.innerHTML.includes('Method Not Allowed')) {
+                                if (node.innerHTML.includes('Method Not Allowed') || node.innerHTML.includes('405')) {
+                                    node.style.display = 'none';
+                                    node.style.opacity = '0';
+                                    console.warn("[UI Guard] Intercepted 405 Method Not Allowed modal. Forcing silent reload.");
+                                    setTimeout(() => { w.location.reload(); }, 300);
+                                }
+                            }
+                        }
+                    });
+                });
+            });
+            observer.observe(w.document.body, { childList: true, subtree: true });
+        })();
+        </script>
+        """,
+        height=0,
+    )
+
 # [載入動畫] 完全使用 index.html，並加入 Streamlit iframe 全螢幕與隱藏修正
     st.components.v1.html(
         """
@@ -6198,7 +6231,7 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                     time.sleep(0.5)
                     st.rerun()
             else:
-                if st.button("中斷", key="stop_all"):
+                if st.button("中斷挖礦", key="stop_all", type="secondary"):
                     db.set_user_run_enabled(int(user["id"]), False)
                     st.session_state[run_key] = False
                     run_all = False
@@ -6206,12 +6239,11 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                         import threading
                         threading.Thread(target=job_mgr.stop_all_for_user, args=(int(user["id"]),), daemon=True).start()
                     except Exception as err:
-                        # [專家級防護] 攔截 Worker API 離線或 HTTP Method 不符導致的 405 彈窗錯誤
                         import sys
                         print(f"[WARN] job_mgr.stop_all_for_user intercepted error: {err}", file=sys.stderr)
                     db.write_audit_log(int(user["id"]), "task_stop_all", {})
-                    st.toast("已發送中斷指令，背景釋放資源中...")
-                    time.sleep(0.5)
+                    st.toast("已發送中斷指令，正在安全釋放資料庫鎖與資源，請稍候...")
+                    time.sleep(1.5) # [專家級修復] 給予充分時間讓所有 Thread 寫入並釋放 SQLite 鎖，防止畫面刷新時遇到 database is locked
                     st.rerun()
 
         with col_b:

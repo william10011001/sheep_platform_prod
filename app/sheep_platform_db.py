@@ -465,9 +465,9 @@ def _conn() -> _DBConn:
     except Exception:
         pass
     try:
-        busy_ms = int(float(os.environ.get("SHEEP_SQLITE_BUSY_TIMEOUT_MS", "2000") or "2000"))
+        busy_ms = int(float(os.environ.get("SHEEP_SQLITE_BUSY_TIMEOUT_MS", "15000") or "15000"))
     except Exception:
-        busy_ms = 2000
+        busy_ms = 15000
     busy_ms = max(0, min(60000, int(busy_ms)))
     try:
         raw.execute(f"PRAGMA busy_timeout = {busy_ms};")
@@ -1747,7 +1747,8 @@ def recover_factor_pools_from_local(cycle_id: int, search_roots: Optional[List[s
     return report
 def list_tasks_for_user(user_id: int, cycle_id: int = 0) -> list:
     import time
-    for attempt in range(5):
+    last_err = None
+    for attempt in range(10):
         try:
             conn = _conn()
             try:
@@ -1759,10 +1760,12 @@ def list_tasks_for_user(user_id: int, cycle_id: int = 0) -> list:
             finally:
                 conn.close()
         except Exception as e:
-            if attempt == 4:
-                print(f"[DB ERROR] list_tasks_for_user: {e}")
-                return []
-            time.sleep(0.1 * (2 ** attempt))
+            last_err = e
+            time.sleep(0.2 * (1.5 ** attempt))
+            
+    import traceback
+    import sys
+    print(f"[CRITICAL DB ERROR] list_tasks_for_user 鎖死或異常: {last_err}\n{traceback.format_exc()}", file=sys.stderr)
     return []
 
 def list_submissions(user_id: int = 0, status: str = "", limit: int = 300) -> list:

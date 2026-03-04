@@ -978,31 +978,40 @@ class JobManager:
             # [系統級防護] 捕捉 BaseException (含 SystemExit, KeyboardInterrupt) 確保狀態重置
             import traceback, sys
             err_trace = traceback.format_exc()
-            
-            # 格式化錯誤訊息，移除可能包含的敏感路徑
             safe_err_msg = str(e).replace(os.getcwd(), ".")
             
-            print(f"\n{'='*60}\n[SYSTEM EXCEPTION] Task ID: {task_id}\nType: {type(e).__name__}\nError: {safe_err_msg}\n{err_trace}\n{'='*60}", file=sys.stderr)
+            is_db_lock = "database is locked" in safe_err_msg.lower() or "operationalerror" in safe_err_msg.lower()
+            
+            if is_db_lock:
+                print(f"[SYSTEM WARN] Task ID: {task_id} 遭遇資料庫鎖定衝突，已自動退回佇列等待重試。", file=sys.stderr)
+            else:
+                print(f"\n{'='*60}\n[SYSTEM EXCEPTION] Task ID: {task_id}\nType: {type(e).__name__}\nError: {safe_err_msg}\n{err_trace}\n{'='*60}", file=sys.stderr)
             
             try:
                 current_t = db.get_task(task_id)
                 if current_t:
                     prog = _json_load(current_t.get("progress_json") or "{}")
-                    prog["phase"] = "error"
-                    prog["last_error"] = f"系統執行異常: {str(e)}"
-                    prog["debug_traceback"] = err_trace
-                    prog["error_ts"] = db.utc_now_iso()
                     
-                    db.update_task_progress(task_id, prog)
-                    db.update_task_status(task_id, "error")
-                    
-                    db.write_audit_log(
-                        user_id=int(current_t.get("user_id") or 0),
-                        action="task_execution_failed",
-                        payload={"task_id": task_id, "exception": str(e), "trace": err_trace[:2000]}
-                    )
+                    if is_db_lock:
+                        prog["phase"] = "queued"
+                        prog["last_error"] = "資料庫高併發鎖定，已重新排隊"
+                        prog["error_ts"] = db.utc_now_iso()
+                        db.update_task_progress(task_id, prog)
+                        db.update_task_status(task_id, "queued")
+                    else:
+                        prog["phase"] = "error"
+                        prog["last_error"] = f"系統執行異常: {str(e)}"
+                        prog["debug_traceback"] = err_trace
+                        prog["error_ts"] = db.utc_now_iso()
+                        db.update_task_progress(task_id, prog)
+                        db.update_task_status(task_id, "error")
+                        db.write_audit_log(
+                            user_id=int(current_t.get("user_id") or 0),
+                            action="task_execution_failed",
+                            payload={"task_id": task_id, "exception": str(e), "trace": err_trace[:2000]}
+                        )
                 else:
-                    db.update_task_status(task_id, "error")
+                    db.update_task_status(task_id, "queued" if is_db_lock else "error")
             except Exception as nested_err:
                 print(f"[CRITICAL] 錯誤處理器本身發生異常: {nested_err}\n{traceback.format_exc()}", file=sys.stderr)
             finally:
