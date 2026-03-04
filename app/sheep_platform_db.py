@@ -505,7 +505,7 @@ def init_db() -> None:
                     role TEXT NOT NULL DEFAULT 'user',
                     nickname TEXT DEFAULT '',
                     disabled INTEGER NOT NULL DEFAULT 0,
-                    run_enabled INTEGER NOT NULL DEFAULT 1,
+                    run_enabled INTEGER NOT NULL DEFAULT 0,
                     wallet_address TEXT NOT NULL DEFAULT '',
                     wallet_chain TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
@@ -673,7 +673,7 @@ def init_db() -> None:
             except Exception:
                 pass
             try:
-                conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS run_enabled INTEGER NOT NULL DEFAULT 1")
+                conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS run_enabled INTEGER NOT NULL DEFAULT 0")
             except Exception:
                 pass
             try:
@@ -700,7 +700,7 @@ def init_db() -> None:
                 role TEXT NOT NULL DEFAULT 'user',
                 nickname TEXT DEFAULT '',
                 disabled INTEGER NOT NULL DEFAULT 0,
-                run_enabled INTEGER NOT NULL DEFAULT 1,
+                run_enabled INTEGER NOT NULL DEFAULT 0,
                 wallet_address TEXT NOT NULL DEFAULT '',
                 wallet_chain TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
@@ -832,7 +832,7 @@ def init_db() -> None:
             """
         )
         try:
-            conn.execute("ALTER TABLE users ADD COLUMN run_enabled INTEGER NOT NULL DEFAULT 1")
+            conn.execute("ALTER TABLE users ADD COLUMN run_enabled INTEGER NOT NULL DEFAULT 0")
         except Exception:
             pass
         try:
@@ -1082,7 +1082,7 @@ def create_user(
             row = conn.execute(
                 """
                 INSERT INTO users (username, username_norm, password_hash, role, disabled, run_enabled, wallet_address, wallet_chain, created_at)
-                VALUES (?, ?, ?, ?, 0, 1, ?, ?, ?)
+                VALUES (?, ?, ?, ?, 0, 0, ?, ?, ?)
                 RETURNING id
                 """,
                 (uname, uname_norm, pw_str, str(role or "user"), str(wallet_address or ""), str(wallet_chain or ""), _now_iso()),
@@ -1093,7 +1093,7 @@ def create_user(
         cur = conn.execute(
             """
             INSERT INTO users (username, username_norm, password_hash, role, disabled, run_enabled, wallet_address, wallet_chain, created_at)
-            VALUES (?, ?, ?, ?, 0, 1, ?, ?, ?)
+            VALUES (?, ?, ?, ?, 0, 0, ?, ?, ?)
             """,
             (uname, uname_norm, pw_str, str(role or "user"), str(wallet_address or ""), str(wallet_chain or ""), _now_iso()),
         )
@@ -1135,7 +1135,17 @@ def update_user_login_state(user_id: int, success: bool = True) -> None:
     conn = _conn()
     try:
         if success:
-            conn.execute("UPDATE users SET last_login_at = ? WHERE id = ?", (_now_iso(), int(user_id)))
+            now = _now_iso()
+            # [專家級防護] 登入時主動重置 run_enabled 為 0，確保 UI 永遠從「開始挖礦」起步
+            conn.execute("UPDATE users SET last_login_at = ?, run_enabled = 0 WHERE id = ?", (now, int(user_id)))
+            # [主動除錯] 釋放因上次意外斷線導致卡在 'running' 的幽靈任務
+            try:
+                conn.execute(
+                    "UPDATE mining_tasks SET status='assigned', lease_id=NULL, lease_worker_id=NULL, lease_expires_at=NULL, updated_at=? WHERE user_id=? AND status IN ('running', 'queued')",
+                    (now, int(user_id)),
+                )
+            except Exception:
+                pass
             conn.commit()
     finally:
         conn.close()
