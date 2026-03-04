@@ -669,6 +669,10 @@ def issue_token(req: Request, body: TokenRequest):
     if int(user.get("disabled") or 0) != 0:
         raise HTTPException(status_code=403, detail="user_disabled")
 
+    # [專家級修復] 使用者透過 API 登入時，必須清除舊有執行狀態
+    # 確保登入後前端一律從「開始挖礦」的狀態起步
+    db.update_user_login_state(int(user["id"]), success=True)
+
     token = db.create_api_token(int(user["id"]), ttl_seconds=int(body.ttl_seconds), name=str(body.name or "worker"))
 
     return TokenResponse(
@@ -709,6 +713,12 @@ def web_register(req: Request, body: WebRegisterIn):
 def web_get_me(request: Request, authorization: Optional[str] = Header(None)):
     ctx = _auth_ctx(request, authorization)
     user = ctx["user"]
+    
+    # [專家級修復] 解決前端 (如 Vue) 剛載入時卡在「結束挖礦」的 Bug
+    # 前端在初始化或重整頁面時必定會呼叫 /user/me，因此我們在此重置狀態，
+    # 確保 run_enabled 回歸 0，並釋放因異常關閉分頁遺留的幽靈任務。
+    db.update_user_login_state(int(user["id"]), success=True)
+    
     fresh_user = db.get_user_by_id(int(user["id"]))
     if not fresh_user:
         raise HTTPException(status_code=401, detail="user_not_found")
@@ -719,7 +729,8 @@ def web_get_me(request: Request, authorization: Optional[str] = Header(None)):
         "role": fresh_user.get("role", "user"),
         "wallet_address": fresh_user.get("wallet_address", ""),
         "wallet_chain": fresh_user.get("wallet_chain", "TRC20"),
-        "disabled": fresh_user.get("disabled", 0)
+        "disabled": fresh_user.get("disabled", 0),
+        "run_enabled": fresh_user.get("run_enabled", 0)
     }
 
 @app.get("/leaderboard")

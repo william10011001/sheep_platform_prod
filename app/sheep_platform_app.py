@@ -858,6 +858,11 @@ def _try_auto_login_from_cookie() -> bool:
     except Exception:
         pass
 
+    # [專家級修復] 解決用戶重新開啟網頁時，按鈕顯示為「結束挖礦」的狀態錯亂問題。
+    # 觸發 Cookie 自動登入代表這是一個全新的瀏覽器 Session (剛開啟網站)，
+    # 必須主動重置 run_enabled 為 0，確保介面回到乾淨的「開始挖礦」狀態。
+    db.update_user_login_state(int(u.get("id") or 0), success=True)
+
     _set_session_user(u)
     st.session_state["auth_remember_token_id"] = int(t.get("id") or 0)
     return True
