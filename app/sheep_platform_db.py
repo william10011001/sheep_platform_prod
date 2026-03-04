@@ -1500,7 +1500,7 @@ def list_factor_pools(cycle_id: int) -> list:
     raise RuntimeError(f"資料庫高併發鎖定，無法讀取策略池列表。請稍後再試。({last_err})")
 
 def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, max_tasks: int = 6, preferred_family: str = "") -> None:
-    import time
+    import time, random
     for attempt in range(5):
         try:
             conn = _conn()
@@ -1513,47 +1513,83 @@ def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, m
                 cur = conn.execute("SELECT COUNT(*) as c FROM mining_tasks WHERE user_id = ? AND status IN ('assigned', 'running', 'queued') AND cycle_id = ?", (user_id, cycle_id))
                 current_tasks = cur.fetchone()["c"]
                 
-                if current_tasks < min_tasks:
-                    needed = min_tasks - current_tasks
-                    pools_query = "SELECT id, num_partitions FROM factor_pools WHERE cycle_id = ? AND active = 1"
-                    params = [cycle_id]
-                    if preferred_family:
-                        pools_query += " AND family = ?"
-                        params.append(preferred_family)
+                if current_tasks >= min_tasks:
+                    break
                     
-                    pools = conn.execute(pools_query, params).fetchall()
+                needed = min_tasks - current_tasks
+                
+                pools_query = "SELECT id, num_partitions FROM factor_pools WHERE cycle_id = ? AND active = 1"
+                params = [cycle_id]
+                if preferred_family:
+                    pools_query += " AND family = ?"
+                    params.append(preferred_family)
+                
+                pools = conn.execute(pools_query, params).fetchall()
+                if not pools and preferred_family:
+                    pools = conn.execute("SELECT id, num_partitions FROM factor_pools WHERE cycle_id = ? AND active = 1", (cycle_id,)).fetchall()
                     
-                    if not pools and preferred_family:
-                        pools = conn.execute("SELECT id, num_partitions FROM factor_pools WHERE cycle_id = ? AND active = 1", (cycle_id,)).fetchall()
+                if not pools:
+                    break
+                    
+                # 抓取該用戶已經擁有過的所有 (pool_id, partition_idx)
+                user_tasks = conn.execute("SELECT pool_id, partition_idx FROM mining_tasks WHERE user_id = ? AND cycle_id = ?", (user_id, cycle_id)).fetchall()
+                user_owned = {(t["pool_id"], t["partition_idx"]) for t in user_tasks}
+                
+                # [專家級進化] 抓取全網有效任務，實現「全網排他」與「異常斷線接手」
+                global_active = conn.execute("SELECT pool_id, partition_idx FROM mining_tasks WHERE cycle_id = ? AND status IN ('assigned', 'running', 'queued', 'completed')", (cycle_id,)).fetchall()
+                global_owned = {(t["pool_id"], t["partition_idx"]) for t in global_active}
+                
+                assigned_count = 0
+                pool_list = [dict(p) for p in pools]
+                random.shuffle(pool_list)
+                
+                for p in pool_list:
+                    if assigned_count >= needed:
+                        break
                         
-                    for _ in range(needed):
-                        if pools:
-                            import random
-                            p = random.choice(pools)
-                            part_idx = random.randint(0, max(0, int(p["num_partitions"]) - 1))
-                            # [專家級修復] 徹底避免同一個 user 在同一個 pool/cycle 反覆拿到同一個分割
-                            # 移除 status 過濾，只要派發過（包含 completed 或 error）就不再派發
-                            # [專家級修復] 解決 PostgreSQL 語法錯誤 (SELECT without FROM) 並保持 SQLite 相容
-                            exists = conn.execute(
-                                "SELECT 1 FROM mining_tasks WHERE user_id = ? AND pool_id = ? AND cycle_id = ? AND partition_idx = ?", 
-                                (user_id, int(p["id"]), cycle_id, int(part_idx))
-                            ).fetchone()
+                    pid = int(p["id"])
+                    num_parts = int(p["num_partitions"])
+                    
+                    # 過濾出全網目前沒人執行的空缺分割
+                    available_parts = []
+                    for part_idx in range(num_parts):
+                        if (pid, part_idx) in user_owned:
+                            continue
+                        if (pid, part_idx) in global_owned:
+                            continue
+                        available_parts.append(part_idx)
+                        
+                    if not available_parts:
+                        continue
+                        
+                    random.shuffle(available_parts)
+                    
+                    # 確保 100% 補齊所需的任務名額，終結迴圈次數浪費
+                    for chosen_part in available_parts:
+                        if assigned_count >= needed:
+                            break
                             
-                            if not exists:
-                                conn.execute(
-                                    """
-                                    INSERT INTO mining_tasks (user_id, pool_id, cycle_id, partition_idx, num_partitions, status, created_at, updated_at)
-                                    VALUES (?, ?, ?, ?, ?, 'assigned', ?, ?)
-                                    """,
-                                    (user_id, int(p["id"]), cycle_id, int(part_idx), int(p["num_partitions"]), _now_iso(), _now_iso())
-                                )
+                        conn.execute(
+                            """
+                            INSERT INTO mining_tasks (user_id, pool_id, cycle_id, partition_idx, num_partitions, status, created_at, updated_at)
+                            VALUES (?, ?, ?, ?, ?, 'assigned', ?, ?)
+                            """,
+                            (user_id, pid, cycle_id, chosen_part, num_parts, _now_iso(), _now_iso())
+                        )
+                        
+                        user_owned.add((pid, chosen_part))
+                        global_owned.add((pid, chosen_part))
+                        assigned_count += 1
+                        
+                if assigned_count > 0:
                     conn.commit()
                 break
             finally:
                 conn.close()
         except Exception as e:
             if attempt == 4:
-                print(f"[DB ERROR] assign_tasks_for_user: {e}")
+                import sys
+                print(f"[DB ERROR] assign_tasks_for_user: {e}", file=sys.stderr)
             time.sleep(0.05 * (2 ** attempt))
 def _safe_listdir(dir_path: str) -> List[str]:
     try:
@@ -1901,16 +1937,18 @@ def get_db_info() -> dict:
 def release_assigned_tasks_for_user_not_in_pools(user_id: int, cycle_id: int, allowed_pool_ids: list) -> None:
     conn = _conn()
     try:
+        # [專家級修復] 直接 DELETE 尚未執行的任務，將配額瞬間釋放給全網排他機制
         if not allowed_pool_ids:
-            conn.execute("UPDATE mining_tasks SET status = 'queued' WHERE user_id = ? AND cycle_id = ? AND status = 'assigned'", (user_id, cycle_id))
+            conn.execute("DELETE FROM mining_tasks WHERE user_id = ? AND cycle_id = ? AND status = 'assigned'", (user_id, cycle_id))
         else:
             placeholders = ",".join("?" for _ in allowed_pool_ids)
-            query = f"UPDATE mining_tasks SET status = 'queued' WHERE user_id = ? AND cycle_id = ? AND status = 'assigned' AND pool_id NOT IN ({placeholders})"
+            query = f"DELETE FROM mining_tasks WHERE user_id = ? AND cycle_id = ? AND status = 'assigned' AND pool_id NOT IN ({placeholders})"
             params = [user_id, cycle_id] + allowed_pool_ids
             conn.execute(query, params)
         conn.commit()
     except Exception as e:
-        print(f"[DB ERROR] release_assigned_tasks_for_user: {e}")
+        import sys
+        print(f"[DB ERROR] release_assigned_tasks_for_user: {e}", file=sys.stderr)
     finally:
         conn.close()
 
