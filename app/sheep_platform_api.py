@@ -413,7 +413,7 @@ class ReleaseIn(BaseModel):
 
 
 @app.get("/healthz")
-def healthz():
+async def healthz():
     return {
         "ok": True,
         "ts": _utc_iso(),

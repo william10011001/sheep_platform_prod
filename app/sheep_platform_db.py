@@ -2932,8 +2932,8 @@ def claim_next_task_any(worker_id: str) -> Optional[dict]:
                   AND COALESCE(u.disabled,0)=0
                   AND COALESCE(u.run_enabled,1)=1
                   AND COALESCE(p.active,1)=1
-                ORDER BY COALESCE(t.updated_at, t.created_at) ASC, t.id ASC
-                FOR UPDATE SKIP LOCKED
+                ORDER BY t.id ASC
+                FOR UPDATE OF t SKIP LOCKED
                 LIMIT 1
                 """
             ).fetchone()
@@ -2948,7 +2948,7 @@ def claim_next_task_any(worker_id: str) -> Optional[dict]:
                   AND COALESCE(u.disabled,0)=0
                   AND COALESCE(u.run_enabled,1)=1
                   AND COALESCE(p.active,1)=1
-                ORDER BY COALESCE(t.updated_at, t.created_at) ASC, t.id ASC
+                ORDER BY t.id ASC
                 LIMIT 1
                 """
             ).fetchone()
@@ -3021,8 +3021,8 @@ def claim_next_task(user_id: int, worker_id: str) -> Optional[dict]:
                   AND COALESCE(u.disabled,0)=0
                   AND COALESCE(u.run_enabled,1)=1
                   AND COALESCE(p.active,1)=1
-                ORDER BY COALESCE(t.updated_at, t.created_at) ASC, t.id ASC
-                FOR UPDATE SKIP LOCKED
+                ORDER BY t.id ASC
+                FOR UPDATE OF t SKIP LOCKED
                 LIMIT 1
                 """,
                 (uid,),
@@ -3039,7 +3039,7 @@ def claim_next_task(user_id: int, worker_id: str) -> Optional[dict]:
                   AND COALESCE(u.disabled,0)=0
                   AND COALESCE(u.run_enabled,1)=1
                   AND COALESCE(p.active,1)=1
-                ORDER BY COALESCE(t.updated_at, t.created_at) ASC, t.id ASC
+                ORDER BY t.id ASC
                 LIMIT 1
                 """,
                 (uid,),
