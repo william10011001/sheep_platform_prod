@@ -3968,10 +3968,13 @@ div[data-testid="stModal"] { display: none !important; opacity: 0 !important; po
                             const html = node.innerHTML || "";
                             // [極致防禦] 一旦偵測到 405 / 502 / 521 崩潰彈窗，立刻摧毀節點，並加入冷卻機制避免無限重整
                             if (node.getAttribute('data-testid') === 'stModal' || html.includes('Method Not Allowed') || html.includes('405') || html.includes('502') || html.includes('521')) {
+                                // [專家級修復] 絕對禁止使用 node.remove()，這會切斷 React 的 Virtual DOM 導致按鈕全部失效！
+                                // 改用極端 CSS 覆蓋，讓元素在物理上消失且不干擾事件層
                                 node.style.setProperty("display", "none", "important");
                                 node.style.setProperty("opacity", "0", "important");
-                                node.remove();
-                                console.warn("[God Killer] Destroyed fatal Modal.");
+                                node.style.setProperty("pointer-events", "none", "important");
+                                node.style.setProperty("z-index", "-9999", "important");
+                                console.warn("[God Killer] Safely hidden fatal Modal without breaking React DOM.");
                                 
                                 const now = Date.now();
                                 if (!w.__sheep_last_reload || (now - w.__sheep_last_reload) > 5000) {
@@ -6237,16 +6240,18 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                     st.rerun()
             else:
                 if st.button("中斷挖礦", key="stop_all", type="secondary"):
+                    import sys
+                    print(f"\n[UI EVENT] 成功接收到用戶 {user['username']} 的中斷挖礦點擊訊號！", file=sys.stderr, flush=True)
                     try:
                         db.set_user_run_enabled(int(user["id"]), False)
                         st.session_state[run_key] = False
                         run_all = False
                         try:
                             import threading
+                            print(f"[UI EVENT] 啟動背景執行緒釋放資源...", file=sys.stderr, flush=True)
                             threading.Thread(target=job_mgr.stop_all_for_user, args=(int(user["id"]),), daemon=True).start()
                         except Exception as err:
-                            import sys
-                            print(f"[WARN] job_mgr.stop_all_for_user intercepted error: {err}", file=sys.stderr)
+                            print(f"[CRITICAL WARN] job_mgr.stop_all_for_user 觸發異常: {err}", file=sys.stderr, flush=True)
                         
                         try:
                             db.write_audit_log(int(user["id"]), "task_stop_all", {})
@@ -6896,12 +6901,12 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
         if (p.textContent && p.textContent.trim() === 'AutoRefreshHiddenBtn') {{
             targetBtn = p.closest('button');
             if (targetBtn) {{
-                targetBtn.style.opacity = '0';
-                targetBtn.style.position = 'absolute';
-                targetBtn.style.width = '1px';
-                targetBtn.style.height = '1px';
-                targetBtn.style.pointerEvents = 'none';
-                targetBtn.style.overflow = 'hidden';
+                targetBtn.style.setProperty("display", "none", "important");
+                targetBtn.style.setProperty("pointer-events", "none", "important");
+                // 徹底移出畫面，避免干擾真正的按鈕點擊穿透
+                targetBtn.style.position = 'fixed';
+                targetBtn.style.top = '-9999px';
+                targetBtn.style.left = '-9999px';
             }}
         }}
     }});
