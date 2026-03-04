@@ -6211,79 +6211,11 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
 
         with col_a:
             if not run_all:
-                # [UI 強化] 使用 primary 顏色突顯開始按鈕
                 if st.button("開始挖礦", key="start_all", type="primary"):
                     db.set_user_run_enabled(int(user["id"]), True)
                     st.session_state[run_key] = True
                     run_all = True
-                    to_queue: List[int] = []
-                    for t in tasks:
-                        tid = int(t["id"])
-                        st_raw = str(t.get("status") or "")
-                        
-                        # 擴大可排程狀態，包含 queued 與意外中止的 running
-                        if st_raw not in ("assigned", "queued", "error", "running"):
-                            continue
-                        if job_mgr.is_running(tid):
-                            continue
-                        if job_mgr.is_queued(int(user["id"]), tid):
-                            continue
-                            
-                        # 處理卡在 running 狀態但實際上未執行的任務，重置為 assigned
-                        if st_raw == "running":
-                            try:
-                                db.update_task_status(tid, "assigned")
-                            except Exception:
-                                pass
-                        elif st_raw == "error":
-                            # 若之前發生錯誤，重新排程時初始化狀態
-                            try:
-                                db.update_task_status(tid, "assigned")
-                            except Exception:
-                                pass
-                                
-                        to_queue.append(tid)
-                    
-                    if to_queue:
-                        # 先同步更新任務狀態與進度，確保介面即時反映排隊狀態
-                        for qid in to_queue:
-                            try:
-                                db.update_task_status(qid, "queued")
-                                trow = db.get_task(int(qid)) or {}
-                                try:
-                                    prog0 = json.loads(trow.get("progress_json") or "{}")
-                                except Exception:
-                                    prog0 = {}
-                                if not isinstance(prog0, dict):
-                                    prog0 = {}
-
-                                prog0["phase"] = "queued"
-                                prog0["phase_msg"] = "調度器：已寫入佇列等待運算資源分配..."
-                                prog0["updated_at"] = _iso(_utc_now())
-
-                                db.update_task_progress(qid, prog0)
-                            except Exception:
-                                pass
-                        
-                        # 將任務加入排程列隊改為背景執行，避免阻塞引發 Cloudflare 504 錯誤
-                        import threading
-                        def _bg_enqueue():
-                            try:
-                                result = job_mgr.enqueue_many(int(user["id"]), to_queue, bt)
-                                db.write_audit_log(
-                                    int(user["id"]),
-                                    "task_queue_all",
-                                    {"queued": int(result.get("queued") or 0), "skipped": int(result.get("skipped") or 0)},
-                                )
-                            except Exception as e:
-                                import sys
-                                print(f"[WARN] BG enqueue failed: {e}", file=sys.stderr)
-                                
-                        threading.Thread(target=_bg_enqueue, daemon=True).start()
-                        st.toast(f"已成功排程 {len(to_queue)} 個任務")
-                    else:
-                        st.toast("目前無可執行的任務")
-                    
+                    st.toast("已發送啟動指令，系統將自動從策略池調度任務...")
                     time.sleep(0.5)
                     st.rerun()
             else:
@@ -6300,19 +6232,18 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                             print(f"[WARN] job_mgr.stop_all_for_user intercepted error: {err}", file=sys.stderr)
                         
                         try:
-                            # 降低審計日誌寫入的致命性，避免在這裡鎖死
                             db.write_audit_log(int(user["id"]), "task_stop_all", {})
                         except Exception:
                             pass
                             
                         st.toast("已發送中斷指令，正在安全釋放資源，請稍候...")
-                        time.sleep(1.8) # 給予充分時間釋放 SQLite 鎖
+                        time.sleep(0.5) # [專家級防護] 大幅縮短 UI 鎖定時間，防止按鈕點擊被判定為無效或丟失
                         st.rerun()
                     except Exception as fatal_err:
                         import traceback, sys
                         print(f"[CRITICAL UI] 中斷挖礦失敗: {fatal_err}\n{traceback.format_exc()}", file=sys.stderr)
                         st.toast("系統負載，請稍後重試。")
-                        time.sleep(1)
+                        time.sleep(0.5)
                         st.rerun()
 
         with col_b:
@@ -6411,19 +6342,41 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
         run_key = f"server_run_all_{int(user['id'])}"
         run_all = bool(st.session_state.get(run_key, False))
         if run_all:
-            to_queue2: List[int] = []
+            # [專家級防護] 嚴格計算可用容量，防止無限 Ping-Pong 導致 UI 死機
+            active_count = 0
             for _t in tasks:
                 _tid = int(_t["id"])
-                if str(_t.get("status") or "") != "assigned":
-                    continue
-                if job_mgr.is_running(_tid):
-                    continue
-                if job_mgr.is_queued(int(user["id"]), _tid):
-                    continue
-                to_queue2.append(_tid)
+                if job_mgr.is_running(_tid) or job_mgr.is_queued(int(user["id"]), _tid) or str(_t.get("status") or "") in ("queued", "running"):
+                    active_count += 1
+            
+            available_slots = max(0, max_concurrent_jobs - active_count)
+            
+            to_queue2: List[int] = []
+            if available_slots > 0:
+                for _t in tasks:
+                    _tid = int(_t["id"])
+                    st_raw = str(_t.get("status") or "")
+                    
+                    # 將因重啟而卡在 running 的任務判定為需要重新排程
+                    if st_raw == "running" and not job_mgr.is_running(_tid):
+                        try:
+                            db.update_task_status(_tid, "assigned")
+                            st_raw = "assigned"
+                        except Exception:
+                            pass
+                            
+                    if st_raw != "assigned":
+                        continue
+                    if job_mgr.is_running(_tid):
+                        continue
+                    if job_mgr.is_queued(int(user["id"]), _tid):
+                        continue
+                        
+                    to_queue2.append(_tid)
+                    if len(to_queue2) >= available_slots:
+                        break
 
             if to_queue2:
-                # 先更新資料庫狀態
                 for qid in to_queue2:
                     try:
                         db.update_task_status(qid, "queued")
@@ -6432,34 +6385,23 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                             prog0 = json.loads(trow.get("progress_json") or "{}")
                         except Exception:
                             prog0 = {}
-                        if not isinstance(prog0, dict):
-                            prog0 = {}
-
                         prog0["phase"] = "queued"
                         prog0["phase_msg"] = "持續性部署：程序已掛載至等待序列..."
                         prog0["updated_at"] = _iso(_utc_now())
-
                         db.update_task_progress(qid, prog0)
                     except Exception:
                         pass
                 
-                # 背景執行 API 請求
                 import threading
                 def _bg_auto_enqueue():
                     try:
                         result2 = job_mgr.enqueue_many(int(user["id"]), to_queue2, bt)
                         if int(result2.get("queued") or 0) > 0:
-                            db.write_audit_log(
-                                int(user["id"]),
-                                "task_auto_queue",
-                                {"queued": int(result2.get("queued") or 0), "skipped": int(result2.get("skipped") or 0)},
-                            )
-                    except Exception as e:
-                        import sys
-                        print(f"[WARN] BG auto enqueue failed: {e}", file=sys.stderr)
-                        
+                            db.write_audit_log(int(user["id"]), "task_auto_queue", {})
+                    except Exception:
+                        pass
                 threading.Thread(target=_bg_auto_enqueue, daemon=True).start()
-                st.rerun()
+                # [核心修正] 絕對禁止在此呼叫 st.rerun()，交由 AutoRefresh 定時刷新，終結死鎖崩潰！
 
     def _fmt_gap_min(cur: Optional[float], thr: float) -> str:
         if cur is None:
@@ -6861,8 +6803,12 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
         else:
             st.markdown("""
             <div style="text-align:center; padding: 40px 20px; background: rgba(255,255,255,0.02); border-radius: 12px; border: 1px dashed rgba(255,255,255,0.05);">
-                <div style="color: #94a3b8; font-size: 14px; font-weight: 600;">系統目前未偵測到執行中的任務</div>
-                <div style="color: #64748b; font-size: 12px; margin-top: 4px;">請於上方控制面板分配運算資源或啟動全域佇列</div>
+                <div style="color: #94a3b8; font-size: 14px; font-weight: 600;">系統目前未偵測到您的專屬執行任務</div>
+                <div style="color: #64748b; font-size: 13px; margin-top: 8px; line-height: 1.6;">
+                    1. 若您尚未啟動，請點擊上方「開始挖礦」。<br>
+                    2. 若已啟動但仍顯示此訊息，代表<strong style="color:#fbbf24;">目前策略池已被全網算力計算完畢！</strong><br>
+                    建議您可以更換其他策略池，或等待新週期任務發布。
+                </div>
             </div>
             """, unsafe_allow_html=True)
 
