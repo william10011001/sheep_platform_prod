@@ -1769,7 +1769,8 @@ def list_tasks_for_user(user_id: int, cycle_id: int = 0) -> list:
     import traceback
     import sys
     print(f"[CRITICAL DB ERROR] list_tasks_for_user 遭遇嚴重鎖死或異常，無法讀取資料: {last_err}\n{traceback.format_exc()}", file=sys.stderr)
-    return []
+    # [專家級防護] 絕對禁止回傳空陣列，否則 UI 會誤判任務歸零。拋出明確異常讓前端捕捉並顯示忙碌。
+    raise RuntimeError(f"資料庫高併發鎖定，無法讀取任務列表，請稍後再試。 ({last_err})")
 
 def list_submissions(user_id: int = 0, status: str = "", limit: int = 300) -> list:
     import time
@@ -2896,9 +2897,21 @@ def _lease_extend_seconds() -> int:
     except Exception:
         return 120
 
+_LAST_REAP_TS = 0.0
+_REAP_LOCK = __import__("threading").Lock()
+
 def _reap_expired_running(conn: _DBConn) -> int:
-    now = _utc_now_iso()
+    global _LAST_REAP_TS
+    import time
+    now_ts = time.time()
+    # [專家級優化] 節流：每 5 秒最多執行一次過期任務清理，避免大量 Worker 併發請求時引發嚴重的資料庫寫入鎖定 (Write Lock Contention)
+    if now_ts - _LAST_REAP_TS < 5.0:
+        return 0
+    if not _REAP_LOCK.acquire(blocking=False):
+        return 0
     try:
+        _LAST_REAP_TS = time.time()
+        now = _utc_now_iso()
         cur = conn.execute(
             """
             UPDATE mining_tasks
@@ -2910,6 +2923,8 @@ def _reap_expired_running(conn: _DBConn) -> int:
         return int(cur.rowcount or 0)
     except Exception:
         return 0
+    finally:
+        _REAP_LOCK.release()
 
 def claim_next_task_any(worker_id: str) -> Optional[dict]:
     # compute token 專用：跨用戶派工（只派給 run_enabled=1）

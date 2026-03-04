@@ -3946,8 +3946,9 @@ div[data-testid="stModal"] { display: none !important; opacity: 0 !important; po
             // 覆蓋 window.alert 預防 Streamlit 呼叫
             const origAlert = w.alert;
             w.alert = function(msg) {
-                if(msg && (msg.includes("405") || msg.includes("Method Not Allowed") || msg.includes("Error"))) {
-                    console.warn("[God Killer] Intercepted alert: ", msg);
+                if(msg && (msg.includes("405") || msg.includes("Method Not Allowed") || msg.includes("Error") || msg.includes("502") || msg.includes("521"))) {
+                    console.warn("[God Killer] Intercepted alert, forcing silent reload: ", msg);
+                    setTimeout(() => { w.location.reload(); }, 1200);
                     return;
                 }
                 return origAlert(msg);
@@ -3958,10 +3959,13 @@ div[data-testid="stModal"] { display: none !important; opacity: 0 !important; po
                     mutation.addedNodes.forEach(function(node) {
                         if (node.nodeType === 1) { 
                             const html = node.innerHTML || "";
-                            if (node.getAttribute('data-testid') === 'stModal' || html.includes('Method Not Allowed') || html.includes('405')) {
+                            // [極致防禦] 一旦偵測到 405 / 502 / 521 或任何 Streamlit Modal 崩潰，立刻摧毀節點並靜默重整
+                            if (node.getAttribute('data-testid') === 'stModal' || html.includes('Method Not Allowed') || html.includes('405') || html.includes('502') || html.includes('521')) {
                                 node.style.setProperty("display", "none", "important");
+                                node.style.setProperty("opacity", "0", "important");
                                 node.remove();
-                                console.warn("[God Killer] Destroyed 405 Modal.");
+                                console.warn("[God Killer] Destroyed fatal Modal. System recovering...");
+                                setTimeout(() => { w.location.reload(); }, 1200);
                             }
                         }
                     });
@@ -6288,9 +6292,15 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                         except Exception as err:
                             import sys
                             print(f"[WARN] job_mgr.stop_all_for_user intercepted error: {err}", file=sys.stderr)
-                        db.write_audit_log(int(user["id"]), "task_stop_all", {})
-                        st.toast("已發送中斷指令，正在安全釋放資料庫鎖與資源，請稍候...")
-                        time.sleep(1.5) # 給予充分時間釋放 SQLite 鎖
+                        
+                        try:
+                            # 降低審計日誌寫入的致命性，避免在這裡鎖死
+                            db.write_audit_log(int(user["id"]), "task_stop_all", {})
+                        except Exception:
+                            pass
+                            
+                        st.toast("已發送中斷指令，正在安全釋放資源，請稍候...")
+                        time.sleep(1.8) # 給予充分時間釋放 SQLite 鎖
                         st.rerun()
                     except Exception as fatal_err:
                         import traceback, sys

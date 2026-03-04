@@ -875,7 +875,7 @@ class JobManager:
                                 db.update_task_status(task_id, "queued")
                                 return
 
-                            if done - last_commit >= 50 or (time.time() - last_commit_ts) >= 1.0:
+                            if done - last_commit >= 300 or (time.time() - last_commit_ts) >= 4.0:
                                 _commit()
                 else:
                     for i, family_params in enumerate(part):
@@ -933,7 +933,7 @@ class JobManager:
                                 db.update_task_status(task_id, "queued")
                                 return
 
-                            if done - last_commit >= 50 or (time.time() - last_commit_ts) >= 1.0:
+                            if done - last_commit >= 300 or (time.time() - last_commit_ts) >= 4.0:
                                 _commit()
 
                 _commit()
