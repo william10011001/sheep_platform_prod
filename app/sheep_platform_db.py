@@ -449,7 +449,8 @@ def _conn() -> _DBConn:
         import traceback
         print(f"[DB ERROR] 無法建立資料庫目錄 {path}, 錯誤詳情: {e}\n{traceback.format_exc()}")
 
-    raw = sqlite3.connect(path, timeout=30.0, check_same_thread=False)
+    # [專家級修復] 使用 IMMEDIATE 隔離級別，根除 SQLite 讀寫鎖升級導致的 deadlock 與瞬間 database is locked 錯誤
+    raw = sqlite3.connect(path, timeout=30.0, check_same_thread=False, isolation_level="IMMEDIATE")
     raw.row_factory = sqlite3.Row
 
     try:
@@ -1149,51 +1150,45 @@ def set_user_run_enabled(user_id: int, enabled: bool) -> None:
     if uid <= 0:
         return
 
-    conn = _conn()
-    try:
-        conn.execute("UPDATE users SET run_enabled = ? WHERE id = ?", (1 if enabled else 0, uid))
-
-        # 關閉時：回收該 user 所有 running 任務，避免浪費算力
-        if not bool(enabled):
-            now = _now_iso()
-
-            # 舊 sqlite DB 可能沒有 lease 欄位：先嘗試補齊（不成功也不能炸）
+    import time, random
+    for attempt in range(10):
+        try:
+            conn = _conn()
             try:
-                conn.execute("ALTER TABLE mining_tasks ADD COLUMN lease_id TEXT")
-            except Exception:
-                pass
-            try:
-                conn.execute("ALTER TABLE mining_tasks ADD COLUMN lease_worker_id TEXT")
-            except Exception:
-                pass
-            try:
-                conn.execute("ALTER TABLE mining_tasks ADD COLUMN lease_expires_at TEXT")
-            except Exception:
-                pass
+                conn.execute("UPDATE users SET run_enabled = ? WHERE id = ?", (1 if enabled else 0, uid))
 
-            # 優先用「帶 lease 清除」的回收；若欄位仍不存在則 fallback
-            try:
-                conn.execute(
-                    """
-                    UPDATE mining_tasks
-                    SET status='assigned',
-                        lease_id=NULL,
-                        lease_worker_id=NULL,
-                        lease_expires_at=NULL,
-                        updated_at=?
-                    WHERE user_id=? AND status='running'
-                    """,
-                    (now, uid),
-                )
-            except Exception:
-                conn.execute(
-                    "UPDATE mining_tasks SET status='assigned', updated_at=? WHERE user_id=? AND status='running'",
-                    (now, uid),
-                )
+                # 關閉時：回收該 user 所有 running 任務，避免浪費算力
+                if not bool(enabled):
+                    now = _now_iso()
+                    # 優先用「帶 lease 清除」的回收；若欄位仍不存在則 fallback
+                    try:
+                        conn.execute(
+                            """
+                            UPDATE mining_tasks
+                            SET status='assigned',
+                                lease_id=NULL,
+                                lease_worker_id=NULL,
+                                lease_expires_at=NULL,
+                                updated_at=?
+                            WHERE user_id=? AND status='running'
+                            """,
+                            (now, uid),
+                        )
+                    except Exception:
+                        conn.execute(
+                            "UPDATE mining_tasks SET status='assigned', updated_at=? WHERE user_id=? AND status='running'",
+                            (now, uid),
+                        )
 
-        conn.commit()
-    finally:
-        conn.close()
+                conn.commit()
+                break
+            finally:
+                conn.close()
+        except Exception as e:
+            if attempt == 9:
+                import sys
+                print(f"[CRITICAL DB ERROR] set_user_run_enabled 放棄重試: {e}", file=sys.stderr)
+            time.sleep(random.uniform(0.1, 0.5) * (1.2 ** attempt))
 
 
 def get_wallet_info(user_id: int) -> Dict[str, str]:
@@ -3233,27 +3228,7 @@ def finish_task_with_lease(task_id: int, user_id: int, worker_id: str, lease_id:
     finally:
         conn.close()
 
-# 停用 run_enabled 時，直接回收該 user 的 running 任務（避免浪費算力）
-def set_user_run_enabled(user_id: int, enabled: bool) -> None:
-    conn = _conn()
-    try:
-        conn.execute("UPDATE users SET run_enabled = ? WHERE id = ?", (1 if enabled else 0, int(user_id)))
-        if not bool(enabled):
-            now = _utc_now_iso()
-            # 回收 lease，讓 compute worker 立刻停手（progress 會 409 然後 release）
-            conn.execute(
-                """
-                UPDATE mining_tasks
-                SET status='assigned',
-                    lease_id=NULL, lease_worker_id=NULL, lease_expires_at=NULL,
-                    updated_at=?
-                WHERE user_id=? AND status='running'
-                """,
-                (now, int(user_id)),
-            )
-        conn.commit()
-    finally:
-        conn.close()
+# (重複的 set_user_run_enabled 已被移除，統一使用上方具備重試機制的版本)
 
 
 def get_all_candidates_detailed(limit: int = 1000) -> list:

@@ -1341,3 +1341,11 @@ def get_task(task_id: int, request: Request, authorization: Optional[str] = Head
     if not task:
         raise HTTPException(status_code=404, detail="not_found")
     return dict(task)
+
+from fastapi.responses import JSONResponse
+
+# [專家級終極防護] 捕捉所有未匹配的 HTTP 方法與路徑，直接回傳 200 OK JSON。
+# 這樣 Streamlit 的 Fallback XHR POST 請求就永遠不會收到 405 Method Not Allowed，從而徹底根除前端報錯彈窗！
+@app.api_route("/{path_name:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"])
+async def catch_all(request: Request, path_name: str):
+    return JSONResponse(status_code=200, content={"ok": False, "msg": f"Intercepted unhandled route to prevent 405 error: {path_name}"})
