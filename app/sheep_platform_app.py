@@ -6156,10 +6156,7 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                         to_queue.append(tid)
                     
                     if to_queue:
-                        # 將任務加入排程列隊
-                        result = job_mgr.enqueue_many(int(user["id"]), to_queue, bt)
-                        
-                        # 同步更新任務狀態與進度，確保介面即時反映排隊狀態
+                        # 先同步更新任務狀態與進度，確保介面即時反映排隊狀態
                         for qid in to_queue:
                             try:
                                 db.update_task_status(qid, "queued")
@@ -6179,11 +6176,21 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                             except Exception:
                                 pass
                         
-                        db.write_audit_log(
-                            int(user["id"]),
-                            "task_queue_all",
-                            {"queued": int(result.get("queued") or 0), "skipped": int(result.get("skipped") or 0)},
-                        )
+                        # 將任務加入排程列隊改為背景執行，避免阻塞引發 Cloudflare 504 錯誤
+                        import threading
+                        def _bg_enqueue():
+                            try:
+                                result = job_mgr.enqueue_many(int(user["id"]), to_queue, bt)
+                                db.write_audit_log(
+                                    int(user["id"]),
+                                    "task_queue_all",
+                                    {"queued": int(result.get("queued") or 0), "skipped": int(result.get("skipped") or 0)},
+                                )
+                            except Exception as e:
+                                import sys
+                                print(f"[WARN] BG enqueue failed: {e}", file=sys.stderr)
+                                
+                        threading.Thread(target=_bg_enqueue, daemon=True).start()
                         st.toast(f"已成功排程 {len(to_queue)} 個任務")
                     else:
                         st.toast("目前無可執行的任務")
@@ -6196,12 +6203,15 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                     st.session_state[run_key] = False
                     run_all = False
                     try:
-                        job_mgr.stop_all_for_user(int(user["id"]))
+                        import threading
+                        threading.Thread(target=job_mgr.stop_all_for_user, args=(int(user["id"]),), daemon=True).start()
                     except Exception as err:
                         # [專家級防護] 攔截 Worker API 離線或 HTTP Method 不符導致的 405 彈窗錯誤
                         import sys
                         print(f"[WARN] job_mgr.stop_all_for_user intercepted error: {err}", file=sys.stderr)
                     db.write_audit_log(int(user["id"]), "task_stop_all", {})
+                    st.toast("已發送中斷指令，背景釋放資源中...")
+                    time.sleep(0.5)
                     st.rerun()
 
         with col_b:
@@ -6312,31 +6322,42 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                 to_queue2.append(_tid)
 
             if to_queue2:
-                result2 = job_mgr.enqueue_many(int(user["id"]), to_queue2, bt)
-                if int(result2.get("queued") or 0) > 0:
-                    for qid in to_queue2:
+                # 先更新資料庫狀態
+                for qid in to_queue2:
+                    try:
+                        db.update_task_status(qid, "queued")
+                        trow = db.get_task(int(qid)) or {}
                         try:
-                            db.update_task_status(qid, "queued")
-                            trow = db.get_task(int(qid)) or {}
-                            try:
-                                prog0 = json.loads(trow.get("progress_json") or "{}")
-                            except Exception:
-                                prog0 = {}
-                            if not isinstance(prog0, dict):
-                                prog0 = {}
-
-                            prog0["phase"] = "queued"
-                            prog0["phase_msg"] = "持續性部署：程序已掛載至等待序列..."
-                            prog0["updated_at"] = _iso(_utc_now())
-
-                            db.update_task_progress(qid, prog0)
+                            prog0 = json.loads(trow.get("progress_json") or "{}")
                         except Exception:
-                            pass
-                    db.write_audit_log(
-                        int(user["id"]),
-                        "task_auto_queue",
-                        {"queued": int(result2.get("queued") or 0), "skipped": int(result2.get("skipped") or 0)},
-                    )
+                            prog0 = {}
+                        if not isinstance(prog0, dict):
+                            prog0 = {}
+
+                        prog0["phase"] = "queued"
+                        prog0["phase_msg"] = "持續性部署：程序已掛載至等待序列..."
+                        prog0["updated_at"] = _iso(_utc_now())
+
+                        db.update_task_progress(qid, prog0)
+                    except Exception:
+                        pass
+                
+                # 背景執行 API 請求
+                import threading
+                def _bg_auto_enqueue():
+                    try:
+                        result2 = job_mgr.enqueue_many(int(user["id"]), to_queue2, bt)
+                        if int(result2.get("queued") or 0) > 0:
+                            db.write_audit_log(
+                                int(user["id"]),
+                                "task_auto_queue",
+                                {"queued": int(result2.get("queued") or 0), "skipped": int(result2.get("skipped") or 0)},
+                            )
+                    except Exception as e:
+                        import sys
+                        print(f"[WARN] BG auto enqueue failed: {e}", file=sys.stderr)
+                        
+                threading.Thread(target=_bg_auto_enqueue, daemon=True).start()
                 st.rerun()
 
     def _fmt_gap_min(cur: Optional[float], thr: float) -> str:
@@ -6632,9 +6653,18 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                 with col_btn1:
                     if v_status == "assigned":
                         if st.button("配置資源", key=f"start_now_{t_id}", use_container_width=True):
-                            ok = job_mgr.start(t_id, bt)
-                            if not ok:
-                                job_mgr.enqueue_many(int(user["id"]), [t_id], bt)
+                            def _bg_start():
+                                try:
+                                    ok = job_mgr.start(t_id, bt)
+                                    if not ok:
+                                        job_mgr.enqueue_many(int(user["id"]), [t_id], bt)
+                                except Exception as e:
+                                    import sys
+                                    print(f"[WARN] BG start failed: {e}", file=sys.stderr)
+                            import threading
+                            threading.Thread(target=_bg_start, daemon=True).start()
+                            st.toast("已發送配置資源指令")
+                            time.sleep(0.3)
                             st.rerun()
                     elif v_status == "queued":
                         st.markdown('<div style="text-align:center; padding:8px; border:1px solid #334155; border-radius:6px; color:#cbd5e1; font-size:14px;">序列佇列中</div>', unsafe_allow_html=True)
@@ -6644,18 +6674,24 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                     if v_status == "assigned":
                         if st.button("加入叢集", key=f"queue_{t_id}", use_container_width=True):
                             try:
-                                job_mgr.enqueue_many(int(user["id"]), [t_id], bt)
+                                import threading
+                                threading.Thread(target=job_mgr.enqueue_many, args=(int(user["id"]), [t_id], bt), daemon=True).start()
+                                st.toast("任務已發送至叢集佇列")
                             except Exception as err:
                                 import sys
                                 print(f"[WARN] job_mgr.enqueue_many intercepted error: {err}", file=sys.stderr)
+                            time.sleep(0.3)
                             st.rerun()
                     if v_status == "running":
                         if st.button("釋放資源", key=f"stop_{t_id}", use_container_width=True):
                             try:
-                                job_mgr.stop(t_id)
+                                import threading
+                                threading.Thread(target=job_mgr.stop, args=(t_id,), daemon=True).start()
+                                st.toast("已發送資源釋放指令")
                             except Exception as err:
                                 import sys
                                 print(f"[WARN] job_mgr.stop intercepted error: {err}", file=sys.stderr)
+                            time.sleep(0.3)
                             st.rerun()
                     # [專家級修復] 若任務因異常死鎖被標記為 error 或 completed(但帶有 error 階段)，提供一鍵重置
                     if v_status == "error" or phase == "error":

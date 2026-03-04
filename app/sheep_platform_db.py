@@ -1036,12 +1036,20 @@ def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
         uid = int(user_id)
     except Exception:
         return None
-    conn = _conn()
-    try:
-        row = conn.execute("SELECT * FROM users WHERE id = ? LIMIT 1", (uid,)).fetchone()
-        return dict(row) if row else None
-    finally:
-        conn.close()
+    import time
+    for attempt in range(5):
+        try:
+            conn = _conn()
+            try:
+                row = conn.execute("SELECT * FROM users WHERE id = ? LIMIT 1", (uid,)).fetchone()
+                return dict(row) if row else None
+            finally:
+                conn.close()
+        except Exception:
+            if attempt == 4:
+                return None
+            time.sleep(0.1 * (2 ** attempt))
+    return None
 
 
 def create_user(
@@ -1424,52 +1432,64 @@ def ensure_cycle_rollover() -> None:
         conn.close()
 
 def get_active_cycle() -> dict:
-    conn = _conn()
-    try:
-        cur = conn.execute("SELECT id, name, status, start_ts, end_ts FROM mining_cycles WHERE status = 'active' ORDER BY id DESC LIMIT 1")
-        row = cur.fetchone()
-        if row:
-            return dict(row)
-        return {}
-    except Exception:
-        return {}
-    finally:
-        conn.close()
+    import time
+    for attempt in range(5):
+        try:
+            conn = _conn()
+            try:
+                cur = conn.execute("SELECT id, name, status, start_ts, end_ts FROM mining_cycles WHERE status = 'active' ORDER BY id DESC LIMIT 1")
+                row = cur.fetchone()
+                if row:
+                    return dict(row)
+                return {}
+            finally:
+                conn.close()
+        except Exception:
+            if attempt == 4:
+                return {}
+            time.sleep(0.1 * (2 ** attempt))
+    return {}
 
 def list_factor_pools(cycle_id: int) -> list:
     """專家級 Pool 檢索：具備自動修復與跨週期一致性檢查機制"""
-    conn = _conn()
-    try:
-        cur = conn.execute("SELECT * FROM factor_pools WHERE cycle_id = ?", (int(cycle_id),))
-        rows = [dict(row) for row in cur.fetchall()]
-        
-        # [主動除錯機制] 若偵測到新週期 Pool 遺失，執行深度聯集救援
-        if not rows:
-            # 尋找最近一個擁有 Pool 的週期
-            last_p_cycle = conn.execute("SELECT cycle_id FROM factor_pools ORDER BY cycle_id DESC LIMIT 1").fetchone()
-            if last_p_cycle and last_p_cycle["cycle_id"] != cycle_id:
-                source_cid = last_p_cycle["cycle_id"]
-                print(f"[DB MAINTENANCE] 偵測到週期 {cycle_id} 缺乏 Pool 資料，啟動從週期 {source_cid} 繼承程序...")
-                try:
-                    conn.execute("""
-                        INSERT INTO factor_pools (cycle_id, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, created_at)
-                        SELECT ?, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, ?
-                        FROM factor_pools WHERE cycle_id = ? AND active = 1
-                    """, (cycle_id, _now_iso(), source_cid))
-                    conn.commit()
-                    cur = conn.execute("SELECT * FROM factor_pools WHERE cycle_id = ?", (cycle_id,))
-                    rows = [dict(row) for row in cur.fetchall()]
-                except Exception as rescue_e:
-                    import traceback
-                    print(f"[FATAL DB ERROR] Pool 跨週期繼承失敗: {rescue_e}\n{traceback.format_exc()}")
-        
-        return rows
-    except Exception as e:
-        import traceback
-        print(f"[DB ERROR] list_factor_pools 執行異常: {e}\n{traceback.format_exc()}")
-        return []
-    finally:
-        conn.close()
+    import time
+    for attempt in range(5):
+        try:
+            conn = _conn()
+            try:
+                cur = conn.execute("SELECT * FROM factor_pools WHERE cycle_id = ?", (int(cycle_id),))
+                rows = [dict(row) for row in cur.fetchall()]
+                
+                # [主動除錯機制] 若偵測到新週期 Pool 遺失，執行深度聯集救援
+                if not rows:
+                    # 尋找最近一個擁有 Pool 的週期
+                    last_p_cycle = conn.execute("SELECT cycle_id FROM factor_pools ORDER BY cycle_id DESC LIMIT 1").fetchone()
+                    if last_p_cycle and last_p_cycle["cycle_id"] != cycle_id:
+                        source_cid = last_p_cycle["cycle_id"]
+                        print(f"[DB MAINTENANCE] 偵測到週期 {cycle_id} 缺乏 Pool 資料，啟動從週期 {source_cid} 繼承程序...")
+                        try:
+                            conn.execute("""
+                                INSERT INTO factor_pools (cycle_id, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, created_at)
+                                SELECT ?, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, ?
+                                FROM factor_pools WHERE cycle_id = ? AND active = 1
+                            """, (cycle_id, _now_iso(), source_cid))
+                            conn.commit()
+                            cur = conn.execute("SELECT * FROM factor_pools WHERE cycle_id = ?", (cycle_id,))
+                            rows = [dict(row) for row in cur.fetchall()]
+                        except Exception as rescue_e:
+                            import traceback
+                            print(f"[FATAL DB ERROR] Pool 跨週期繼承失敗: {rescue_e}\n{traceback.format_exc()}")
+                
+                return rows
+            finally:
+                conn.close()
+        except Exception as e:
+            if attempt == 4:
+                import traceback
+                print(f"[DB ERROR] list_factor_pools 執行異常: {e}\n{traceback.format_exc()}")
+                return []
+            time.sleep(0.1 * (2 ** attempt))
+    return []
 
 def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, max_tasks: int = 6, preferred_family: str = "") -> None:
     import time
@@ -1726,39 +1746,51 @@ def recover_factor_pools_from_local(cycle_id: int, search_roots: Optional[List[s
     report["skipped_duplicates"] = int(skipped)
     return report
 def list_tasks_for_user(user_id: int, cycle_id: int = 0) -> list:
-    conn = _conn()
-    try:
-        if cycle_id > 0:
-            cur = conn.execute("SELECT t.*, p.name as pool_name, p.symbol, p.timeframe_min, p.family FROM mining_tasks t LEFT JOIN factor_pools p ON t.pool_id = p.id WHERE t.user_id = ? AND t.cycle_id = ?", (user_id, cycle_id))
-        else:
-            cur = conn.execute("SELECT t.*, p.name as pool_name, p.symbol, p.timeframe_min, p.family FROM mining_tasks t LEFT JOIN factor_pools p ON t.pool_id = p.id WHERE t.user_id = ?", (user_id,))
-        return [dict(row) for row in cur.fetchall()]
-    except Exception as e:
-        print(f"[DB ERROR] list_tasks_for_user: {e}")
-        return []
-    finally:
-        conn.close()
+    import time
+    for attempt in range(5):
+        try:
+            conn = _conn()
+            try:
+                if cycle_id > 0:
+                    cur = conn.execute("SELECT t.*, p.name as pool_name, p.symbol, p.timeframe_min, p.family FROM mining_tasks t LEFT JOIN factor_pools p ON t.pool_id = p.id WHERE t.user_id = ? AND t.cycle_id = ?", (user_id, cycle_id))
+                else:
+                    cur = conn.execute("SELECT t.*, p.name as pool_name, p.symbol, p.timeframe_min, p.family FROM mining_tasks t LEFT JOIN factor_pools p ON t.pool_id = p.id WHERE t.user_id = ?", (user_id,))
+                return [dict(row) for row in cur.fetchall()]
+            finally:
+                conn.close()
+        except Exception as e:
+            if attempt == 4:
+                print(f"[DB ERROR] list_tasks_for_user: {e}")
+                return []
+            time.sleep(0.1 * (2 ** attempt))
+    return []
 
 def list_submissions(user_id: int = 0, status: str = "", limit: int = 300) -> list:
-    conn = _conn()
-    try:
-        query = "SELECT s.*, u.username, p.name as pool_name, p.symbol, p.timeframe_min, p.family FROM submissions s LEFT JOIN users u ON s.user_id = u.id LEFT JOIN factor_pools p ON s.pool_id = p.id WHERE 1=1"
-        params = []
-        if user_id > 0:
-            query += " AND s.user_id = ?"
-            params.append(user_id)
-        if status:
-            query += " AND s.status = ?"
-            params.append(status)
-        query += " ORDER BY s.id DESC LIMIT ?"
-        params.append(limit)
-        cur = conn.execute(query, params)
-        return [dict(row) for row in cur.fetchall()]
-    except Exception as e:
-        print(f"[DB ERROR] list_submissions: {e}")
-        return []
-    finally:
-        conn.close()
+    import time
+    for attempt in range(5):
+        try:
+            conn = _conn()
+            try:
+                query = "SELECT s.*, u.username, p.name as pool_name, p.symbol, p.timeframe_min, p.family FROM submissions s LEFT JOIN users u ON s.user_id = u.id LEFT JOIN factor_pools p ON s.pool_id = p.id WHERE 1=1"
+                params = []
+                if user_id > 0:
+                    query += " AND s.user_id = ?"
+                    params.append(user_id)
+                if status:
+                    query += " AND s.status = ?"
+                    params.append(status)
+                query += " ORDER BY s.id DESC LIMIT ?"
+                params.append(limit)
+                cur = conn.execute(query, params)
+                return [dict(row) for row in cur.fetchall()]
+            finally:
+                conn.close()
+        except Exception as e:
+            if attempt == 4:
+                print(f"[DB ERROR] list_submissions: {e}")
+                return []
+            time.sleep(0.1 * (2 ** attempt))
+    return []
 
 def list_task_overview(limit: int = 500) -> list:
     conn = _conn()
@@ -1772,25 +1804,31 @@ def list_task_overview(limit: int = 500) -> list:
         conn.close()
 
 def list_strategies(user_id: int = 0, status: str = "", limit: int = 200) -> list:
-    conn = _conn()
-    try:
-        query = "SELECT s.*, u.username, p.name as pool_name, p.symbol, p.timeframe_min, p.family FROM strategies s LEFT JOIN users u ON s.user_id = u.id LEFT JOIN factor_pools p ON s.pool_id = p.id WHERE 1=1"
-        params = []
-        if user_id > 0:
-            query += " AND s.user_id = ?"
-            params.append(user_id)
-        if status:
-            query += " AND s.status = ?"
-            params.append(status)
-        query += " ORDER BY s.id DESC LIMIT ?"
-        params.append(limit)
-        cur = conn.execute(query, params)
-        return [dict(row) for row in cur.fetchall()]
-    except Exception as e:
-        print(f"[DB ERROR] list_strategies: {e}")
-        return []
-    finally:
-        conn.close()
+    import time
+    for attempt in range(5):
+        try:
+            conn = _conn()
+            try:
+                query = "SELECT s.*, u.username, p.name as pool_name, p.symbol, p.timeframe_min, p.family FROM strategies s LEFT JOIN users u ON s.user_id = u.id LEFT JOIN factor_pools p ON s.pool_id = p.id WHERE 1=1"
+                params = []
+                if user_id > 0:
+                    query += " AND s.user_id = ?"
+                    params.append(user_id)
+                if status:
+                    query += " AND s.status = ?"
+                    params.append(status)
+                query += " ORDER BY s.id DESC LIMIT ?"
+                params.append(limit)
+                cur = conn.execute(query, params)
+                return [dict(row) for row in cur.fetchall()]
+            finally:
+                conn.close()
+        except Exception as e:
+            if attempt == 4:
+                print(f"[DB ERROR] list_strategies: {e}")
+                return []
+            time.sleep(0.1 * (2 ** attempt))
+    return []
 
 def list_payouts(user_id: int = 0, status: str = "", limit: int = 200) -> list:
     conn = _conn()
