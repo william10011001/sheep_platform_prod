@@ -138,9 +138,21 @@ def main() -> None:
                             if not family_params:
                                 family_params = {k: v for k, v in params.items() if k not in ["family", "tp", "sl", "max_hold"]}
                                 
+                            # [專家級修復] 正確解析策略池的 risk_spec，確保 OOS 驗證能完美支援 reverse_mode (做空) 與自訂手續費/滑點
+                            import json
+                            risk_spec = {}
+                            try:
+                                risk_spec = json.loads(oos_task.get("risk_spec_json") or "{}")
+                            except Exception:
+                                pass
+                                
                             res = bt.run_backtest(
                                 df, params.get("family", family), family_params, 
-                                float(params.get("tp", 1.0)), float(params.get("sl", 1.0)), int(params.get("max_hold", 100))
+                                float(params.get("tp", 1.0)), float(params.get("sl", 1.0)), int(params.get("max_hold", 100)),
+                                fee_side=float(risk_spec.get("fee_side", 0.0002)),
+                                slippage=float(risk_spec.get("slippage", 0.0)),
+                                worst_case=bool(risk_spec.get("worst_case", True)),
+                                reverse_mode=bool(risk_spec.get("reverse_mode", False))
                             )
                             
                             metrics = {
