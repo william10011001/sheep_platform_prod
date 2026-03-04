@@ -304,20 +304,25 @@ class JobManager:
 
         conn = db._conn()
         try:
-            # [專家級修復] 僅撈取狀態，嚴格禁止在此迴圈中讀寫龐大的 progress_json，徹底消滅 Write Storm
+            # [專家級修復] 注入 cycle_id 強制走索引，消滅排程器的全表掃描 CPU 暴衝
+            c_row = conn.execute("SELECT id FROM mining_cycles WHERE status = 'active' ORDER BY id DESC LIMIT 1").fetchone()
+            c_id = int(c_row["id"]) if c_row else 0
+            
             rows = conn.execute(
                 """
                 SELECT t.id, t.user_id, t.status
                 FROM mining_tasks t
                 JOIN users u ON u.id = t.user_id
                 JOIN factor_pools p ON p.id = t.pool_id
-                WHERE t.status IN ('assigned', 'queued')
+                WHERE t.cycle_id = ?
+                  AND t.status IN ('assigned', 'queued')
                   AND COALESCE(u.disabled, 0) = 0
                   AND COALESCE(u.run_enabled, 1) = 1
                   AND COALESCE(p.active, 1) = 1
                 ORDER BY t.id ASC
                 LIMIT 5000
-                """
+                """,
+                (c_id,)
             ).fetchall()
         finally:
             try:

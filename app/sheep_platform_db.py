@@ -988,6 +988,11 @@ def init_db() -> None:
         except Exception:
             pass        
         try:
+            # [終極護城河] 建立 status 專屬索引，徹底防禦全表掃描
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_mining_tasks_status_fast ON mining_tasks(status)")
+        except Exception:
+            pass
+        try:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_mining_tasks_updated_status ON mining_tasks(updated_at, status)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_candidates_created_at ON candidates(created_at)")
@@ -3009,6 +3014,10 @@ def claim_next_task(user_id: int, worker_id: str) -> Optional[dict]:
     try:
         _reap_expired_running(conn)
 
+        # [專家級優化] 同樣注入 cycle_id，利用複合索引秒殺查詢
+        c_row = conn.execute("SELECT id FROM mining_cycles WHERE status = 'active' ORDER BY id DESC LIMIT 1").fetchone()
+        c_id = int(c_row["id"]) if c_row else 0
+
         if getattr(conn, "kind", "sqlite") == "postgres":
             row = conn.execute(
                 """
@@ -3017,15 +3026,16 @@ def claim_next_task(user_id: int, worker_id: str) -> Optional[dict]:
                 JOIN users u ON u.id = t.user_id
                 JOIN factor_pools p ON p.id = t.pool_id
                 WHERE t.user_id=?
-                  AND t.status IN ('assigned','queued')
-                  AND COALESCE(u.disabled,0)=0
-                  AND COALESCE(u.run_enabled,1)=1
-                  AND COALESCE(p.active,1)=1
+                AND t.cycle_id=?
+                AND t.status IN ('assigned','queued')
+                AND COALESCE(u.disabled,0)=0
+                AND COALESCE(u.run_enabled,1)=1
+                AND COALESCE(p.active,1)=1
                 ORDER BY t.id ASC
                 FOR UPDATE OF t SKIP LOCKED
                 LIMIT 1
                 """,
-                (uid,),
+                (uid, c_id),
             ).fetchone()
         else:
             row = conn.execute(
@@ -3035,14 +3045,15 @@ def claim_next_task(user_id: int, worker_id: str) -> Optional[dict]:
                 JOIN users u ON u.id = t.user_id
                 JOIN factor_pools p ON p.id = t.pool_id
                 WHERE t.user_id=?
-                  AND t.status IN ('assigned','queued')
-                  AND COALESCE(u.disabled,0)=0
-                  AND COALESCE(u.run_enabled,1)=1
-                  AND COALESCE(p.active,1)=1
+                AND t.cycle_id=?
+                AND t.status IN ('assigned','queued')
+                AND COALESCE(u.disabled,0)=0
+                AND COALESCE(u.run_enabled,1)=1
+                AND COALESCE(p.active,1)=1
                 ORDER BY t.id ASC
                 LIMIT 1
                 """,
-                (uid,),
+                (uid, c_id),
             ).fetchone()
 
         if not row:
