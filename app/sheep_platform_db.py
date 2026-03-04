@@ -442,6 +442,7 @@ def _conn() -> _DBConn:
         return _DBConn("postgres", c)
 
     # sqlite
+    # sqlite
     path = _db_path()
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -1157,7 +1158,7 @@ def set_user_run_enabled(user_id: int, enabled: bool) -> None:
             try:
                 conn.execute("UPDATE users SET run_enabled = ? WHERE id = ?", (1 if enabled else 0, uid))
 
-                # 關閉時：回收該 user 所有 running 任務，避免浪費算力
+                # 關閉時：回收該 user 所有 running/queued 任務，避免卡死或浪費算力
                 if not bool(enabled):
                     now = _now_iso()
                     # 優先用「帶 lease 清除」的回收；若欄位仍不存在則 fallback
@@ -1170,13 +1171,13 @@ def set_user_run_enabled(user_id: int, enabled: bool) -> None:
                                 lease_worker_id=NULL,
                                 lease_expires_at=NULL,
                                 updated_at=?
-                            WHERE user_id=? AND status='running'
+                            WHERE user_id=? AND status IN ('running', 'queued')
                             """,
                             (now, uid),
                         )
                     except Exception:
                         conn.execute(
-                            "UPDATE mining_tasks SET status='assigned', updated_at=? WHERE user_id=? AND status='running'",
+                            "UPDATE mining_tasks SET status='assigned', updated_at=? WHERE user_id=? AND status IN ('running', 'queued')",
                             (now, uid),
                         )
 

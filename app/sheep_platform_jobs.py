@@ -295,32 +295,26 @@ class JobManager:
         return None
 
     def _auto_enqueue_orphans(self) -> None:
-        # 目標：
-        # 1) assigned/queued 的任務一定會被塞進隊列（根治卡在 QUEUED）
-        # 2) 絕對禁止把 progress 歸零（根治「挖到一半刷新就歸零」）
-        # 3) 任何錯誤都要印出來（根治「不知道卡哪」）
-
         try:
             import backtest_panel2
         except Exception as e:
-            import traceback
-            print(f"[CRITICAL] backtest_panel2 import failed: {e}\n{traceback.format_exc()}", file=sys.stderr)
+            print(f"[CRITICAL] backtest_panel2 import failed: {e}", file=sys.stderr)
             return
 
-        # 注意：這裡加上 users.disabled / users.run_enabled / pool.active 過濾，避免把不該跑的任務塞進隊列
         conn = db._conn()
         try:
+            # [專家級修復] 僅撈取狀態，嚴格禁止在此迴圈中讀寫龐大的 progress_json
             rows = conn.execute(
                 """
-                SELECT t.id, t.user_id
+                SELECT t.id, t.user_id, t.status
                 FROM mining_tasks t
-                LEFT JOIN users u ON u.id = t.user_id
-                LEFT JOIN factor_pools p ON p.id = t.pool_id
+                JOIN users u ON u.id = t.user_id
+                JOIN factor_pools p ON p.id = t.pool_id
                 WHERE t.status IN ('assigned', 'queued')
                   AND COALESCE(u.disabled, 0) = 0
                   AND COALESCE(u.run_enabled, 1) = 1
                   AND COALESCE(p.active, 1) = 1
-                ORDER BY COALESCE(t.updated_at, t.created_at) ASC, t.id ASC
+                ORDER BY t.id ASC
                 LIMIT 5000
                 """
             ).fetchall()
@@ -333,57 +327,47 @@ class JobManager:
         if not rows:
             return
 
-        # 先把「整體排隊位置」算出來，寫進 progress（讓前端至少知道是不是卡在排程器）
-        total = int(len(rows))
-        to_enqueue: Dict[int, List[Tuple[int, int, int]]] = {}
-        pos = 0
+        to_enqueue: Dict[int, List[int]] = {}
+        to_mark_queued: List[int] = []
+
         for r in rows:
-            pos += 1
             try:
                 tid = int(r["id"])
                 uid = int(r["user_id"])
+                st_val = str(r["status"])
             except Exception:
                 continue
 
             if self.is_running(tid) or self.is_queued(uid, tid):
                 continue
 
-            to_enqueue.setdefault(uid, []).append((tid, int(pos), int(total)))
+            to_enqueue.setdefault(uid, []).append(tid)
+            if st_val == "assigned":
+                to_mark_queued.append(tid)
 
         if not to_enqueue:
             return
 
-        for uid, items in to_enqueue.items():
-            tids = [int(x[0]) for x in items]
-            res = self.enqueue_many(int(uid), tids, backtest_panel2)
+        # 1. 記憶體層級快速加入佇列
+        for uid, tids in to_enqueue.items():
+            self.enqueue_many(int(uid), tids, backtest_panel2)
 
-            if int(res.get("queued") or 0) <= 0:
-                continue
-
-            # 只更新 queued 狀態與排隊資訊，不碰 combos_done/combos_total（保留進度）
-            for tid, qpos, qtot in items:
-                if not self.is_queued(int(uid), int(tid)):
-                    continue
-                try:
-                    t = db.get_task(int(tid)) or {}
-                    prog = _json_load(t.get("progress_json") or "{}")
-                    if not isinstance(prog, dict):
-                        prog = {}
-
-                    prog["phase"] = "queued"
-                    prog["phase_msg"] = "等待排程分配..."
-                    prog["queue_pos"] = int(qpos)
-                    prog["queue_total"] = int(qtot)
-                    prog["updated_at"] = db.utc_now_iso()
-
-                    # 若任務還是 assigned，就標成 queued；若本來就 queued，不動它
-                    if str(t.get("status") or "") == "assigned":
-                        db.update_task_status(int(tid), "queued")
-
-                    db.update_task_progress(int(tid), prog)
-                except Exception as e:
-                    import traceback
-                    print(f"[DB ERROR] _auto_enqueue_orphans update failed tid={tid}: {e}\n{traceback.format_exc()}", file=sys.stderr)
+        # 2. [專家級修復] 批次更新 assigned -> queued，徹底消除寫入風暴 (Write Storm)
+        if to_mark_queued:
+            conn = db._conn()
+            try:
+                now = db.utc_now_iso()
+                chunk_size = 100
+                for i in range(0, len(to_mark_queued), chunk_size):
+                    chunk = to_mark_queued[i:i+chunk_size]
+                    ph = ",".join(["?"] * len(chunk))
+                    conn.execute(f"UPDATE mining_tasks SET status='queued', updated_at=? WHERE id IN ({ph})", [now] + chunk)
+                conn.commit()
+            except Exception as e:
+                import sys
+                print(f"[DB WARN] _auto_enqueue_orphans batch update failed: {e}", file=sys.stderr)
+            finally:
+                conn.close()
 
     def _scheduler_loop(self) -> None:
         try:
