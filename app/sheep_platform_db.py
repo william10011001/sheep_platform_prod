@@ -1503,7 +1503,8 @@ def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, m
                             import random
                             p = random.choice(pools)
                             part_idx = random.randint(0, max(0, int(p["num_partitions"]) - 1))
-                            # 避免同一個 user 在同一個 pool/cycle 反覆拿到同分割，減少重複與資料膨脹
+                            # [專家級修復] 徹底避免同一個 user 在同一個 pool/cycle 反覆拿到同一個分割
+                            # 移除 status 過濾，只要派發過（包含 completed 或 error）就不再派發
                             conn.execute(
                                 """
                                 INSERT INTO mining_tasks (user_id, pool_id, cycle_id, partition_idx, num_partitions, status, created_at, updated_at)
@@ -1511,7 +1512,6 @@ def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, m
                                 WHERE NOT EXISTS (
                                     SELECT 1 FROM mining_tasks
                                     WHERE user_id = ? AND pool_id = ? AND cycle_id = ? AND partition_idx = ?
-                                    AND status IN ('assigned','queued','running')
                                 )
                                 """,
                                 (user_id, int(p["id"]), cycle_id, int(part_idx), int(p["num_partitions"]), _now_iso(), _now_iso(),

@@ -5902,20 +5902,22 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
             return
 
         _tq0 = _perf_mark("tasks_query_ms")
-        tasks = db.list_tasks_for_user(int(user["id"]), cycle_id=int(cycle["id"]))
+        # [專家級修復] 撈取所有週期的任務，避免週期切換導致使用者以為進度遺失
+        all_tasks = db.list_tasks_for_user(int(user["id"]), cycle_id=0)
+        tasks = [t for t in all_tasks if t.get("cycle_id") == int(cycle["id"])]
         _perf_add("tasks_query_ms", _tq0)
         strategies = db.list_strategies(user_id=int(user["id"]), limit=200)
         payouts = db.list_payouts(user_id=int(user["id"]), limit=200)
 
         active_tasks = [t for t in tasks if t["status"] in ("assigned", "running")]
-        completed_tasks = [t for t in tasks if t["status"] == "completed"]
+        completed_tasks_all = [t for t in all_tasks if t["status"] == "completed"]
 
         active_strategies = [s for s in strategies if s["status"] == "active"]
         unpaid = [p for p in payouts if p["status"] == "unpaid"]
 
         st.markdown('<div class="metric-row">', unsafe_allow_html=True)
-        st.markdown(_render_kpi("任務", len(active_tasks), "進行中"), unsafe_allow_html=True)
-        st.markdown(_render_kpi("任務", len(completed_tasks), "已完成"), unsafe_allow_html=True)
+        st.markdown(_render_kpi("任務", len(active_tasks), "進行中 (本週期)"), unsafe_allow_html=True)
+        st.markdown(_render_kpi("任務", len(completed_tasks_all), "已完成 (累積)"), unsafe_allow_html=True)
         st.markdown(_render_kpi("策略", len(active_strategies), "有效中"), unsafe_allow_html=True)
         st.markdown(_render_kpi("結算", len(unpaid), "未發放"), unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
@@ -6189,11 +6191,16 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                     time.sleep(0.5)
                     st.rerun()
             else:
-                if st.button("中斷全域運算配置", key="stop_all"):
+                if st.button("中斷", key="stop_all"):
                     db.set_user_run_enabled(int(user["id"]), False)
                     st.session_state[run_key] = False
                     run_all = False
-                    job_mgr.stop_all_for_user(int(user["id"]))
+                    try:
+                        job_mgr.stop_all_for_user(int(user["id"]))
+                    except Exception as err:
+                        # [專家級防護] 攔截 Worker API 離線或 HTTP Method 不符導致的 405 彈窗錯誤
+                        import sys
+                        print(f"[WARN] job_mgr.stop_all_for_user intercepted error: {err}", file=sys.stderr)
                     db.write_audit_log(int(user["id"]), "task_stop_all", {})
                     st.rerun()
 
@@ -6636,11 +6643,34 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                 with col_btn2:
                     if v_status == "assigned":
                         if st.button("加入叢集", key=f"queue_{t_id}", use_container_width=True):
-                            job_mgr.enqueue_many(int(user["id"]), [t_id], bt)
+                            try:
+                                job_mgr.enqueue_many(int(user["id"]), [t_id], bt)
+                            except Exception as err:
+                                import sys
+                                print(f"[WARN] job_mgr.enqueue_many intercepted error: {err}", file=sys.stderr)
                             st.rerun()
                     if v_status == "running":
                         if st.button("釋放資源", key=f"stop_{t_id}", use_container_width=True):
-                            job_mgr.stop(t_id)
+                            try:
+                                job_mgr.stop(t_id)
+                            except Exception as err:
+                                import sys
+                                print(f"[WARN] job_mgr.stop intercepted error: {err}", file=sys.stderr)
+                            st.rerun()
+                    # [專家級修復] 若任務因異常死鎖被標記為 error 或 completed(但帶有 error 階段)，提供一鍵重置
+                    if v_status == "error" or phase == "error":
+                        if st.button("重新初始化", key=f"reset_{t_id}", use_container_width=True):
+                            db.update_task_status(t_id, "assigned")
+                            trow = db.get_task(t_id)
+                            if trow:
+                                try:
+                                    import json
+                                    prog_data = json.loads(trow.get("progress_json") or "{}")
+                                    prog_data["phase"] = "idle"
+                                    prog_data["last_error"] = ""
+                                    db.update_task_progress(t_id, prog_data)
+                                except Exception:
+                                    pass
                             st.rerun()
                 st.markdown(f'<div style="text-align:right; font-size:12px; color:#64748b; margin-top:8px;">節點並行上限: {int(max_concurrent_jobs)}</div>', unsafe_allow_html=True)
             else:
