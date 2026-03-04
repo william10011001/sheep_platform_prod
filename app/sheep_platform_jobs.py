@@ -839,6 +839,8 @@ class JobManager:
                                 continue
 
                             if stop_flag.is_set():
+                                import random, time
+                                time.sleep(random.uniform(0.1, 2.0)) # 隨機抖動：防止暫停時引發 SQLite 寫入驚群效應 (Thundering Herd)
                                 _commit()
                                 progress["phase"] = "stopped"
                                 progress["phase_msg"] = "已暫停：進度已保存，等待重新開始"
@@ -895,6 +897,8 @@ class JobManager:
                                 continue
 
                             if stop_flag.is_set():
+                                import random, time
+                                time.sleep(random.uniform(0.1, 2.0)) # 隨機抖動：防止暫停時引發 SQLite 寫入驚群效應 (Thundering Herd)
                                 _commit()
                                 progress["phase"] = "stopped"
                                 progress["phase_msg"] = "已暫停：進度已保存，等待重新開始"
@@ -975,7 +979,6 @@ class JobManager:
                 self._stop_flags.pop(task_id, None)
 
         except BaseException as e:
-            # [系統級防護] 捕捉 BaseException (含 SystemExit, KeyboardInterrupt) 確保狀態重置
             import traceback, sys
             err_trace = traceback.format_exc()
             safe_err_msg = str(e).replace(os.getcwd(), ".")
@@ -996,22 +999,31 @@ class JobManager:
                         prog["phase"] = "queued"
                         prog["last_error"] = "資料庫高併發鎖定，已重新排隊"
                         prog["error_ts"] = db.utc_now_iso()
-                        db.update_task_progress(task_id, prog)
-                        db.update_task_status(task_id, "queued")
+                        try:
+                            db.update_task_progress(task_id, prog)
+                            db.update_task_status(task_id, "queued")
+                        except Exception:
+                            pass
                     else:
                         prog["phase"] = "error"
-                        prog["last_error"] = f"系統執行異常: {str(e)}"
+                        prog["last_error"] = f"系統執行異常: {safe_err_msg}"
                         prog["debug_traceback"] = err_trace
                         prog["error_ts"] = db.utc_now_iso()
-                        db.update_task_progress(task_id, prog)
-                        db.update_task_status(task_id, "error")
-                        db.write_audit_log(
-                            user_id=int(current_t.get("user_id") or 0),
-                            action="task_execution_failed",
-                            payload={"task_id": task_id, "exception": str(e), "trace": err_trace[:2000]}
-                        )
+                        try:
+                            db.update_task_progress(task_id, prog)
+                            db.update_task_status(task_id, "error")
+                            db.write_audit_log(
+                                user_id=int(current_t.get("user_id") or 0),
+                                action="task_execution_failed",
+                                payload={"task_id": task_id, "exception": str(e), "trace": err_trace[:2000]}
+                            )
+                        except Exception:
+                            pass
                 else:
-                    db.update_task_status(task_id, "queued" if is_db_lock else "error")
+                    try:
+                        db.update_task_status(task_id, "queued" if is_db_lock else "error")
+                    except Exception:
+                        pass
             except Exception as nested_err:
                 print(f"[CRITICAL] 錯誤處理器本身發生異常: {nested_err}\n{traceback.format_exc()}", file=sys.stderr)
             finally:

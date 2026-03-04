@@ -6231,7 +6231,7 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                     time.sleep(0.5)
                     st.rerun()
             else:
-                if st.button("中斷挖礦", key="stop_all", type="secondary"):
+                if st.button("中斷", key="stop_all"):
                     db.set_user_run_enabled(int(user["id"]), False)
                     st.session_state[run_key] = False
                     run_all = False
@@ -6243,7 +6243,7 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                         print(f"[WARN] job_mgr.stop_all_for_user intercepted error: {err}", file=sys.stderr)
                     db.write_audit_log(int(user["id"]), "task_stop_all", {})
                     st.toast("已發送中斷指令，正在安全釋放資料庫鎖與資源，請稍候...")
-                    time.sleep(1.5) # [專家級修復] 給予充分時間讓所有 Thread 寫入並釋放 SQLite 鎖，防止畫面刷新時遇到 database is locked
+                    time.sleep(2.5) # [專家級修復] 給予充分時間讓所有 Thread 寫入並釋放 SQLite 鎖，防止畫面刷新時遇到 database is locked
                     st.rerun()
 
         with col_b:

@@ -1746,9 +1746,9 @@ def recover_factor_pools_from_local(cycle_id: int, search_roots: Optional[List[s
     report["skipped_duplicates"] = int(skipped)
     return report
 def list_tasks_for_user(user_id: int, cycle_id: int = 0) -> list:
-    import time
+    import time, random
     last_err = None
-    for attempt in range(10):
+    for attempt in range(15):
         try:
             conn = _conn()
             try:
@@ -1761,11 +1761,11 @@ def list_tasks_for_user(user_id: int, cycle_id: int = 0) -> list:
                 conn.close()
         except Exception as e:
             last_err = e
-            time.sleep(0.2 * (1.5 ** attempt))
+            time.sleep(random.uniform(0.1, 0.5) * (1.2 ** attempt))
             
     import traceback
     import sys
-    print(f"[CRITICAL DB ERROR] list_tasks_for_user 鎖死或異常: {last_err}\n{traceback.format_exc()}", file=sys.stderr)
+    print(f"[CRITICAL DB ERROR] list_tasks_for_user 遭遇嚴重鎖死或異常，無法讀取資料: {last_err}\n{traceback.format_exc()}", file=sys.stderr)
     return []
 
 def list_submissions(user_id: int = 0, status: str = "", limit: int = 300) -> list:
@@ -2255,7 +2255,8 @@ def get_task(task_id: int) -> Optional[dict]:
         conn.close()
 
 def update_task_progress(task_id: int, progress: dict) -> None:
-    for attempt in range(5):
+    import random, time
+    for attempt in range(15):
         try:
             conn = _conn()
             try:
@@ -2268,13 +2269,15 @@ def update_task_progress(task_id: int, progress: dict) -> None:
             finally:
                 conn.close()
         except Exception as e:
-            if attempt == 4:
-                print(f"[DB ERROR] update_task_progress 放棄重試: {e}")
-                raise e
-            time.sleep(0.05 * (2 ** attempt))
+            if attempt == 14:
+                print(f"[CRITICAL DB ERROR] update_task_progress 放棄重試: {e}")
+                # 吞下錯誤，絕對不拋出異常，防止執行緒崩潰導致任務被標記為 error
+                break
+            time.sleep(random.uniform(0.1, 0.5) * (1.2 ** attempt))
 
 def update_task_status(task_id: int, status: str, finished: bool = False) -> None:
-    for attempt in range(5):
+    import random, time
+    for attempt in range(15):
         try:
             conn = _conn()
             try:
@@ -2287,10 +2290,11 @@ def update_task_status(task_id: int, status: str, finished: bool = False) -> Non
             finally:
                 conn.close()
         except Exception as e:
-            if attempt == 4:
-                print(f"[DB ERROR] update_task_status 放棄重試: {e}")
-                raise e
-            time.sleep(0.05 * (2 ** attempt))
+            if attempt == 14:
+                print(f"[CRITICAL DB ERROR] update_task_status 放棄重試: {e}")
+                # 吞下錯誤，絕對不拋出異常
+                break
+            time.sleep(random.uniform(0.1, 0.5) * (1.2 ** attempt))
 
 def clear_candidates_for_task(task_id: int) -> None:
     conn = _conn()

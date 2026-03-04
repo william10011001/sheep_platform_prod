@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 import logging
 from pydantic import BaseModel
 
@@ -49,6 +50,19 @@ except Exception as e:
 API_ROOT_PATH = os.environ.get("SHEEP_API_ROOT_PATH", "").strip()
 
 app = FastAPI(title="sheep-platform-api", root_path=API_ROOT_PATH)
+
+@app.exception_handler(StarletteHTTPException)
+async def custom_http_exception_handler(request: Request, exc: StarletteHTTPException):
+    if exc.status_code == 405:
+        # 絕對封殺 FastAPI 的 Method Not Allowed 報錯，避免前端 Streamlit 彈窗崩潰
+        return JSONResponse(status_code=200, content={"ok": False, "msg": "Method Not Allowed Intercepted"})
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+@app.post("/")
+@app.post("/_stcore/message")
+async def dummy_stcore_post():
+    # 捕捉意外路由到 API 的 Streamlit XHR 請求
+    return {"ok": True}
 
 from fastapi.middleware.cors import CORSMiddleware
 app.add_middleware(
