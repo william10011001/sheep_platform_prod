@@ -1453,17 +1453,16 @@ def get_active_cycle() -> dict:
 
 def list_factor_pools(cycle_id: int) -> list:
     """專家級 Pool 檢索：具備自動修復與跨週期一致性檢查機制"""
-    import time
-    for attempt in range(5):
+    import time, random
+    last_err = None
+    for attempt in range(12):
         try:
             conn = _conn()
             try:
                 cur = conn.execute("SELECT * FROM factor_pools WHERE cycle_id = ?", (int(cycle_id),))
                 rows = [dict(row) for row in cur.fetchall()]
                 
-                # [主動除錯機制] 若偵測到新週期 Pool 遺失，執行深度聯集救援
                 if not rows:
-                    # 尋找最近一個擁有 Pool 的週期
                     last_p_cycle = conn.execute("SELECT cycle_id FROM factor_pools ORDER BY cycle_id DESC LIMIT 1").fetchone()
                     if last_p_cycle and last_p_cycle["cycle_id"] != cycle_id:
                         source_cid = last_p_cycle["cycle_id"]
@@ -1480,17 +1479,15 @@ def list_factor_pools(cycle_id: int) -> list:
                         except Exception as rescue_e:
                             import traceback
                             print(f"[FATAL DB ERROR] Pool 跨週期繼承失敗: {rescue_e}\n{traceback.format_exc()}")
-                
                 return rows
             finally:
                 conn.close()
         except Exception as e:
-            if attempt == 4:
-                import traceback
-                print(f"[DB ERROR] list_factor_pools 執行異常: {e}\n{traceback.format_exc()}")
-                return []
-            time.sleep(0.1 * (2 ** attempt))
-    return []
+            last_err = e
+            time.sleep(random.uniform(0.2, 0.8) * (1.2 ** attempt))
+    
+    # [專家級防護] 絕對禁止因鎖死而回傳空陣列，這會導致前端誤判並將所有任務過濾掉變成空表格
+    raise RuntimeError(f"資料庫高併發鎖定，無法讀取策略池列表。請稍後再試。({last_err})")
 
 def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, max_tasks: int = 6, preferred_family: str = "") -> None:
     import time
@@ -2710,6 +2707,8 @@ def clean_zombie_tasks(timeout_minutes: int = 15) -> int:
         ).fetchall()
         
         now = _now_iso()
+        updates_completed = []
+        updates_assigned = []
         for row in rows:
             tid = row["id"]
             attempt = int(row["attempt"] or 0) + 1
@@ -2719,26 +2718,24 @@ def clean_zombie_tasks(timeout_minutes: int = 15) -> int:
                 prog = {}
             
             if attempt >= 4:
-                # 失敗超過 3 次，強制終止並移出活躍列表
                 prog["phase"] = "error"
                 prog["phase_msg"] = "終止"
                 prog["last_error"] = "執行異常"
                 prog["updated_at"] = now
-                conn.execute(
-                    "UPDATE mining_tasks SET status = 'completed', attempt = ?, updated_at = ?, progress_json = ? WHERE id = ?", 
-                    (attempt, now, json.dumps(prog, ensure_ascii=False), tid)
-                )
+                updates_completed.append((attempt, now, json.dumps(prog, ensure_ascii=False), tid))
             else:
-                # 給予重試機會
                 prog["phase"] = "queued"
                 prog["phase_msg"] = f"任務因異常中斷 (第 {attempt} 次)"
                 prog["last_error"] = "重試"
                 prog["updated_at"] = now
-                conn.execute(
-                    "UPDATE mining_tasks SET status = 'assigned', attempt = ?, updated_at = ?, progress_json = ? WHERE id = ?", 
-                    (attempt, now, json.dumps(prog, ensure_ascii=False), tid)
-                )
+                updates_assigned.append((attempt, now, json.dumps(prog, ensure_ascii=False), tid))
             count += 1
+            
+        # [專家級修復] 使用 executemany 批次更新，將上千次的 SQLite 寫入鎖定壓縮成一次極速操作
+        if updates_completed:
+            conn.executemany("UPDATE mining_tasks SET status = 'completed', attempt = ?, updated_at = ?, progress_json = ? WHERE id = ?", updates_completed)
+        if updates_assigned:
+            conn.executemany("UPDATE mining_tasks SET status = 'assigned', attempt = ?, updated_at = ?, progress_json = ? WHERE id = ?", updates_assigned)
             
         if count > 0:
             conn.commit()

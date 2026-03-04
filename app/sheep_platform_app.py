@@ -3947,8 +3947,8 @@ div[data-testid="stModal"] { display: none !important; opacity: 0 !important; po
             const origAlert = w.alert;
             w.alert = function(msg) {
                 if(msg && (msg.includes("405") || msg.includes("Method Not Allowed") || msg.includes("Error") || msg.includes("502") || msg.includes("521"))) {
-                    console.warn("[God Killer] Intercepted alert, forcing silent reload: ", msg);
-                    setTimeout(() => { w.location.reload(); }, 1200);
+                    console.warn("[God Killer] Intercepted alert. Backend might be restarting. Suppressing...", msg);
+                    // [專家級修復] 不再盲目 reload，改為靜默等待，避免觸發無限重整風暴
                     return;
                 }
                 return origAlert(msg);
@@ -3959,13 +3959,19 @@ div[data-testid="stModal"] { display: none !important; opacity: 0 !important; po
                     mutation.addedNodes.forEach(function(node) {
                         if (node.nodeType === 1) { 
                             const html = node.innerHTML || "";
-                            // [極致防禦] 一旦偵測到 405 / 502 / 521 或任何 Streamlit Modal 崩潰，立刻摧毀節點並靜默重整
+                            // [極致防禦] 一旦偵測到 405 / 502 / 521 崩潰彈窗，立刻摧毀節點，並加入冷卻機制避免無限重整
                             if (node.getAttribute('data-testid') === 'stModal' || html.includes('Method Not Allowed') || html.includes('405') || html.includes('502') || html.includes('521')) {
                                 node.style.setProperty("display", "none", "important");
                                 node.style.setProperty("opacity", "0", "important");
                                 node.remove();
-                                console.warn("[God Killer] Destroyed fatal Modal. System recovering...");
-                                setTimeout(() => { w.location.reload(); }, 1200);
+                                console.warn("[God Killer] Destroyed fatal Modal.");
+                                
+                                const now = Date.now();
+                                if (!w.__sheep_last_reload || (now - w.__sheep_last_reload) > 5000) {
+                                    w.__sheep_last_reload = now;
+                                    console.warn("[God Killer] Initiating safe recovery reload...");
+                                    setTimeout(() => { w.location.reload(); }, 2000);
+                                }
                             }
                         }
                     });

@@ -973,7 +973,8 @@ class JobManager:
             err_trace = traceback.format_exc()
             safe_err_msg = str(e).replace(os.getcwd(), ".")
             
-            is_db_lock = "database is locked" in safe_err_msg.lower() or "operationalerror" in safe_err_msg.lower()
+            # [專家級防護] 擴大鎖定偵測範圍，包含 timeout 與 sqlite3 內部異常，防止任務被誤判為 error
+            is_db_lock = any(k in safe_err_msg.lower() for k in ["database is locked", "operationalerror", "timeout", "busy", "locked"])
             
             if is_db_lock:
                 print(f"[SYSTEM WARN] Task ID: {task_id} 遭遇資料庫鎖定衝突，已自動退回佇列等待重試。", file=sys.stderr)
