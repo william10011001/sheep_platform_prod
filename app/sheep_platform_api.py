@@ -84,6 +84,9 @@ _token_issue_limiter = RateLimiter(rate_per_minute=30.0, burst=10.0)
 _chat_user_limiter = RateLimiter(rate_per_minute=9.0, burst=3.0)
 _chat_ip_limiter = RateLimiter(rate_per_minute=18.0, burst=6.0)
 
+# [新增] 註冊 IP 限制器：同一個 IP 最高爆發 2 個額度，恢復速率為每分鐘 0.2 個 (即每 5 分鐘恢復 1 個)
+_register_ip_limiter = RateLimiter(rate_per_minute=0.2, burst=2.0)
+
 
 class _ChatHub:
     def __init__(self) -> None:
@@ -685,6 +688,16 @@ def issue_token(req: Request, body: TokenRequest):
 
 @app.post("/auth/register")
 def web_register(req: Request, body: WebRegisterIn):
+    # [新增] 同 IP 註冊頻率限制攔截
+    ip = _client_ip(req) or "unknown_ip"
+    allowed, retry_after = _register_ip_limiter.check(f"reg_ip:{ip}", cost=1.0)
+    if not allowed:
+        # 當頻率超過，直接拋出 429 Too Many Requests 錯誤
+        raise HTTPException(
+            status_code=429, 
+            detail=f"警告!!!檢測出您正在惡意攻擊網站，請於 {int(retry_after)} 秒後再試。"
+        )
+
     from sheep_platform_security import normalize_username, hash_password
     uname = normalize_username(body.username)
     if not uname or len(uname) > 64:
