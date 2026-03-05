@@ -37,9 +37,21 @@ def main():
             sl_cur = sqlite_conn.cursor()
             try:
                 sl_cur.execute(f"SELECT * FROM {table}")
-                rows = sl_cur.fetchall()
+                rows = []
+                while True:
+                    try:
+                        row = sl_cur.fetchone()
+                        if not row:
+                            break
+                        rows.append(row)
+                    except sqlite3.DatabaseError as row_err:
+                        print(f"\n      ⚠️ 偵測到資料庫壞軌 ({row_err})，已極限挽救 {len(rows)} 筆安全資料，強制跳過損毀區段...", end=" ")
+                        break
             except sqlite3.OperationalError:
-                print(" 舊庫中無此表，略過。")
+                print("⚠️ 舊庫中無此表，略過。")
+                continue
+            except sqlite3.DatabaseError as tbl_err:
+                print(f"⚠️ 表結構嚴重損毀 ({tbl_err})，直接跳過此表。")
                 continue
 
             if not rows:
