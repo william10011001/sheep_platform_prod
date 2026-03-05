@@ -423,6 +423,11 @@ def _pg_pool():
 
 def _release_conn(kind: str, raw) -> None:
     if kind == "postgres":
+        # [專家級修復] 歸還連線前強制 rollback，清除殘留的錯誤交易狀態與死鎖，防止連線池被毒化
+        try:
+            raw.rollback()
+        except Exception:
+            pass
         try:
             _pg_pool().putconn(raw)
         except Exception:
@@ -649,94 +654,59 @@ def init_db() -> None:
                 """
             )
 
-            # ── 相容舊版 alembic schema：users 可能沒有 username_norm（你現在爆炸的根因）
-            try:
-                conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS username_norm TEXT")
-            except Exception:
-                pass
-
-            # 補齊既有資料（先用 lower(username) 當作 norm；可用就好，先救命）
-            try:
-                conn.execute("UPDATE users SET username_norm = lower(username) WHERE username_norm IS NULL OR username_norm = ''")
-            except Exception:
-                pass
-
-            # 盡量加唯一索引；如果遇到大小寫重複導致建不成，也不能讓系統起不來
-            try:
-                conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS users_username_norm_uq ON users(username_norm)")
-            except Exception:
-                try:
-                    conn.execute("CREATE INDEX IF NOT EXISTS users_username_norm_idx ON users(username_norm)")
-                except Exception:
-                    pass
-
-            # ── 你 UI/結算/錢包流程會用到的欄位（舊 schema 可能也沒有）
-            try:
-                conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS nickname TEXT DEFAULT ''")
-            except Exception:
-                pass
-            try:
-                conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled INTEGER NOT NULL DEFAULT 0")
-            except Exception:
-                pass
-            try:
-                conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS run_enabled INTEGER NOT NULL DEFAULT 0")
-            except Exception:
-                pass
-            try:
-                conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS wallet_address TEXT NOT NULL DEFAULT ''")
-            except Exception:
-                pass
-            try:
-                conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS wallet_chain TEXT NOT NULL DEFAULT ''")
-            except Exception:
-                pass
-
-            # [專家級修復] 補齊 Postgres 遺漏的 mining_tasks 欄位與 workers 相關表格
-            try:
-                conn.execute("ALTER TABLE mining_tasks ADD COLUMN IF NOT EXISTS lease_id TEXT")
-                conn.execute("ALTER TABLE mining_tasks ADD COLUMN IF NOT EXISTS lease_worker_id TEXT")
-                conn.execute("ALTER TABLE mining_tasks ADD COLUMN IF NOT EXISTS lease_expires_at TEXT")
-                conn.execute("ALTER TABLE mining_tasks ADD COLUMN IF NOT EXISTS attempt INTEGER DEFAULT 0")
-            except Exception:
-                pass
-
-            try:
-                conn.executescript(
-                    """
-                    CREATE TABLE IF NOT EXISTS workers (
-                        worker_id TEXT PRIMARY KEY,
-                        user_id BIGINT,
-                        kind TEXT NOT NULL DEFAULT 'worker',
-                        version TEXT NOT NULL DEFAULT '',
-                        protocol INTEGER NOT NULL DEFAULT 0,
-                        created_at TEXT NOT NULL,
-                        last_seen_at TEXT NOT NULL,
-                        last_task_id BIGINT,
-                        tasks_done INTEGER NOT NULL DEFAULT 0,
-                        tasks_fail INTEGER NOT NULL DEFAULT 0,
-                        avg_cps DOUBLE PRECISION NOT NULL DEFAULT 0.0,
-                        last_error TEXT NOT NULL DEFAULT '',
-                        meta_json TEXT NOT NULL DEFAULT '{}'
-                    );
-
-                    CREATE TABLE IF NOT EXISTS worker_events (
-                        id BIGSERIAL PRIMARY KEY,
-                        ts TEXT NOT NULL,
-                        user_id BIGINT,
-                        worker_id TEXT,
-                        event TEXT NOT NULL,
-                        detail_json TEXT NOT NULL DEFAULT '{}'
-                    );
-
-                    CREATE INDEX IF NOT EXISTS idx_workers_last_seen ON workers(last_seen_at);
-                    CREATE INDEX IF NOT EXISTS idx_worker_events_ts ON worker_events(ts);
-                    """
+            # [專家級修復] 將所有修改獨立為單筆交易，每執行一步就獨立存檔，防止重複索引報錯導致後續核心欄位(如 lease_id)跟著被回滾註銷
+            statements = [
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS username_norm TEXT",
+                "UPDATE users SET username_norm = lower(username) WHERE username_norm IS NULL OR username_norm = ''",
+                "CREATE UNIQUE INDEX IF NOT EXISTS users_username_norm_uq ON users(username_norm)",
+                "CREATE INDEX IF NOT EXISTS users_username_norm_idx ON users(username_norm)",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS nickname TEXT DEFAULT ''",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS run_enabled INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS wallet_address TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS wallet_chain TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE mining_tasks ADD COLUMN IF NOT EXISTS lease_id TEXT",
+                "ALTER TABLE mining_tasks ADD COLUMN IF NOT EXISTS lease_worker_id TEXT",
+                "ALTER TABLE mining_tasks ADD COLUMN IF NOT EXISTS lease_expires_at TEXT",
+                "ALTER TABLE mining_tasks ADD COLUMN IF NOT EXISTS attempt INTEGER DEFAULT 0",
+                """
+                CREATE TABLE IF NOT EXISTS workers (
+                    worker_id TEXT PRIMARY KEY,
+                    user_id BIGINT,
+                    kind TEXT NOT NULL DEFAULT 'worker',
+                    version TEXT NOT NULL DEFAULT '',
+                    protocol INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL,
+                    last_task_id BIGINT,
+                    tasks_done INTEGER NOT NULL DEFAULT 0,
+                    tasks_fail INTEGER NOT NULL DEFAULT 0,
+                    avg_cps DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+                    last_error TEXT NOT NULL DEFAULT '',
+                    meta_json TEXT NOT NULL DEFAULT '{}'
                 )
-            except Exception:
-                pass
+                """,
+                """
+                CREATE TABLE IF NOT EXISTS worker_events (
+                    id BIGSERIAL PRIMARY KEY,
+                    ts TEXT NOT NULL,
+                    user_id BIGINT,
+                    worker_id TEXT,
+                    event TEXT NOT NULL,
+                    detail_json TEXT NOT NULL DEFAULT '{}'
+                )
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_workers_last_seen ON workers(last_seen_at)",
+                "CREATE INDEX IF NOT EXISTS idx_worker_events_ts ON worker_events(ts)"
+            ]
+            
+            for stmt in statements:
+                try:
+                    conn.execute(stmt)
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
 
-            conn.commit()
             return
         finally:
             conn.close()
