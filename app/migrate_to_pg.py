@@ -6,8 +6,8 @@ import os
 # 1. 舊 SQLite 檔案路徑 (透過 Docker Volume 掛載，位置不變)
 SQLITE_PATH = "/app/data/sheep.db"
 
-# 2. 透過環境變數安全讀取連線字串，避免密碼外洩到 GitHub
-PG_URL = os.environ.get("DO_PG_URL", "")
+# 2. 透過環境變數安全讀取連線字串，避免密碼外洩到 GitHub (讀取 Docker 注入的 SHEEP_DB_URL)
+PG_URL = os.environ.get("SHEEP_DB_URL", "")
 
 TABLES = [
     "users", "settings", "audit_logs", "api_tokens", "mining_cycles",
