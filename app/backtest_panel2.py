@@ -2840,8 +2840,11 @@ def _simulate_long_core_py(o, h, l, c, entry_sig, tp_pct, sl_pct, max_hold, fee_
     n = len(c)
     perbar = np.zeros(n, dtype=np.float64)
 
+    # [專家級防護] 確保 entry_sig 的長度不會越界，取 n 與 len(entry_sig) 兩者的最小值
+    safe_len = min(n, len(entry_sig))
+
     # [專家級防護] 最大筆數不會超過訊號數（最後一根不能進場），增加長度判定避免 IndexError
-    max_trades = int(np.sum(entry_sig[:-1])) if len(entry_sig) > 1 else 0
+    max_trades = int(np.sum(entry_sig[:safe_len-1])) if safe_len > 1 else 0
     entry_idx_arr = np.full(max_trades, -1, dtype=np.int64)
     exit_idx_arr  = np.full(max_trades, -1, dtype=np.int64)
     entry_px_arr  = np.zeros(max_trades, dtype=np.float64)
@@ -2855,7 +2858,8 @@ def _simulate_long_core_py(o, h, l, c, entry_sig, tp_pct, sl_pct, max_hold, fee_
     entry_idx = -1
     entry_price = 0.0
 
-    for i in range(n-1):
+    # [專家級防護] 迴圈上限改為 safe_len - 1，徹底消滅 IndexError
+    for i in range(safe_len - 1):
         if not in_pos:
             if entry_sig[i]:
                 entry_idx = i + 1
@@ -3660,8 +3664,12 @@ def _simulate_short_core_py(o, h, l, c, entry_sig, tp_pct, sl_pct, max_hold, fee
     """純 Python 做空模擬版本"""
     n = len(c)
     perbar = np.zeros(n, dtype=np.float64)
+    
+    # [專家級防護]
+    safe_len = min(n, len(entry_sig))
+    
     # [專家級防護] 安全取得最大交易數，避免長度不足引發崩潰
-    max_trades = int(np.sum(entry_sig[:-1])) if len(entry_sig) > 1 else 0
+    max_trades = int(np.sum(entry_sig[:safe_len-1])) if safe_len > 1 else 0
     entry_idx_arr = np.full(max_trades, -1, dtype=np.int64)
     exit_idx_arr  = np.full(max_trades, -1, dtype=np.int64)
     entry_px_arr  = np.zeros(max_trades, dtype=np.float64)
@@ -3675,7 +3683,8 @@ def _simulate_short_core_py(o, h, l, c, entry_sig, tp_pct, sl_pct, max_hold, fee
     entry_idx = -1
     entry_price = 0.0
 
-    for i in range(n-1):
+    # [專家級防護] 迴圈上限改為 safe_len - 1
+    for i in range(safe_len - 1):
         if not in_pos:
             if entry_sig[i]:
                 entry_idx = i + 1

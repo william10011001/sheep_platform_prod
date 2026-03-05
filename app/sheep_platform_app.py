@@ -4019,7 +4019,7 @@ div[data-testid="stModal"] { display: none !important; opacity: 0 !important; po
         </script>
         """,
         height=0,
-    )
+    )                                                       
 _LAST_ROLLOVER_CHECK = 0.0
 
 def _kill_stuck_fullscreen_iframes() -> None:
