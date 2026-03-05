@@ -278,8 +278,8 @@ def _require_worker(
             protocol=wp,
             meta={"ua": req.headers.get("user-agent"), "ip": _client_ip(req), "kind": kind},
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"Error in upsert_worker: {e}")
 
     return {"worker_id": wid, "worker_version": wv, "worker_protocol": wp}
 
@@ -688,11 +688,10 @@ def issue_token(req: Request, body: TokenRequest):
 
 @app.post("/auth/register")
 def web_register(req: Request, body: WebRegisterIn):
-    # [新增] 同 IP 註冊頻率限制攔截
     ip = _client_ip(req) or "unknown_ip"
     allowed, retry_after = _register_ip_limiter.check(f"reg_ip:{ip}", cost=1.0)
     if not allowed:
-        # 當頻率超過，直接拋出 429 Too Many Requests 錯誤
+        #防攻擊
         raise HTTPException(
             status_code=429, 
             detail=f"警告!!!檢測出您正在惡意攻擊網站，請於 {int(retry_after)} 秒後再試。"
