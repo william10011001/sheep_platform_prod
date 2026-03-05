@@ -413,12 +413,12 @@ class JobManager:
                                     to_orphan.append(tid)
                             
                             if to_orphan:
-                                print(f"[SYSTEM] 偵測到 {len(to_orphan)} 個卡死的執行緒，執行強制放生。")
+                                print(f"[SYSTEM] 偵測到 {len(to_orphan)} 個卡死的執行緒，發送中止訊號並等待自然回收。")
                                 for tid in to_orphan:
-                                    self._threads.pop(tid, None)
-                                    flag = self._stop_flags.pop(tid, None)
+                                    flag = self._stop_flags.get(tid)
                                     if flag:
                                         flag.set()
+                                    # 保留 dict 參考，讓 _cleanup_finished_locked 自然回收，避免執行緒無限增生耗盡記憶體
 
                         self._auto_enqueue_orphans()
                     except Exception as clean_err:

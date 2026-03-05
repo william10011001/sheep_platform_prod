@@ -67,7 +67,7 @@ async def dummy_stcore_post():
 from fastapi.middleware.cors import CORSMiddleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 支援前端與後端分離的跨網域請求 (掛載 Cloudflare 後安全性由 CDN 邊緣規則接管)
+    allow_origin_regex=".*",  # 修正 CORS 規範：搭配 allow_credentials=True 時不可使用 wildcard "*"
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -669,9 +669,8 @@ def issue_token(req: Request, body: TokenRequest):
     if int(user.get("disabled") or 0) != 0:
         raise HTTPException(status_code=403, detail="user_disabled")
 
-    # [專家級修復] 使用者透過 API 登入時，必須清除舊有執行狀態
-    # 確保登入後前端一律從「開始挖礦」的狀態起步
-    db.update_user_login_state(int(user["id"]), success=True)
+    # 移除強制重置 run_enabled 的邏輯，避免跨裝置登入互相干擾與不合理的挖礦中斷
+    # db.update_user_login_state(int(user["id"]), success=True)
 
     token = db.create_api_token(int(user["id"]), ttl_seconds=int(body.ttl_seconds), name=str(body.name or "worker"))
 
@@ -703,6 +702,15 @@ def web_register(req: Request, body: WebRegisterIn):
         pw_hash_str = pw_hashed.decode('utf-8') if isinstance(pw_hashed, bytes) else str(pw_hashed)
         uid = db.create_user(username=uname, password_hash=pw_hash_str, role="user", wallet_address="", wallet_chain="TRC20")
         db.write_audit_log(uid, "register", {"username": uname})
+        
+        # 新手註冊立即派發任務，避免空白無任務狀態
+        try:
+            cycle = db.get_active_cycle()
+            if cycle:
+                db.assign_tasks_for_user(uid, cycle_id=int(cycle["id"]), min_tasks=2)
+        except Exception as assign_e:
+            logger.error(f"Initial task assignment failed for new user {uid}: {assign_e}")
+            
     except Exception as e:
         logger.error(f"Register error: {e}")
         raise HTTPException(status_code=500, detail="register_failed")
@@ -714,10 +722,8 @@ def web_get_me(request: Request, authorization: Optional[str] = Header(None)):
     ctx = _auth_ctx(request, authorization)
     user = ctx["user"]
     
-    # [專家級修復] 解決前端 (如 Vue) 剛載入時卡在「結束挖礦」的 Bug
-    # 前端在初始化或重整頁面時必定會呼叫 /user/me，因此我們在此重置狀態，
-    # 確保 run_enabled 回歸 0，並釋放因異常關閉分頁遺留的幽靈任務。
-    db.update_user_login_state(int(user["id"]), success=True)
+    # 移除前端初始化時強制歸零的邏輯，保留使用者真實的跨裝置挖礦狀態
+    # db.update_user_login_state(int(user["id"]), success=True)
     
     fresh_user = db.get_user_by_id(int(user["id"]))
     if not fresh_user:
@@ -782,8 +788,8 @@ def web_get_tasks(request: Request, authorization: Optional[str] = Header(None))
     try:
         min_tasks = int(db.get_setting(db._conn(), "min_tasks_per_user", 2))
         db.assign_tasks_for_user(uid, cycle_id=cycle_id, min_tasks=min_tasks)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"Failed to assign tasks for user {uid}: {e}", exc_info=True)
         
     tasks = db.list_tasks_for_user(uid, cycle_id=cycle_id)
     run_enabled = db.get_user_run_enabled(uid)
