@@ -74,12 +74,6 @@
         .custom-tooltip.tooltip-right-edge .tooltip-text::after {
             left: auto; right: 12px; margin-left: 0;
         }
-
-        /* 新增：準備中進度條的滑動動畫 */
-        @keyframes slide {
-            0% { transform: translateX(-100%); }
-            100% { transform: translateX(200%); }
-        }
     </style>
 </head>
 <body>
@@ -174,44 +168,15 @@
                                             <span class="text-slate-500 ml-2">({{ getPhaseText(t) }})</span>
                                         </td>
                                         <td class="py-4 px-6">
-                                            <template v-if="t.status === 'error'">
-                                                <div class="flex flex-col gap-2 w-36 ml-auto items-end">
-                                                    <span class="text-red-500 text-[13px] font-bold">程序異常停止</span>
-                                                    <div class="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
-                                                        <div class="bg-red-600 h-1.5 rounded-full w-full opacity-50"></div>
-                                                    </div>
+                                            <div class="flex flex-col gap-2 w-36 ml-auto">
+                                                <div class="flex justify-between text-[14px]">
+                                                    <span class="text-slate-400">{{ getProgress(t) }}</span>
+                                                    <span class="text-slate-300">{{ getProgressPercent(t) }}%</span>
                                                 </div>
-                                            </template>
-                                            
-                                            <template v-else-if="isPreparing(t)">
-                                                <div class="flex flex-col gap-2 w-36 ml-auto">
-                                                    <div class="flex justify-between items-center text-[14px]">
-                                                        <span class="text-amber-400 flex items-center gap-1.5 text-xs font-bold">
-                                                            <svg class="animate-spin h-3.5 w-3.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                                                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                                            </svg>
-                                                            環境準備中...
-                                                        </span>
-                                                    </div>
-                                                    <div class="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden relative">
-                                                        <div class="h-full bg-amber-500/20 w-full absolute"></div>
-                                                        <div class="h-full bg-amber-400 rounded-full w-1/2 absolute animate-[slide_1.5s_ease-in-out_infinite]"></div>
-                                                    </div>
+                                                <div class="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                                                    <div class="bg-gradient-to-r from-blue-500 to-indigo-400 h-1.5 rounded-full transition-all duration-500" :style="{width: getProgressPercent(t) + '%'}"></div>
                                                 </div>
-                                            </template>
-                                            
-                                            <template v-else>
-                                                <div class="flex flex-col gap-2 w-36 ml-auto">
-                                                    <div class="flex justify-between text-[14px]">
-                                                        <span class="text-slate-400">{{ getProgress(t) }}</span>
-                                                        <span class="text-slate-300">{{ getProgressPercent(t) }}%</span>
-                                                    </div>
-                                                    <div class="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
-                                                        <div class="bg-gradient-to-r from-blue-500 to-indigo-400 h-1.5 rounded-full transition-all duration-500" :style="{width: getProgressPercent(t) + '%'}"></div>
-                                                    </div>
-                                                </div>
-                                            </template>
+                                            </div>
                                         </td>
                                         <td class="py-4 px-6 text-right" :class="getScoreColorClass(t)">{{ getScore(t) }}</td>
                                     </tr>
@@ -591,20 +556,6 @@
                     return s >= 0 ? 'text-emerald-400' : 'text-red-400';
                 };
 
-                // 👉 新增：判斷是否處於準備階段
-                const isPreparing = (t) => {
-                    try {
-                        if (t.status === 'error' || t.status === 'completed') return false;
-                        const p = JSON.parse(t.progress_json || '{}');
-                        const phase = p.phase || 'idle';
-                        
-                        // 只要 combos_total 不存在/為 0，或者處於前置排程階段，皆視為「環境準備中」
-                        return ['idle', 'queued', 'sync_data', 'build_grid'].includes(phase) || !p.combos_total || p.combos_total === 0;
-                    } catch(e) {
-                        return t.status !== 'error' && t.status !== 'completed';
-                    }
-                };
-
                 onMounted(() => {
                     checkAuth();
                     pollTimer = setInterval(() => { if(currentTab.value === 'tasks') loadTasks(); }, 3000);
@@ -618,8 +569,7 @@
                     getStatusText, getPhaseText, getProgress, getProgressPercent, getScore, getScoreNumber,
                     loadTasks, getShortPoolName, getScoreColorClass, formatDate,
                     activeTasks, paginatedCompletedTasks, ratingCurrentPage, totalRatingPages, changeRatingPage,
-                    getOosStatus, submitReview,
-                    isPreparing
+                    getOosStatus, submitReview
                 };
             }
         }).mount('#app');
