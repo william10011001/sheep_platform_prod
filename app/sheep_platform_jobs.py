@@ -829,7 +829,6 @@ class JobManager:
                                 continue
 
                             if stop_flag.is_set():
-                                import random, time
                                 time.sleep(random.uniform(0.1, 2.0)) # 隨機抖動：防止暫停時引發 SQLite 寫入驚群效應 (Thundering Herd)
                                 _commit()
                                 progress["phase"] = "stopped"
@@ -887,7 +886,6 @@ class JobManager:
                                 continue
 
                             if stop_flag.is_set():
-                                import random, time
                                 time.sleep(random.uniform(0.1, 2.0)) # 隨機抖動：防止暫停時引發 SQLite 寫入驚群效應 (Thundering Herd)
                                 _commit()
                                 progress["phase"] = "stopped"
