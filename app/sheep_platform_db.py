@@ -292,6 +292,12 @@ class _DBConn:
     def commit(self) -> None:
         self._raw.commit()
 
+    def rollback(self) -> None:
+        try:
+            self._raw.rollback()
+        except Exception:
+            pass
+
     def close(self) -> None:
         if self._closed:
             return
@@ -1043,7 +1049,7 @@ def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
             if row:
                 return dict(row)
         except Exception:
-            pass
+            conn.rollback()
 
         # 2. 後備：直接用 username（大小寫不敏感）查，至少讓登入不炸
         try:
@@ -1054,7 +1060,7 @@ def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
             if row2:
                 return dict(row2)
         except Exception:
-            pass
+            conn.rollback()
             
         # 3. 終極防護：暴力全表掃描。完全無視 SQL 方言或缺少欄位問題，只要使用者存在就必能找回
         try:
@@ -1063,7 +1069,7 @@ def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
                 if str(r.get("username", "")).lower() == uname_norm or str(r.get("username_norm", "")) == uname_norm:
                     return dict(r)
         except Exception:
-            pass
+            conn.rollback()
 
         return None
     finally:
@@ -1168,17 +1174,24 @@ def update_user_login_state(user_id: int, success: bool = True) -> None:
     try:
         if success:
             now = _now_iso()
-            # [專家級防護] 登入時主動重置 run_enabled 為 0，確保 UI 永遠從「開始挖礦」起步
+            # 第一步：獨立更新登入狀態並立刻存檔，確保登入行為 100% 成功
             conn.execute("UPDATE users SET last_login_at = ?, run_enabled = 0 WHERE id = ?", (now, int(user_id)))
-            # [主動除錯] 釋放因上次意外斷線導致卡在 'running' 的幽靈任務
+            conn.commit()
+            
+            # 第二步：釋放幽靈任務 (獨立交易)，即便缺少欄位報錯也不會導致登入失敗
             try:
                 conn.execute(
                     "UPDATE mining_tasks SET status='assigned', lease_id=NULL, lease_worker_id=NULL, lease_expires_at=NULL, updated_at=? WHERE user_id=? AND status IN ('running', 'queued')",
                     (now, int(user_id)),
                 )
+                conn.commit()
             except Exception:
-                pass
-            conn.commit()
+                conn.rollback() # 極致防護：遇到欄位缺失時必須 rollback 解除鎖死
+                conn.execute(
+                    "UPDATE mining_tasks SET status='assigned', updated_at=? WHERE user_id=? AND status IN ('running', 'queued')",
+                    (now, int(user_id)),
+                )
+                conn.commit()
     finally:
         conn.close()
 
@@ -1204,11 +1217,11 @@ def set_user_run_enabled(user_id: int, enabled: bool) -> None:
             conn = _conn()
             try:
                 conn.execute("UPDATE users SET run_enabled = ? WHERE id = ?", (1 if enabled else 0, uid))
+                conn.commit() # 先存檔，避免後續報錯導致狀態遺失
 
                 # 關閉時：回收該 user 所有 running/queued 任務，避免卡死或浪費算力
                 if not bool(enabled):
                     now = _now_iso()
-                    # 優先用「帶 lease 清除」的回收；若欄位仍不存在則 fallback
                     try:
                         conn.execute(
                             """
@@ -1222,13 +1235,14 @@ def set_user_run_enabled(user_id: int, enabled: bool) -> None:
                             """,
                             (now, uid),
                         )
+                        conn.commit()
                     except Exception:
+                        conn.rollback() # 清除 Postgres 的交易死鎖狀態
                         conn.execute(
                             "UPDATE mining_tasks SET status='assigned', updated_at=? WHERE user_id=? AND status IN ('running', 'queued')",
                             (now, uid),
                         )
-
-                conn.commit()
+                        conn.commit()
                 break
             finally:
                 conn.close()
