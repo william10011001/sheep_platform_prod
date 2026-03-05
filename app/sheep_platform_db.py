@@ -692,6 +692,50 @@ def init_db() -> None:
             except Exception:
                 pass
 
+            # [專家級修復] 補齊 Postgres 遺漏的 mining_tasks 欄位與 workers 相關表格
+            try:
+                conn.execute("ALTER TABLE mining_tasks ADD COLUMN IF NOT EXISTS lease_id TEXT")
+                conn.execute("ALTER TABLE mining_tasks ADD COLUMN IF NOT EXISTS lease_worker_id TEXT")
+                conn.execute("ALTER TABLE mining_tasks ADD COLUMN IF NOT EXISTS lease_expires_at TEXT")
+                conn.execute("ALTER TABLE mining_tasks ADD COLUMN IF NOT EXISTS attempt INTEGER DEFAULT 0")
+            except Exception:
+                pass
+
+            try:
+                conn.executescript(
+                    """
+                    CREATE TABLE IF NOT EXISTS workers (
+                        worker_id TEXT PRIMARY KEY,
+                        user_id BIGINT,
+                        kind TEXT NOT NULL DEFAULT 'worker',
+                        version TEXT NOT NULL DEFAULT '',
+                        protocol INTEGER NOT NULL DEFAULT 0,
+                        created_at TEXT NOT NULL,
+                        last_seen_at TEXT NOT NULL,
+                        last_task_id BIGINT,
+                        tasks_done INTEGER NOT NULL DEFAULT 0,
+                        tasks_fail INTEGER NOT NULL DEFAULT 0,
+                        avg_cps DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+                        last_error TEXT NOT NULL DEFAULT '',
+                        meta_json TEXT NOT NULL DEFAULT '{}'
+                    );
+
+                    CREATE TABLE IF NOT EXISTS worker_events (
+                        id BIGSERIAL PRIMARY KEY,
+                        ts TEXT NOT NULL,
+                        user_id BIGINT,
+                        worker_id TEXT,
+                        event TEXT NOT NULL,
+                        detail_json TEXT NOT NULL DEFAULT '{}'
+                    );
+
+                    CREATE INDEX IF NOT EXISTS idx_workers_last_seen ON workers(last_seen_at);
+                    CREATE INDEX IF NOT EXISTS idx_worker_events_ts ON worker_events(ts);
+                    """
+                )
+            except Exception:
+                pass
+
             conn.commit()
             return
         finally:
