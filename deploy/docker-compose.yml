@@ -25,9 +25,9 @@ services:
       db:
         condition: service_healthy
     environment:
-      # 徹底清空 Postgres 連線，強制所有服務讀取包含舊帳號的 SQLite
-      SHEEP_DB_URL: ""
-      SHEEP_DB_PATH: /app/data/sheep.db
+      # 啟用 DigitalOcean PostgreSQL 雲端資料庫 (透過環境變數安全載入)
+      SHEEP_DB_URL: "${DO_PG_URL}"
+      SHEEP_DB_PATH: ""
       SHEEP_DB_MIGRATION: none
       # [極致修復] 同步傳入管理員憑證，確保資料庫初始化時能一併處理權限
       SHEEP_COMPUTE_USER: ${SHEEP_BOOTSTRAP_ADMIN_USER}
@@ -44,8 +44,8 @@ services:
     ports:
       - "8000:8000"
     environment:
-      SHEEP_DB_URL: ""
-      SHEEP_DB_PATH: /app/data/sheep.db
+      SHEEP_DB_URL: "${DO_PG_URL}"
+      SHEEP_DB_PATH: ""
       SHEEP_API_ROOT_PATH: /api
       SHEEP_GIT_SHA: ${SHEEP_GIT_SHA}
       SHEEP_RUN_SCHEDULER: "0"
@@ -78,8 +78,8 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile.ui
     environment:
-      SHEEP_DB_URL: ""
-      SHEEP_DB_PATH: /app/data/sheep.db
+      SHEEP_DB_URL: "${DO_PG_URL}"
+      SHEEP_DB_PATH: ""
       SHEEP_GIT_SHA: ${SHEEP_GIT_SHA}
       SHEEP_RUN_SCHEDULER: "1"
       SHEEP_ASSIGN_INTERVAL_S: "15"
@@ -98,8 +98,8 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile.api
     environment:
-      SHEEP_DB_URL: ""
-      SHEEP_DB_PATH: /app/data/sheep.db
+      SHEEP_DB_URL: "${DO_PG_URL}"
+      SHEEP_DB_PATH: ""
       SHEEP_COMPUTE_API_URL: http://api:8000
       SHEEP_COMPUTE_USER: ${SHEEP_BOOTSTRAP_ADMIN_USER}
       SHEEP_COMPUTE_PASS: ${SHEEP_BOOTSTRAP_ADMIN_PASS}
