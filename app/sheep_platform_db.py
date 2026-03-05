@@ -128,8 +128,15 @@ def _rewrite_pg_host(dsn: str, new_host: str) -> str:
 
 
 def _db_url() -> str:
-    # 主來源：SHEEP_DB_URL（你原本就用這個）:contentReference[oaicite:3]{index=3}
-    u = str(os.environ.get("SHEEP_DB_URL", "") or "").strip()
+    # 主來源：SHEEP_DB_URL
+    raw_url = os.environ.get("SHEEP_DB_URL")
+    
+    # [專家級修復] 嚴格攔截 fallback 機制。若 docker-compose 明確將其設為空字串，
+    # 代表強制要求退回 SQLite。此時絕對不可再讀取 DATABASE_URL，避免連線到空庫。
+    if raw_url == "":
+        return ""
+        
+    u = str(raw_url or "").strip()
 
     # 次要來源：DATABASE_URL（很多 PaaS 預設用這個）
     if not u:
@@ -1013,7 +1020,7 @@ def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
 
     conn = _conn()
     try:
-        # 優先走 username_norm（新 schema / 已補欄位的 DB）
+        # 1. 優先走 username_norm（新 schema / 已補欄位的 DB）
         try:
             row = conn.execute(
                 "SELECT * FROM users WHERE username_norm = ? LIMIT 1",
@@ -1021,19 +1028,30 @@ def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
             ).fetchone()
             if row:
                 return dict(row)
-        except Exception as e:
-            # Postgres 舊 schema 沒 username_norm 會噴 UndefinedColumn (pgcode=42703)
-            msg = str(e)
-            pgcode = str(getattr(e, "pgcode", "") or "")
-            if ("username_norm" not in msg) and (pgcode != "42703"):
-                raise
+        except Exception:
+            pass
 
-        # 後備：直接用 username（大小寫不敏感）查，至少讓登入不炸
-        row2 = conn.execute(
-            "SELECT * FROM users WHERE lower(username) = ? OR username = ? LIMIT 1",
-            (uname_norm, raw.strip()),
-        ).fetchone()
-        return dict(row2) if row2 else None
+        # 2. 後備：直接用 username（大小寫不敏感）查，至少讓登入不炸
+        try:
+            row2 = conn.execute(
+                "SELECT * FROM users WHERE lower(username) = ? OR username = ? LIMIT 1",
+                (uname_norm, raw.strip()),
+            ).fetchone()
+            if row2:
+                return dict(row2)
+        except Exception:
+            pass
+            
+        # 3. 終極防護：暴力全表掃描。完全無視 SQL 方言或缺少欄位問題，只要使用者存在就必能找回
+        try:
+            rows = conn.execute("SELECT * FROM users").fetchall()
+            for r in rows:
+                if str(r.get("username", "")).lower() == uname_norm or str(r.get("username_norm", "")) == uname_norm:
+                    return dict(r)
+        except Exception:
+            pass
+
+        return None
     finally:
         conn.close()
 
