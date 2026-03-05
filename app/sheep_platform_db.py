@@ -223,86 +223,43 @@ class _DBResult:
 
 
 class _DBConn:
-    _is_db_conn = True
-
-    def __init__(self, kind: str, raw):
-        self.kind = str(kind)
-        self._raw = raw
+    def __init__(self, conn, pool):
+        self._c = conn
+        self._p = pool
         self._closed = False
 
-    def executescript(self, script: str) -> None:
-        s = str(script or "")
-        stmts = [x.strip() for x in s.split(";") if x.strip()]
-        for st in stmts:
-            self.execute(st)
-
-    def execute(self, sql: str, params=None) -> _DBResult:
-        q = str(sql or "")
-        p = params
-
-        if self.kind == "postgres":
-            if psycopg2 is None:
-                raise RuntimeError("psycopg2 not available but postgres URL is set")
-            cur = self._raw.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-            try:
-                if p is None:
-                    cur.execute(q)
-                else:
-                    # sqlite style '?' -> psycopg2 '%s'
-                    q2 = q.replace("?", "%s")
-                    cur.execute(q2, tuple(p))
-                if cur.description is None:
-                    rc = int(cur.rowcount or 0)
-                    try:
-                        cur.close()
-                    except Exception:
-                        pass
-                    return _DBResult(None, rowcount=rc, lastrowid=0)
-                return _DBResult(cur, rowcount=int(cur.rowcount or 0), lastrowid=0)
-            except Exception:
-                try:
-                    cur.close()
-                except Exception:
-                    pass
-                raise
-
-        # sqlite
-        cur = self._raw.cursor()
+    def execute(self, sql: str, params: Any = None):
+        cur = self._c.cursor()
         try:
-            if p is None:
-                cur.execute(q)
+            # 兼容 PostgreSQL 的 %s 語法
+            sql_fixed = sql.replace("?", "%s")
+            if params is not None:
+                cur.execute(sql_fixed, params)
             else:
-                cur.execute(q, tuple(p))
-            if cur.description is None:
-                rc = int(cur.rowcount or 0)
-                lr = int(getattr(cur, "lastrowid", 0) or 0)
-                try:
-                    cur.close()
-                except Exception:
-                    pass
-                return _DBResult(None, rowcount=rc, lastrowid=lr)
-            return _DBResult(cur, rowcount=int(cur.rowcount or 0), lastrowid=int(getattr(cur, "lastrowid", 0) or 0))
-        except Exception:
-            try:
-                cur.close()
-            except Exception:
-                pass
-            raise
+                cur.execute(sql_fixed)
+            return cur
+        except Exception as e:
+            # 發生錯誤時必須手動 rollback，否則該連線會失效
+            self._c.rollback()
+            raise e
 
-    def commit(self) -> None:
-        self._raw.commit()
+    def commit(self):
+        self._c.commit()
 
-    def rollback(self) -> None:
+    def rollback(self):
+        self._c.rollback()
+
+    def close(self):
+        if not self._closed and self._p:
+            self._p.putconn(self._c)
+            self._closed = True
+
+    # [專家級補強] 確保物件被垃圾回收時，連線一定會還給連線池，防止 Pool Exhausted
+    def __del__(self):
         try:
-            self._raw.rollback()
+            self.close()
         except Exception:
             pass
-
-    def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        _release_conn(self.kind, self._raw)
 
 
 _PG_POOL = None
