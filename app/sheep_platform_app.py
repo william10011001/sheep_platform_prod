@@ -3946,7 +3946,7 @@ div[data-testid="stModal"] { display: none !important; opacity: 0 !important; po
         unsafe_allow_html=True,
     )
     
-    # [專家級修復] 注入無敵 JS 攔截器，秒殺所有 405 彈窗並靜默重載
+    # [專家級修復] 注入無敵 JS 攔截器與按鈕防護機制
     st.components.v1.html(
         """
         <script>
@@ -3959,8 +3959,7 @@ div[data-testid="stModal"] { display: none !important; opacity: 0 !important; po
             const origAlert = w.alert;
             w.alert = function(msg) {
                 if(msg && (msg.includes("405") || msg.includes("Method Not Allowed") || msg.includes("Error") || msg.includes("502") || msg.includes("521"))) {
-                    console.warn("[God Killer] Intercepted alert. Backend might be restarting. Suppressing...", msg);
-                    // [專家級修復] 不再盲目 reload，改為靜默等待，避免觸發無限重整風暴
+                    console.warn("[God Killer] Intercepted alert. Suppressing...", msg);
                     return;
                 }
                 return origAlert(msg);
@@ -3971,15 +3970,11 @@ div[data-testid="stModal"] { display: none !important; opacity: 0 !important; po
                     mutation.addedNodes.forEach(function(node) {
                         if (node.nodeType === 1) { 
                             const html = node.innerHTML || "";
-                            // [極致防禦] 一旦偵測到 405 / 502 / 521 崩潰彈窗，立刻摧毀節點，並加入冷卻機制避免無限重整
                             if (node.getAttribute('data-testid') === 'stModal' || html.includes('Method Not Allowed') || html.includes('405') || html.includes('502') || html.includes('521')) {
-                                // [專家級修復] 絕對禁止使用 node.remove()，這會切斷 React 的 Virtual DOM 導致按鈕全部失效！
-                                // 改用極端 CSS 覆蓋，讓元素在物理上消失且不干擾事件層
                                 node.style.setProperty("display", "none", "important");
                                 node.style.setProperty("opacity", "0", "important");
                                 node.style.setProperty("pointer-events", "none", "important");
                                 node.style.setProperty("z-index", "-9999", "important");
-                                console.warn("[God Killer] Safely hidden fatal Modal without breaking React DOM.");
                                 
                                 const now = Date.now();
                                 if (!w.__sheep_last_reload || (now - w.__sheep_last_reload) > 5000) {
@@ -3995,6 +3990,31 @@ div[data-testid="stModal"] { display: none !important; opacity: 0 !important; po
             if(w.document.body) {
                 observer.observe(w.document.body, { childList: true, subtree: true });
             }
+
+            // === [新增] 前端按鈕點擊監聽與防衝突系統 ===
+            w.document.addEventListener('click', function(e) {
+                let btn = e.target.closest('button');
+                if (btn) {
+                    let text = btn.innerText || "";
+                    if (text.includes('中斷') || text.includes('開始') || text.includes('資源') || text.includes('加入')) {
+                        console.log("[前端事件] 成功攔截用戶點擊按鈕: " + text);
+                        
+                        // 1. 瞬間擊殺 AutoRefresh，保護 WebSocket 傳輸通道不被干擾
+                        if (w.__sheep_autorefresh_timer) {
+                            clearTimeout(w.__sheep_autorefresh_timer);
+                            w.__sheep_autorefresh_timer = null;
+                            console.log("[前端事件] 已暫停畫面自動重整，確保點擊訊號安全送達伺服器！");
+                        }
+                        
+                        // 2. 物理防連點與視覺回饋
+                        let p = btn.querySelector('p') || btn;
+                        p.innerText = "通訊傳輸中...";
+                        btn.style.opacity = "0.6";
+                        btn.style.pointerEvents = "none";
+                        btn.style.transform = "translateY(2px)";
+                    }
+                }
+            }, true);
         })();
         </script>
         """,
