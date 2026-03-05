@@ -10,11 +10,15 @@ from typing import Any, Deque, Dict, List, Optional, Set, Tuple
 
 import sheep_platform_db as db
 
+import logging
 try:
     from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
+    # [專家級修復] 強制關閉 Streamlit 背景執行緒的煩人警告，釋放伺服器 I/O 效能
+    logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").setLevel(logging.ERROR)
 except ImportError:
     try:
         from streamlit.scriptrunner import add_script_run_ctx, get_script_run_ctx
+        logging.getLogger("streamlit.scriptrunner.script_run_context").setLevel(logging.ERROR)
     except ImportError:
         add_script_run_ctx = None
         get_script_run_ctx = None
