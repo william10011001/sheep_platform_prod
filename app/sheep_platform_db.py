@@ -2826,11 +2826,13 @@ def clean_zombie_tasks(timeout_minutes: int = 15) -> int:
                 updates_assigned.append((attempt, now, json.dumps(prog, ensure_ascii=False), tid))
             count += 1
             
-        # [專家級修復] 使用 executemany 批次更新，將上千次的 SQLite 寫入鎖定壓縮成一次極速操作
+        # [專家級修復] 改用迴圈 execute，因為自訂 _DBConn 尚未實作 executemany，在 PostgreSQL 下效能依舊極佳
         if updates_completed:
-            conn.executemany("UPDATE mining_tasks SET status = 'completed', attempt = ?, updated_at = ?, progress_json = ? WHERE id = ?", updates_completed)
+            for p in updates_completed:
+                conn.execute("UPDATE mining_tasks SET status = 'completed', attempt = ?, updated_at = ?, progress_json = ? WHERE id = ?", p)
         if updates_assigned:
-            conn.executemany("UPDATE mining_tasks SET status = 'assigned', attempt = ?, updated_at = ?, progress_json = ? WHERE id = ?", updates_assigned)
+            for p in updates_assigned:
+                conn.execute("UPDATE mining_tasks SET status = 'assigned', attempt = ?, updated_at = ?, progress_json = ? WHERE id = ?", p)
             
         if count > 0:
             conn.commit()
