@@ -764,8 +764,23 @@ class JobManager:
             worst_case = bool(risk_spec.get("worst_case", True))
             reverse_mode = bool(risk_spec.get("reverse_mode", False))
 
+            # [專家級效能優化] 針對 OB_FVG 與 SMC，只有在需要動態區間 TP/SL 時才退回慢速路徑
+            # 若為固定 TP/SL，則允許使用 Numba 批次加速 (fast_path)
+            force_slow = False
+            if family == "OB_FVG":
+                # 檢查 params 內的 ob_range_based 設定
+                try:
+                    prm_sample = part[0] if len(part) > 0 else {}
+                    if prm_sample.get("ob_range_based", False):
+                        force_slow = True
+                except Exception:
+                    force_slow = True
+            elif family in _SPECIAL_FAMILIES and family != "OB_FVG":
+                # LaguerreRSI_TEMA, TEMA_RSI, SMC 仍維持慢速路徑 (或它們專屬的 JIT 路徑)
+                force_slow = True
+
             use_fast_path = bool(
-                family not in _SPECIAL_FAMILIES
+                not force_slow
                 and hasattr(bt_module, "build_cache_for_family")
                 and hasattr(bt_module, "run_backtest_from_entry_sig")
             )
