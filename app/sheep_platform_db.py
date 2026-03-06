@@ -230,8 +230,7 @@ class _DBConn:
     def execute(self, sql: str, params: Any = None):
         is_pg = (getattr(self, "kind", "") == "postgres")
         if is_pg and psycopg2 is not None:
-            import psycopg2.extras
-            # [極致修復] 強制使用 RealDictCursor，防止 fetchone 回傳 Tuple 導致後續 dict() 轉換發生 TypeError 崩潰
+            # [極致修復] 移除會導致 UnboundLocalError 的區域 import，直接使用檔案頂部已匯入的全域模組
             cur = self._c.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             # 僅在 Postgres 模式下替換佔位符，保護 SQLite 原生語法
             sql_fixed = sql.replace("?", "%s")
@@ -257,7 +256,6 @@ class _DBConn:
         """兼容 SQLite 的 executescript 方法，供 init_db 執行 DDL 使用"""
         is_pg = (getattr(self, "kind", "") == "postgres")
         if is_pg and psycopg2 is not None:
-            import psycopg2.extras
             cur = self._c.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         else:
             cur = self._c.cursor()
