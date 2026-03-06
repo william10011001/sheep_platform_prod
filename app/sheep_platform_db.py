@@ -228,10 +228,18 @@ class _DBConn:
         self._is_db_conn = True  # 修復 get_setting 誤判導致的連線無限增生
 
     def execute(self, sql: str, params: Any = None):
-        cur = self._c.cursor()
-        try:
-            # 兼容 PostgreSQL 的 %s 語法
+        is_pg = (getattr(self, "kind", "") == "postgres")
+        if is_pg and psycopg2 is not None:
+            import psycopg2.extras
+            # [極致修復] 強制使用 RealDictCursor，防止 fetchone 回傳 Tuple 導致後續 dict() 轉換發生 TypeError 崩潰
+            cur = self._c.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            # 僅在 Postgres 模式下替換佔位符，保護 SQLite 原生語法
             sql_fixed = sql.replace("?", "%s")
+        else:
+            cur = self._c.cursor()
+            sql_fixed = sql
+
+        try:
             if params is not None:
                 cur.execute(sql_fixed, params)
             else:
@@ -247,7 +255,13 @@ class _DBConn:
 
     def executescript(self, sql: str):
         """兼容 SQLite 的 executescript 方法，供 init_db 執行 DDL 使用"""
-        cur = self._c.cursor()
+        is_pg = (getattr(self, "kind", "") == "postgres")
+        if is_pg and psycopg2 is not None:
+            import psycopg2.extras
+            cur = self._c.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        else:
+            cur = self._c.cursor()
+            
         try:
             cur.execute(sql)
             return cur
