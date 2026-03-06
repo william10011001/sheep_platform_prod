@@ -312,6 +312,8 @@ class JobManager:
             c_row = conn.execute("SELECT id FROM mining_cycles WHERE status = 'active' ORDER BY id DESC LIMIT 1").fetchone()
             c_id = int(c_row["id"]) if c_row else 0
             
+            # [專家級修復] 移除 LIMIT 5000，將所有待執行任務載入排程器。
+            # 這能確保 Round-Robin 公平分配，根除高 ID 用戶(新註冊)的排程飢餓與時間切片死鎖。
             rows = conn.execute(
                 """
                 SELECT t.id, t.user_id, t.status
@@ -324,7 +326,6 @@ class JobManager:
                   AND COALESCE(u.run_enabled, 1) = 1
                   AND COALESCE(p.active, 1) = 1
                 ORDER BY t.id ASC
-                LIMIT 5000
                 """,
                 (c_id,)
             ).fetchall()
@@ -843,6 +844,11 @@ class JobManager:
                         if i < start_family_i:
                             continue
 
+                        # [專家級防護] 確保 OB_FVG 的反向做空模式在 fast_path 中能正確生效
+                        current_reverse = reverse_mode
+                        if family == "OB_FVG":
+                            current_reverse = bool(family_params.get("reverse", current_reverse))
+
                         for j, (tp, sl, mh) in enumerate(risk_grid):
                             if i == start_family_i and j < start_risk_i:
                                 continue
@@ -863,7 +869,7 @@ class JobManager:
                             res = bt_module.run_backtest_from_entry_sig(
                                 df, entry_sig, tp, sl, mh,
                                 fee_side=fee_side, slippage=slippage,
-                                worst_case=worst_case, reverse_mode=reverse_mode,
+                                worst_case=worst_case, reverse_mode=current_reverse,
                             )
                             metrics = _metrics_from_bt_result(res)
                             sc = _score(metrics)
@@ -900,6 +906,11 @@ class JobManager:
                         if i < start_family_i:
                             continue
 
+                        # [專家級防護] 確保 OB_FVG 的反向做空模式在 slow_path 中能正確生效
+                        current_reverse = reverse_mode
+                        if family == "OB_FVG":
+                            current_reverse = bool(family_params.get("reverse", current_reverse))
+
                         for j, (tp, sl, mh) in enumerate(risk_grid):
                             if i == start_family_i and j < start_risk_i:
                                 continue
@@ -920,7 +931,7 @@ class JobManager:
                             res = bt_module.run_backtest(
                                 df, family, family_params, tp, sl, mh,
                                 fee_side=fee_side, slippage=slippage,
-                                worst_case=worst_case, reverse_mode=reverse_mode,
+                                worst_case=worst_case, reverse_mode=current_reverse,
                             )
                             metrics = _metrics_from_bt_result(res)
                             sc = _score(metrics)
