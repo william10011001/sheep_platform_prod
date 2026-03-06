@@ -99,17 +99,15 @@ def _rewrite_pg_host(dsn: str, new_host: str) -> str:
         if "@" in hostport:
             userinfo, hostport = hostport.rsplit("@", 1)
 
-        host = hostport
         port = ""
 
         if hostport.startswith("["):
             m = re.match(r"^\[(?P<h>.+)\](?::(?P<p>\d+))?$", hostport)
             if m:
-                host = str(m.group("h") or "")
                 port = str(m.group("p") or "")
         else:
             if ":" in hostport:
-                host, port = hostport.split(":", 1)
+                _, port = hostport.split(":", 1)
 
         # IPv6 host 需要加 []
         nh = str(new_host or "").strip()
@@ -241,7 +239,25 @@ class _DBConn:
             return cur
         except Exception as e:
             # 發生錯誤時必須手動 rollback，否則該連線會失效
-            self._c.rollback()
+            try:
+                self._c.rollback()
+            except Exception:
+                pass
+            raise e
+
+    def executescript(self, sql: str):
+        """兼容 SQLite 的 executescript 方法，供 init_db 執行 DDL 使用"""
+        cur = self._c.cursor()
+        try:
+            cur.execute(sql)
+            return cur
+        except Exception as e:
+            try:
+                self._c.rollback()
+            except Exception:
+                pass
+            import sys, traceback
+            print(f"[FATAL DB ERROR] executescript 執行失敗: {e}\n{traceback.format_exc()}", file=sys.stderr, flush=True)
             raise e
 
     def commit(self):
