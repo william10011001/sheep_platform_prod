@@ -122,35 +122,30 @@ def _utc_iso() -> str:
 
 def _get_settings_cached() -> Dict[str, Any]:
     now = time.time()
-    # 每 5 秒才真正去查一次資料庫，減少對連線池的壓力
     if now - float(_settings_cache.get("ts", 0.0)) < 5.0:
         return _settings_cache
 
+    conn = db._conn()  # internal; we cache so OK
     try:
-        conn = db._conn()
-        try:
-            # 將所有資料庫讀取包在 try 裡
-            ratelimit_rpm = float(db.get_setting(conn, "api_ratelimit_rpm", 600.0))
-            ratelimit_burst = float(db.get_setting(conn, "api_ratelimit_burst", 120.0))
-            slow_ms = float(db.get_setting(conn, "api_slow_ms", 800.0))
-            sample = float(db.get_setting(conn, "api_log_sample_rate", 0.05))
-            
-            _settings_cache.update({
-                "ts": now,
-                "ratelimit_rpm": max(0.0, ratelimit_rpm),
-                "ratelimit_burst": max(1.0, ratelimit_burst),
-                "slow_ms": max(0.0, slow_ms),
-                "sample": min(1.0, max(0.0, sample)),
-            })
-            _token_limiter.configure(_settings_cache["ratelimit_rpm"], _settings_cache["ratelimit_burst"])
-        finally:
-            conn.close()
-    except Exception as e:
-        logger.error(f"Failed to fetch settings: {e}")
-        # 如果失敗，返回舊的快取，避免整個 API 崩潰
-        return _settings_cache
-        
+        ratelimit_rpm = float(db.get_setting(conn, "api_ratelimit_rpm", 600.0))
+        ratelimit_burst = float(db.get_setting(conn, "api_ratelimit_burst", 120.0))
+        slow_ms = float(db.get_setting(conn, "api_slow_ms", 800.0))
+        sample = float(db.get_setting(conn, "api_log_sample_rate", 0.05))
+    finally:
+        conn.close()
+
+    _settings_cache.update(
+        {
+            "ts": now,
+            "ratelimit_rpm": max(0.0, ratelimit_rpm),
+            "ratelimit_burst": max(1.0, ratelimit_burst),
+            "slow_ms": max(0.0, slow_ms),
+            "sample": min(1.0, max(0.0, sample)),
+        }
+    )
+    _token_limiter.configure(_settings_cache["ratelimit_rpm"], _settings_cache["ratelimit_burst"])
     return _settings_cache
+
 
 def _client_ip(req: Request) -> str:
     """Best-effort client IP.

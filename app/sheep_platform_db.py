@@ -227,6 +227,7 @@ class _DBConn:
         self._c = conn
         self._p = pool
         self._closed = False
+        self._is_db_conn = True  # 修復 get_setting 誤判導致的連線無限增生
 
     def execute(self, sql: str, params: Any = None):
         cur = self._c.cursor()
@@ -251,15 +252,25 @@ class _DBConn:
 
     def close(self):
         if not self._closed and self._p:
-            self._p.putconn(self._c)
-            self._closed = True
+            try:
+                self._p.putconn(self._c)
+            except Exception as e:
+                import traceback
+                import sys
+                print(f"[FATAL DB ERROR] 連線歸還連線池失敗: {e}\n{traceback.format_exc()}", file=sys.stderr, flush=True)
+            finally:
+                self._closed = True
 
     # [專家級補強] 確保物件被垃圾回收時，連線一定會還給連線池，防止 Pool Exhausted
     def __del__(self):
         try:
-            self.close()
-        except Exception:
-            pass
+            if not getattr(self, "_closed", True):
+                import sys
+                print("[WARN DB] 發現未主動呼叫 close() 的懸空連線，由 GC 強制回收！", file=sys.stderr, flush=True)
+                self.close()
+        except Exception as e:
+            import sys
+            print(f"[FATAL DB ERROR] GC 回收連線時發生異常: {e}", file=sys.stderr, flush=True)
 
 
 _PG_POOL = None
@@ -410,12 +421,16 @@ def _conn() -> _DBConn:
     kind = _db_kind()
 
     if kind == "postgres":
-        c = _pg_pool().getconn()
+        pool_obj = _pg_pool()
+        c = pool_obj.getconn()
         try:
             c.autocommit = False
         except Exception:
             pass
-        return _DBConn("postgres", c)
+        # 修復：正確的參數順序為 _DBConn(conn, pool)
+        conn_obj = _DBConn(c, pool_obj)
+        conn_obj.kind = "postgres"  # 保留 kind 屬性供後續方言判斷使用
+        return conn_obj
 
     # sqlite
     # sqlite
@@ -464,7 +479,10 @@ def _conn() -> _DBConn:
     except Exception:
         pass
 
-    return _DBConn("sqlite", raw)
+    # 修復：正確的參數順序為 _DBConn(conn, pool)，SQLite 無 pool 故傳 None
+    conn_obj = _DBConn(raw, None)
+    conn_obj.kind = "sqlite"
+    return conn_obj
 
 
 def init_db() -> None:
