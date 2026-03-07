@@ -515,8 +515,13 @@ def _conn() -> _DBConn:
 
 def init_db() -> None:
     conn = _conn()
-    if getattr(conn, "kind", "sqlite") == "postgres":
-        try:
+    is_pg = (getattr(conn, "kind", "sqlite") == "postgres")
+    
+    try:
+        if is_pg:
+            # ---------------------------------------------------------
+            # PostgreSQL 專用 DDL
+            # ---------------------------------------------------------
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS users (
@@ -664,7 +669,7 @@ def init_db() -> None:
                 """
             )
 
-            # [專家級修復] 將所有修改獨立為單筆交易，每執行一步就獨立存檔，防止重複索引報錯導致後續核心欄位(如 lease_id)跟著被回滾註銷
+            # [專家級修復] 將所有修改獨立為單筆交易，每執行一步就獨立存檔
             statements = [
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS username_norm TEXT",
                 "UPDATE users SET username_norm = lower(username) WHERE username_norm IS NULL OR username_norm = ''",
@@ -716,238 +721,163 @@ def init_db() -> None:
                     conn.commit()
                 except Exception:
                     conn.rollback()
-
+                    
+            # 執行完 Postgres 的 DDL 後，直接結束函數，絕對不往下跑 SQLite 的邏圈
             return
-        finally:
-            conn.close()
-    try:
-        conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT NOT NULL,
-                username_norm TEXT NOT NULL UNIQUE,
-                password_hash TEXT NOT NULL,
-                role TEXT NOT NULL DEFAULT 'user',
-                nickname TEXT DEFAULT '',
-                disabled INTEGER NOT NULL DEFAULT 0,
-                run_enabled INTEGER NOT NULL DEFAULT 0,
-                wallet_address TEXT NOT NULL DEFAULT '',
-                wallet_chain TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL,
-                last_login_at TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS audit_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                action TEXT NOT NULL,
-                payload_json TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS api_tokens (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                token TEXT NOT NULL UNIQUE,
-                name TEXT,
-                expires_at TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            );
             
-            CREATE TABLE IF NOT EXISTS mining_cycles (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT,
-                status TEXT,
-                start_ts TEXT,
-                end_ts TEXT
-            );
-            
-            CREATE TABLE IF NOT EXISTS factor_pools (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                cycle_id INTEGER,
-                name TEXT,
-                symbol TEXT,
-                timeframe_min INTEGER,
-                years INTEGER,
-                family TEXT,
-                grid_spec_json TEXT,
-                risk_spec_json TEXT,
-                num_partitions INTEGER,
-                seed INTEGER,
-                active INTEGER DEFAULT 1,
-                created_at TEXT
-            );
-            
-            CREATE TABLE IF NOT EXISTS mining_tasks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                pool_id INTEGER,
-                cycle_id INTEGER,
-                partition_idx INTEGER,
-                num_partitions INTEGER,
-                status TEXT DEFAULT 'assigned',
-                progress_json TEXT DEFAULT '{}',
-                last_heartbeat TEXT,
-                created_at TEXT,
-                updated_at TEXT
-            );
-            
-            /* Indexes: 讓全域進度與派發查詢在資料量大時仍維持可用速度 */
-            CREATE INDEX IF NOT EXISTS idx_mining_tasks_pool_cycle_part ON mining_tasks (pool_id, cycle_id, partition_idx);
-            CREATE INDEX IF NOT EXISTS idx_mining_tasks_cycle_status ON mining_tasks (cycle_id, status);
-            
-            CREATE TABLE IF NOT EXISTS submissions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                candidate_id INTEGER,
-                user_id INTEGER,
-                pool_id INTEGER,
-                status TEXT DEFAULT 'pending',
-                audit_json TEXT DEFAULT '{}',
-                submitted_at TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS candidates (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                task_id INTEGER,
-                user_id INTEGER,
-                pool_id INTEGER,
-                params_json TEXT,
-                metrics_json TEXT,
-                score REAL,
-                is_submitted INTEGER DEFAULT 0,
-                created_at TEXT
-            );
-            
-            CREATE TABLE IF NOT EXISTS strategies (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                submission_id INTEGER,
-                user_id INTEGER,
-                pool_id INTEGER,
-                params_json TEXT,
-                status TEXT DEFAULT 'active',
-                allocation_pct REAL,
-                note TEXT,
-                created_at TEXT,
-                expires_at TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS weekly_checks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                strategy_id INTEGER,
-                week_start_ts TEXT,
-                week_end_ts TEXT,
-                return_pct REAL,
-                max_drawdown_pct REAL,
-                trades INTEGER,
-                eligible INTEGER,
-                checked_at TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS payouts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                strategy_id INTEGER,
-                user_id INTEGER,
-                week_start_ts TEXT,
-                amount_usdt REAL,
-                status TEXT DEFAULT 'unpaid',
-                txid TEXT,
-                created_at TEXT
-            );
-            """
-        )
-        try:
-            conn.execute("ALTER TABLE users ADD COLUMN run_enabled INTEGER NOT NULL DEFAULT 0")
-        except Exception:
-            pass
-        try:
-            conn.execute("ALTER TABLE users ADD COLUMN wallet_address TEXT NOT NULL DEFAULT ''")
-        except Exception:
-            pass
-        try:
-            conn.execute("ALTER TABLE users ADD COLUMN wallet_chain TEXT NOT NULL DEFAULT ''")
-        except Exception:
-            pass
-        # ── mining_tasks lease 欄位：你現在崩潰的根因就是它不存在
-        try:
-            conn.execute("ALTER TABLE mining_tasks ADD COLUMN lease_id TEXT")
-        except Exception:
-            pass
-        try:
-            conn.execute("ALTER TABLE mining_tasks ADD COLUMN lease_worker_id TEXT")
-        except Exception:
-            pass
-        try:
-            conn.execute("ALTER TABLE mining_tasks ADD COLUMN lease_expires_at TEXT")
-        except Exception:
-            pass
-        try:
-            conn.execute("ALTER TABLE mining_tasks ADD COLUMN attempt INTEGER DEFAULT 0")
-        except Exception:
-            pass
-
-        # ── compute worker 狀態面板必備表
-        try:
+        else:
+            # ---------------------------------------------------------
+            # SQLite 專用 DDL
+            # ---------------------------------------------------------
             conn.executescript(
                 """
-                CREATE TABLE IF NOT EXISTS workers (
-                    worker_id TEXT PRIMARY KEY,
-                    kind TEXT NOT NULL DEFAULT 'worker',
-                    version TEXT NOT NULL DEFAULT '',
-                    protocol INTEGER NOT NULL DEFAULT 0,
-                    created_at TEXT NOT NULL,
-                    last_seen_at TEXT NOT NULL,
-                    last_task_id INTEGER,
-                    tasks_done INTEGER NOT NULL DEFAULT 0,
-                    tasks_fail INTEGER NOT NULL DEFAULT 0,
-                    avg_cps REAL NOT NULL DEFAULT 0.0,
-                    last_error TEXT NOT NULL DEFAULT '',
-                    meta_json TEXT NOT NULL DEFAULT '{}'
-                );
-
-                CREATE TABLE IF NOT EXISTS worker_events (
+                CREATE TABLE IF NOT EXISTS users (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    ts TEXT NOT NULL,
-                    worker_id TEXT,
-                    event TEXT NOT NULL,
-                    detail_json TEXT NOT NULL DEFAULT '{}'
+                    username TEXT NOT NULL,
+                    username_norm TEXT NOT NULL UNIQUE,
+                    password_hash TEXT NOT NULL,
+                    role TEXT NOT NULL DEFAULT 'user',
+                    nickname TEXT DEFAULT '',
+                    disabled INTEGER NOT NULL DEFAULT 0,
+                    run_enabled INTEGER NOT NULL DEFAULT 0,
+                    wallet_address TEXT NOT NULL DEFAULT '',
+                    wallet_chain TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    last_login_at TEXT
                 );
 
-                CREATE INDEX IF NOT EXISTS idx_workers_last_seen ON workers(last_seen_at);
-                CREATE INDEX IF NOT EXISTS idx_worker_events_ts ON worker_events(ts);
-                CREATE INDEX IF NOT EXISTS idx_mining_tasks_user_cycle_status_upd ON mining_tasks(user_id, cycle_id, status, updated_at);
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS audit_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    action TEXT NOT NULL,
+                    payload_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS api_tokens (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    token TEXT NOT NULL UNIQUE,
+                    name TEXT,
+                    expires_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                
+                CREATE TABLE IF NOT EXISTS mining_cycles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT,
+                    status TEXT,
+                    start_ts TEXT,
+                    end_ts TEXT
+                );
+                
+                CREATE TABLE IF NOT EXISTS factor_pools (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    cycle_id INTEGER,
+                    name TEXT,
+                    symbol TEXT,
+                    timeframe_min INTEGER,
+                    years INTEGER,
+                    family TEXT,
+                    grid_spec_json TEXT,
+                    risk_spec_json TEXT,
+                    num_partitions INTEGER,
+                    seed INTEGER,
+                    active INTEGER DEFAULT 1,
+                    created_at TEXT
+                );
+                
+                CREATE TABLE IF NOT EXISTS mining_tasks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    pool_id INTEGER,
+                    cycle_id INTEGER,
+                    partition_idx INTEGER,
+                    num_partitions INTEGER,
+                    status TEXT DEFAULT 'assigned',
+                    progress_json TEXT DEFAULT '{}',
+                    last_heartbeat TEXT,
+                    created_at TEXT,
+                    updated_at TEXT
+                );
+                
+                CREATE INDEX IF NOT EXISTS idx_mining_tasks_pool_cycle_part ON mining_tasks (pool_id, cycle_id, partition_idx);
+                CREATE INDEX IF NOT EXISTS idx_mining_tasks_cycle_status ON mining_tasks (cycle_id, status);
+                
+                CREATE TABLE IF NOT EXISTS submissions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    candidate_id INTEGER,
+                    user_id INTEGER,
+                    pool_id INTEGER,
+                    status TEXT DEFAULT 'pending',
+                    audit_json TEXT DEFAULT '{}',
+                    submitted_at TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS candidates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    task_id INTEGER,
+                    user_id INTEGER,
+                    pool_id INTEGER,
+                    params_json TEXT,
+                    metrics_json TEXT,
+                    score REAL,
+                    is_submitted INTEGER DEFAULT 0,
+                    created_at TEXT
+                );
+                
+                CREATE TABLE IF NOT EXISTS strategies (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    submission_id INTEGER,
+                    user_id INTEGER,
+                    pool_id INTEGER,
+                    params_json TEXT,
+                    status TEXT DEFAULT 'active',
+                    allocation_pct REAL,
+                    note TEXT,
+                    created_at TEXT,
+                    expires_at TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS weekly_checks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    strategy_id INTEGER,
+                    week_start_ts TEXT,
+                    week_end_ts TEXT,
+                    return_pct REAL,
+                    max_drawdown_pct REAL,
+                    trades INTEGER,
+                    eligible INTEGER,
+                    checked_at TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS payouts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    strategy_id INTEGER,
+                    user_id INTEGER,
+                    week_start_ts TEXT,
+                    amount_usdt REAL,
+                    status TEXT DEFAULT 'unpaid',
+                    txid TEXT,
+                    created_at TEXT
+                );
                 """
             )
-        except Exception:
-            pass
-
-        # ── 任務 lease 欄位（舊 sqlite DB 也能自動補齊）
-        try:
-            conn.execute("ALTER TABLE mining_tasks ADD COLUMN lease_id TEXT")
-        except Exception:
-            pass
-        try:
-            conn.execute("ALTER TABLE mining_tasks ADD COLUMN lease_worker_id TEXT")
-        except Exception:
-            pass
-        try:
-            conn.execute("ALTER TABLE mining_tasks ADD COLUMN lease_expires_at TEXT")
-        except Exception:
-            pass
-        try:
-            conn.execute("ALTER TABLE mining_tasks ADD COLUMN attempt INTEGER DEFAULT 0")
-        except Exception:
-            pass
-
-        # ── workers / worker_events（compute worker 狀態面板必備）
-        try:
-            conn.executescript(
+            
+            statements_sqlite = [
+                "ALTER TABLE users ADD COLUMN run_enabled INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE users ADD COLUMN wallet_address TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE users ADD COLUMN wallet_chain TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE mining_tasks ADD COLUMN lease_id TEXT",
+                "ALTER TABLE mining_tasks ADD COLUMN lease_worker_id TEXT",
+                "ALTER TABLE mining_tasks ADD COLUMN lease_expires_at TEXT",
+                "ALTER TABLE mining_tasks ADD COLUMN attempt INTEGER DEFAULT 0",
                 """
                 CREATE TABLE IF NOT EXISTS workers (
                     worker_id TEXT PRIMARY KEY,
@@ -963,8 +893,9 @@ def init_db() -> None:
                     avg_cps REAL NOT NULL DEFAULT 0.0,
                     last_error TEXT NOT NULL DEFAULT '',
                     meta_json TEXT NOT NULL DEFAULT '{}'
-                );
-
+                )
+                """,
+                """
                 CREATE TABLE IF NOT EXISTS worker_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     ts TEXT NOT NULL,
@@ -972,66 +903,27 @@ def init_db() -> None:
                     worker_id TEXT,
                     event TEXT NOT NULL,
                     detail_json TEXT NOT NULL DEFAULT '{}'
-                );
+                )
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_workers_last_seen ON workers(last_seen_at)",
+                "CREATE INDEX IF NOT EXISTS idx_worker_events_ts ON worker_events(ts)",
+                "CREATE INDEX IF NOT EXISTS idx_worker_events_event_ts ON worker_events(event, ts)",
+                "CREATE INDEX IF NOT EXISTS idx_mining_tasks_user_cycle_status_upd ON mining_tasks(user_id, cycle_id, status, updated_at)",
+                "CREATE INDEX IF NOT EXISTS idx_mining_tasks_status_lease ON mining_tasks(status, lease_expires_at)",
+                "CREATE INDEX IF NOT EXISTS idx_mining_tasks_status_fast ON mining_tasks(status)",
+                "CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at)",
+                "CREATE INDEX IF NOT EXISTS idx_mining_tasks_updated_status ON mining_tasks(updated_at, status)",
+                "CREATE INDEX IF NOT EXISTS idx_candidates_created_at ON candidates(created_at)",
+                "CREATE INDEX IF NOT EXISTS idx_payouts_created_at ON payouts(created_at)"
+            ]
+            
+            for stmt in statements_sqlite:
+                try:
+                    conn.execute(stmt)
+                    conn.commit()
+                except Exception:
+                    pass # SQLite 不支援 IF NOT EXISTS 的 ALTER TABLE 寫法，若報錯通常代表已存在
 
-                CREATE INDEX IF NOT EXISTS idx_workers_last_seen ON workers(last_seen_at);
-                CREATE INDEX IF NOT EXISTS idx_worker_events_ts ON worker_events(ts);
-                CREATE INDEX IF NOT EXISTS idx_worker_events_event_ts ON worker_events(event, ts);
-                """
-            )
-        except Exception:
-            pass
-
-        # ── 任務查詢加速（對 tasks_live_query_ms 直接有效）
-        try:
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_mining_tasks_user_cycle_status_upd ON mining_tasks(user_id, cycle_id, status, updated_at)")
-        except Exception:
-            pass
-        # mining_tasks lease columns (compute worker 必備)
-        try:
-            if getattr(conn, "kind", "sqlite") == "postgres":
-                conn.execute("ALTER TABLE mining_tasks ADD COLUMN IF NOT EXISTS lease_id TEXT")
-                conn.execute("ALTER TABLE mining_tasks ADD COLUMN IF NOT EXISTS lease_worker_id TEXT")
-                conn.execute("ALTER TABLE mining_tasks ADD COLUMN IF NOT EXISTS lease_expires_at TEXT")
-                conn.execute("ALTER TABLE mining_tasks ADD COLUMN IF NOT EXISTS attempt INTEGER DEFAULT 0")
-            else:
-                conn.execute("ALTER TABLE mining_tasks ADD COLUMN lease_id TEXT")
-        except Exception:
-            pass
-        try:
-            if getattr(conn, "kind", "sqlite") != "postgres":
-                conn.execute("ALTER TABLE mining_tasks ADD COLUMN lease_worker_id TEXT")
-        except Exception:
-            pass
-        try:
-            if getattr(conn, "kind", "sqlite") != "postgres":
-                conn.execute("ALTER TABLE mining_tasks ADD COLUMN lease_expires_at TEXT")
-        except Exception:
-            pass
-        try:
-            if getattr(conn, "kind", "sqlite") != "postgres":
-                conn.execute("ALTER TABLE mining_tasks ADD COLUMN attempt INTEGER DEFAULT 0")
-        except Exception:
-            pass
-
-        try:
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_mining_tasks_status_lease ON mining_tasks(status, lease_expires_at)")
-        except Exception:
-            pass        
-        try:
-            # [終極護城河] 建立 status 專屬索引，徹底防禦全表掃描
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_mining_tasks_status_fast ON mining_tasks(status)")
-        except Exception:
-            pass
-        try:
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_mining_tasks_updated_status ON mining_tasks(updated_at, status)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_candidates_created_at ON candidates(created_at)")
-            conn.execute("CREATE INDEX IF NOT EXISTS idx_payouts_created_at ON payouts(created_at)")
-        except Exception:
-            pass
-
-        conn.commit()
     finally:
         conn.close()
 
