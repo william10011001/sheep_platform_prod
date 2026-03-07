@@ -605,14 +605,19 @@ async def ws_chat(ws: WebSocket):
 
 
 @app.post("/token", response_model=TokenResponse)
+@app.post("/token", response_model=TokenResponse)
 def issue_token(req: Request, body: TokenRequest):
+    # [日誌強化] 記錄登入嘗試
+    ip = _client_ip(req) or "ip"
+    logger.info(f"[LOGIN_DEBUG] 收到登入請求: 嘗試登入帳號='{body.username}', IP={ip}")
+
     # rate limit by IP to avoid brute force
-    allowed, retry_after = _token_issue_limiter.check(_client_ip(req) or "ip", cost=1.0)
+    allowed, retry_after = _token_issue_limiter.check(ip, cost=1.0)
     if not allowed:
+        logger.warning(f"[LOGIN_DEBUG] IP {ip} 觸發速率限制 (Rate Limit)")
         headers = {"Retry-After": str(int(max(1, retry_after or 1.0)))}
         raise HTTPException(status_code=429, detail="rate_limited", headers=headers)
 
-    # [極致修復] 攔截 Compute 算力節點的請求，直接比對 .env，確保它永遠不會被 401 擋住
     if body.name == "compute":
         env_user = os.environ.get("SHEEP_COMPUTE_USER", "sheep").strip()
         env_pass = os.environ.get("SHEEP_COMPUTE_PASS", "").strip()
@@ -627,7 +632,6 @@ def issue_token(req: Request, body: TokenRequest):
             else:
                 _conn = db._conn()
                 try:
-                    # 強制解鎖、賦予 admin 權限，避免被系統誤鎖
                     _conn.execute("UPDATE users SET role = 'admin', run_enabled = 1, disabled = 0 WHERE id = ?", (u["id"],))
                     _conn.commit()
                 finally:
@@ -646,7 +650,13 @@ def issue_token(req: Request, body: TokenRequest):
 
     user = db.get_user_by_username(body.username)
     if not user:
+        # [日誌強化] 找不到帳號
+        logger.warning(f"[LOGIN_DEBUG] 登入失敗: 資料庫中找不到帳號 '{body.username}'")
         raise HTTPException(status_code=401, detail="bad_credentials")
+
+    # [日誌強化] 帳號存在，印出 Hash 的前綴以便確認加密格式是否異常
+    raw_hash_preview = str(user.get("password_hash", ""))[:15]
+    logger.info(f"[LOGIN_DEBUG] 帳號 '{body.username}' 存在 (ID: {user['id']}), DB 儲存的 Hash 前綴為: {raw_hash_preview}...")
 
     from sheep_platform_security import verify_password
     is_valid = False
@@ -661,25 +671,29 @@ def issue_token(req: Request, body: TokenRequest):
                     raw_hash = raw_hash[2:-1]
         
         is_valid = verify_password(body.password, raw_hash)
+        logger.info(f"[LOGIN_DEBUG] Primary verify_password 驗證結果: {is_valid}")
     except Exception as e:
+        logger.error(f"[LOGIN_DEBUG] Primary verify_password 發生異常: {e}")
         # 備援驗證方案
         try:
             pw_bin = body.password.encode("utf-8")
             hash_bin = raw_hash.encode("utf-8") if isinstance(raw_hash, str) else raw_hash
             is_valid = verify_password(pw_bin, hash_bin)
+            logger.info(f"[LOGIN_DEBUG] Fallback verify_password 驗證結果: {is_valid}")
         except Exception as verify_err:
-            logger.error(f"Authentication failed for user {body.username}: {verify_err}", exc_info=True)
+            logger.error(f"[LOGIN_DEBUG] Fallback verify_password 發生異常: {verify_err}", exc_info=True)
             is_valid = False
 
     if not is_valid:
+        # [日誌強化] 密碼比對失敗
+        logger.warning(f"[LOGIN_DEBUG] 登入失敗: 帳號 '{body.username}' 的密碼比對不符")
         raise HTTPException(status_code=401, detail="bad_credentials")
 
     if int(user.get("disabled") or 0) != 0:
+        logger.warning(f"[LOGIN_DEBUG] 登入失敗: 帳號 '{body.username}' 已被停用 (disabled=1)")
         raise HTTPException(status_code=403, detail="user_disabled")
 
-    # 移除強制重置 run_enabled 的邏輯，避免跨裝置登入互相干擾與不合理的挖礦中斷
-    # db.update_user_login_state(int(user["id"]), success=True)
-
+    logger.info(f"[LOGIN_DEBUG] 登入成功: 帳號 '{body.username}' 驗證通過")
     token = db.create_api_token(int(user["id"]), ttl_seconds=int(body.ttl_seconds), name=str(body.name or "worker"))
 
     return TokenResponse(
@@ -690,13 +704,14 @@ def issue_token(req: Request, body: TokenRequest):
         issued_at=str(token.get("issued_at")),
         expires_at=str(token.get("expires_at")),
     )
-
 @app.post("/auth/register")
 def web_register(req: Request, body: WebRegisterIn):
     ip = _client_ip(req) or "unknown_ip"
+    logger.info(f"[REGISTER_DEBUG] 收到註冊請求: 原始帳號='{body.username}', IP={ip}")
+
     allowed, retry_after = _register_ip_limiter.check(f"reg_ip:{ip}", cost=1.0)
     if not allowed:
-        #防攻擊
+        logger.warning(f"[REGISTER_DEBUG] IP {ip} 觸發註冊速率限制")
         raise HTTPException(
             status_code=429, 
             detail=f"警告!!!檢測出您正在惡意攻擊網站，請於 {int(retry_after)} 秒後再試。"
@@ -704,14 +719,20 @@ def web_register(req: Request, body: WebRegisterIn):
 
     from sheep_platform_security import normalize_username, hash_password
     uname = normalize_username(body.username)
+    
+    # [日誌強化] 紀錄各種欄位驗證失敗的原因
     if not uname or len(uname) > 64:
+        logger.warning(f"[REGISTER_DEBUG] 註冊失敗: 正規化後的帳號無效或過長 (uname='{uname}')")
         raise HTTPException(status_code=400, detail="invalid_username")
     if not body.tos_ok:
+        logger.warning(f"[REGISTER_DEBUG] 註冊失敗: 使用者未同意服務條款 (tos_ok=False)")
         raise HTTPException(status_code=400, detail="must_accept_tos")
     if len(body.password) < 6:
+        logger.warning(f"[REGISTER_DEBUG] 註冊失敗: 密碼長度不足 (len={len(body.password)})")
         raise HTTPException(status_code=400, detail="password_too_short")
     
     if db.get_user_by_username(uname):
+        logger.warning(f"[REGISTER_DEBUG] 註冊失敗: 帳號已存在 DB 中 (uname='{uname}')")
         raise HTTPException(status_code=400, detail="user_exists")
         
     try:
@@ -720,19 +741,23 @@ def web_register(req: Request, body: WebRegisterIn):
         uid = db.create_user(username=uname, password_hash=pw_hash_str, role="user", wallet_address="", wallet_chain="TRC20")
         db.write_audit_log(uid, "register", {"username": uname})
         
-        # 新手註冊立即派發任務，避免空白無任務狀態
         try:
             cycle = db.get_active_cycle()
             if cycle:
                 db.assign_tasks_for_user(uid, cycle_id=int(cycle["id"]), min_tasks=2)
         except Exception as assign_e:
-            logger.error(f"Initial task assignment failed for new user {uid}: {assign_e}")
+            logger.error(f"[REGISTER_DEBUG] 新手任務派發失敗 (UID: {uid}): {assign_e}")
             
+        logger.info(f"[REGISTER_DEBUG] 註冊成功: 帳號='{uname}', 獲得 UID={uid}")
+        return {"ok": True, "user_id": uid}
+
+    except ValueError as ve:
+        # 捕捉 validate_username 或 hash_password 內拋出的 ValueError
+        logger.error(f"[REGISTER_DEBUG] 註冊被攔截 (ValueError): {ve}")
+        raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
-        logger.error(f"Register error: {e}")
+        logger.error(f"[REGISTER_DEBUG] 註冊發生未預期錯誤 (Exception): {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="register_failed")
-        
-    return {"ok": True, "user_id": uid}
 
 @app.get("/user/me")
 def web_get_me(request: Request, authorization: Optional[str] = Header(None)):
