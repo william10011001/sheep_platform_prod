@@ -2409,38 +2409,8 @@ def upsert_worker(worker_id: str, user_id: int, version: str, protocol: int, met
 
     conn = _conn()
     try:
-        # 確保表存在（就算 init_db 沒跑到也不會炸）
-        try:
-            conn.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS workers (
-                    worker_id TEXT PRIMARY KEY,
-                    user_id INTEGER,
-                    kind TEXT NOT NULL DEFAULT 'worker',
-                    version TEXT NOT NULL DEFAULT '',
-                    protocol INTEGER NOT NULL DEFAULT 0,
-                    created_at TEXT NOT NULL,
-                    last_seen_at TEXT NOT NULL,
-                    last_task_id INTEGER,
-                    tasks_done INTEGER NOT NULL DEFAULT 0,
-                    tasks_fail INTEGER NOT NULL DEFAULT 0,
-                    avg_cps REAL NOT NULL DEFAULT 0.0,
-                    last_error TEXT NOT NULL DEFAULT '',
-                    meta_json TEXT NOT NULL DEFAULT '{}'
-                );
-                CREATE TABLE IF NOT EXISTS worker_events (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    ts TEXT NOT NULL,
-                    user_id INTEGER,
-                    worker_id TEXT,
-                    event TEXT NOT NULL,
-                    detail_json TEXT NOT NULL DEFAULT '{}'
-                );
-                """
-            )
-        except Exception:
-            pass
-
+        # [專家級修復] 徹底移除這裡的 CREATE TABLE 腳本！
+        # 建表任務已由 init_db 統一處理，這裡只做純粹的資料寫入，消滅所有 PostgreSQL 語法衝突與連線懸空
         conn.execute(
             """
             INSERT INTO workers (worker_id, user_id, kind, version, protocol, created_at, last_seen_at, meta_json)
