@@ -982,6 +982,7 @@ def init_db() -> None:
 
 
 def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
+    log_sys_event("AUTH_LOGIN_STEP_1", None, "進入查詢帳號函數", {"input_username": username})
     try:
         raw = str(username or "")
         uname_norm = normalize_username(raw)
@@ -1008,6 +1009,7 @@ def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
                 (uname_norm,),
             ).fetchone()
             if row:
+                log_sys_event("AUTH_LOGIN_STEP_2", None, "成功從一階正規化查詢找到帳號", {"uname": uname_norm})
                 return dict(row)
         except Exception as e:
             conn.rollback()
@@ -1076,6 +1078,7 @@ def create_user(
     wallet_address: str = "",
     wallet_chain: str = "",
 ) -> int:
+    log_sys_event("AUTH_REG_STEP_1", None, "進入註冊建立帳號函數", {"input_username": username, "role": role})
     try:
         uname = str(username or "").strip()
         uname_norm = normalize_username(uname)
@@ -1164,6 +1167,7 @@ def is_user_locked(user_id: int) -> bool:
 
 
 def update_user_login_state(user_id: int, success: bool = True) -> None:
+    log_sys_event("AUTH_LOGIN_STATE_STEP_1", user_id, "進入更新登入狀態函數", {"success": success})
     try:
         conn = _conn()
     except Exception as e:
@@ -1377,10 +1381,18 @@ def write_audit_log(user_id: Optional[int], action: str, payload: Any) -> None:
         conn.close()
 
 def create_api_token(user_id: int, ttl_seconds: int, name: str = "worker") -> dict:
+    log_sys_event("AUTH_TOKEN_STEP_1", user_id, "進入核發 API Token 函數", {"ttl": ttl_seconds, "name": name})
     import secrets
     token = secrets.token_urlsafe(32)
     expires_at = (datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)).isoformat()
-    conn = _conn()
+    
+    try:
+        conn = _conn()
+    except Exception as conn_e:
+        import traceback
+        log_sys_event("AUTH_TOKEN_CRASH", user_id, f"Token 取得連線卡死: {conn_e}", {"trace": traceback.format_exc()})
+        return {}
+
     try:
         if getattr(conn, "kind", "sqlite") == "postgres":
             row = conn.execute(
@@ -1388,6 +1400,7 @@ def create_api_token(user_id: int, ttl_seconds: int, name: str = "worker") -> di
                 (user_id, token, name, expires_at, _now_iso())
             ).fetchone()
             conn.commit()
+            log_sys_event("AUTH_TOKEN_STEP_2", user_id, "成功核發 API Token (PG)", {})
             return {"token_id": int((row or {}).get("id") or 0), "token": token, "expires_at": expires_at, "issued_at": _now_iso()}
 
         cur = conn.execute(
@@ -1395,8 +1408,12 @@ def create_api_token(user_id: int, ttl_seconds: int, name: str = "worker") -> di
             (user_id, token, name, expires_at, _now_iso())
         )
         conn.commit()
+        log_sys_event("AUTH_TOKEN_STEP_2", user_id, "成功核發 API Token (SQLite)", {})
         return {"token_id": cur.lastrowid, "token": token, "expires_at": expires_at, "issued_at": _now_iso()}
     except Exception as e:
+        conn.rollback()
+        import traceback
+        log_sys_event("AUTH_TOKEN_ERROR", user_id, f"Token 寫入資料庫失敗: {e}", {"trace": traceback.format_exc()})
         print(f"[DB ERROR] create_api_token: {e}")
         return {}
     finally:
@@ -1575,21 +1592,36 @@ def list_factor_pools(cycle_id: int) -> list:
     raise RuntimeError(f"資料庫高併發鎖定，無法讀取策略池列表。請稍後再試。({last_err})")
 
 def log_sys_event(event_type: str, user_id: Optional[int], message: str, detail: dict = None) -> None:
-    """專家級監視：將系統核心事件寫入獨立資料表，方便 DBeaver 即時排查"""
+    """專家級監視：非同步背景寫入，保證絕對不卡死主執行緒，並強制雙重輸出"""
+    import sys
+    import json
+    import threading
+
     try:
-        conn = _conn()
+        payload_str = json.dumps(detail or {}, ensure_ascii=False)
+    except Exception:
+        payload_str = "{}"
+        
+    # 第一層防護：強制印出到伺服器標準錯誤輸出 (就算 DB 炸了，docker compose logs api 也能看到)
+    print(f"[SYS_EVENT] {event_type} | UID:{user_id} | MSG:{message} | DETAIL:{payload_str}", file=sys.stderr, flush=True)
+
+    def _bg_write():
         try:
-            payload = json.dumps(detail or {}, ensure_ascii=False)
-            conn.execute(
-                "INSERT INTO sys_monitor_events (event_type, user_id, message, detail_json, created_at) VALUES (?, ?, ?, ?, ?)",
-                (event_type, user_id, message, payload, _now_iso())
-            )
-            conn.commit()
-        finally:
-            conn.close()
-    except Exception as e:
-        import sys
-        print(f"[CRITICAL DB ERROR] 寫入 sys_monitor_events 失敗: {e}", file=sys.stderr)
+            conn = _conn()
+            try:
+                conn.execute(
+                    "INSERT INTO sys_monitor_events (event_type, user_id, message, detail_json, created_at) VALUES (?, ?, ?, ?, ?)",
+                    (event_type, user_id, message, payload_str, _now_iso())
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception as e:
+            print(f"[CRITICAL DB ERROR] 背景寫入 sys_monitor_events 失敗: {e}", file=sys.stderr, flush=True)
+
+    # 第二層防護：丟進背景執行緒，主程式立刻放行，消滅日誌寫入引發的連環死鎖
+    t = threading.Thread(target=_bg_write, daemon=True)
+    t.start()
 
 def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, max_tasks: int = 6, preferred_family: str = "") -> None:
     import time, random
