@@ -451,7 +451,14 @@
                         if (!localStorage.getItem('sheep_token')) throw new Error('No token');
                         user.value = await fetchApi('/user/me');
                         await loadAllData();
-                    } catch (e) { user.value = null; localStorage.removeItem('sheep_token'); } 
+                    } catch (e) { 
+                        user.value = null; 
+                        localStorage.removeItem('sheep_token');
+                        if (e.message !== 'No token') {
+                            console.error('[checkAuth 錯誤] /user/me 或後續請求失敗:', e);
+                            showToast(`❌ 獲取使用者資訊失敗: ${e.message}`, 'error', 5000);
+                        }
+                    } 
                     finally { isLoading.value = false; }
                 };
 
@@ -464,7 +471,10 @@
                         if (lbRes.data) leaderboard.combos = lbRes.data.combos || [];
                         tasksData.tasks = tRes.tasks || [];
                         tasksData.run_enabled = tRes.run_enabled;
-                    } catch (e) { console.error('Failed to load data', e); }
+                    } catch (e) { 
+                        console.error('[loadAllData 錯誤] 面板資料載入失敗:', e); 
+                        showToast(`❌ 載入面板資料失敗: ${e.message}`, 'error', 5000);
+                    }
                 };
 
                 const loadTasks = async () => {
@@ -473,7 +483,10 @@
                         const res = await fetchApi('/tasks');
                         tasksData.tasks = res.tasks || [];
                         tasksData.run_enabled = res.run_enabled;
-                    } catch(e) {}
+                    } catch(e) {
+                        console.error('[loadTasks 錯誤] 輪詢更新任務失敗:', e);
+                        // 背景輪詢錯誤不中斷使用者操作，僅記錄於 Console
+                    }
                 };
 
                 // 極致修復的驗證邏輯：完整解析後端錯誤，避免誤報
