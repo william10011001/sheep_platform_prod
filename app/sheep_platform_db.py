@@ -666,6 +666,16 @@ def init_db() -> None:
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_payouts_created_at ON payouts(created_at);
+
+                CREATE TABLE IF NOT EXISTS sys_monitor_events (
+                    id BIGSERIAL PRIMARY KEY,
+                    event_type TEXT NOT NULL,
+                    user_id BIGINT,
+                    message TEXT,
+                    detail_json TEXT DEFAULT '{}',
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_sys_monitor_events_type_ts ON sys_monitor_events(event_type, created_at);
                 """
             )
 
@@ -867,6 +877,16 @@ def init_db() -> None:
                     txid TEXT,
                     created_at TEXT
                 );
+
+                CREATE TABLE IF NOT EXISTS sys_monitor_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_type TEXT NOT NULL,
+                    user_id INTEGER,
+                    message TEXT,
+                    detail_json TEXT DEFAULT '{}',
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_sys_monitor_events_type_ts ON sys_monitor_events(event_type, created_at);
                 """
             )
             
@@ -1441,6 +1461,23 @@ def list_factor_pools(cycle_id: int) -> list:
     # [專家級防護] 絕對禁止因鎖死而回傳空陣列，這會導致前端誤判並將所有任務過濾掉變成空表格
     raise RuntimeError(f"資料庫高併發鎖定，無法讀取策略池列表。請稍後再試。({last_err})")
 
+def log_sys_event(event_type: str, user_id: Optional[int], message: str, detail: dict = None) -> None:
+    """專家級監視：將系統核心事件寫入獨立資料表，方便 DBeaver 即時排查"""
+    try:
+        conn = _conn()
+        try:
+            payload = json.dumps(detail or {}, ensure_ascii=False)
+            conn.execute(
+                "INSERT INTO sys_monitor_events (event_type, user_id, message, detail_json, created_at) VALUES (?, ?, ?, ?, ?)",
+                (event_type, user_id, message, payload, _now_iso())
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        import sys
+        print(f"[CRITICAL DB ERROR] 寫入 sys_monitor_events 失敗: {e}", file=sys.stderr)
+
 def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, max_tasks: int = 6, preferred_family: str = "") -> None:
     import time, random
     for attempt in range(5):
@@ -1449,13 +1486,16 @@ def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, m
             try:
                 if cycle_id <= 0:
                     cycle_row = conn.execute("SELECT id FROM mining_cycles WHERE status = 'active' ORDER BY id DESC LIMIT 1").fetchone()
-                    if not cycle_row: return
+                    if not cycle_row: 
+                        log_sys_event("TASK_ASSIGN_FAIL", user_id, "找不到 Active 狀態的週期，無法派發", {})
+                        return
                     cycle_id = cycle_row["id"]
                 
                 cur = conn.execute("SELECT COUNT(*) as c FROM mining_tasks WHERE user_id = ? AND status IN ('assigned', 'running', 'queued') AND cycle_id = ?", (user_id, cycle_id))
                 current_tasks = cur.fetchone()["c"]
                 
                 if current_tasks >= min_tasks:
+                    log_sys_event("TASK_ASSIGN_SKIP", user_id, f"使用者已擁有 {current_tasks} 個任務，達到保底門檻 {min_tasks}，跳過派發", {"current": current_tasks, "min_tasks": min_tasks})
                     break
                     
                 needed = min_tasks - current_tasks
@@ -1471,6 +1511,7 @@ def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, m
                     pools = conn.execute("SELECT id, num_partitions FROM factor_pools WHERE cycle_id = ? AND active = 1", (cycle_id,)).fetchall()
                     
                 if not pools:
+                    log_sys_event("TASK_ASSIGN_FAIL", user_id, f"目前週期 {cycle_id} 沒有活躍的策略池可供派發", {"cycle_id": cycle_id})
                     break
                     
                 # 抓取該用戶已經擁有過的所有 (pool_id, partition_idx)
@@ -1492,7 +1533,6 @@ def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, m
                     pid = int(p["id"])
                     num_parts = int(p["num_partitions"])
                     
-                    # 過濾出全網目前沒人執行的空缺分割
                     available_parts = []
                     for part_idx in range(num_parts):
                         if (pid, part_idx) in user_owned:
@@ -1506,7 +1546,6 @@ def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, m
                         
                     random.shuffle(available_parts)
                     
-                    # 確保 100% 補齊所需的任務名額，終結迴圈次數浪費
                     for chosen_part in available_parts:
                         if assigned_count >= needed:
                             break
@@ -1525,13 +1564,17 @@ def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, m
                         
                 if assigned_count > 0:
                     conn.commit()
+                    log_sys_event("TASK_ASSIGN_SUCCESS", user_id, f"成功派發了 {assigned_count} 個新任務", {"needed": needed, "assigned": assigned_count})
+                elif needed > 0 and assigned_count == 0:
+                    log_sys_event("TASK_ASSIGN_FAIL", user_id, "需要派發任務，但所有 Pool 的分區皆已被全網領取完畢", {"needed": needed})
                 break
             finally:
                 conn.close()
         except Exception as e:
             if attempt == 4:
-                import sys
-                print(f"[DB ERROR] assign_tasks_for_user: {e}", file=sys.stderr)
+                import traceback
+                err_str = traceback.format_exc()
+                log_sys_event("TASK_ASSIGN_CRASH", user_id, f"派發任務時發生嚴重例外: {e}", {"trace": err_str})
             time.sleep(0.05 * (2 ** attempt))
 def _safe_listdir(dir_path: str) -> List[str]:
     try:

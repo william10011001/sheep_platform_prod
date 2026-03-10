@@ -605,158 +605,150 @@ async def ws_chat(ws: WebSocket):
 
 
 @app.post("/token", response_model=TokenResponse)
-@app.post("/token", response_model=TokenResponse)
 def issue_token(req: Request, body: TokenRequest):
-    # [日誌強化] 記錄登入嘗試
     ip = _client_ip(req) or "ip"
-    logger.info(f"[LOGIN_DEBUG] 收到登入請求: 嘗試登入帳號='{body.username}', IP={ip}")
-
-    # rate limit by IP to avoid brute force
-    allowed, retry_after = _token_issue_limiter.check(ip, cost=1.0)
-    if not allowed:
-        logger.warning(f"[LOGIN_DEBUG] IP {ip} 觸發速率限制 (Rate Limit)")
-        headers = {"Retry-After": str(int(max(1, retry_after or 1.0)))}
-        raise HTTPException(status_code=429, detail="rate_limited", headers=headers)
-
-    if body.name == "compute":
-        env_user = os.environ.get("SHEEP_COMPUTE_USER", "sheep").strip()
-        env_pass = os.environ.get("SHEEP_COMPUTE_PASS", "").strip()
-        if env_user and env_pass and body.username == env_user and body.password == env_pass:
-            u = db.get_user_by_username(env_user)
-            if not u:
-                from sheep_platform_security import hash_password
-                pw_str = hash_password(env_pass)
-                if isinstance(pw_str, bytes): pw_str = pw_str.decode('utf-8')
-                db.create_user(env_user, pw_str, role="admin")
-                u = db.get_user_by_username(env_user)
-            else:
-                _conn = db._conn()
-                try:
-                    _conn.execute("UPDATE users SET role = 'admin', run_enabled = 1, disabled = 0 WHERE id = ?", (u["id"],))
-                    _conn.commit()
-                finally:
-                    _conn.close()
-                u = db.get_user_by_username(env_user)
-            
-            token = db.create_api_token(int(u["id"]), ttl_seconds=int(body.ttl_seconds), name="compute")
-            return TokenResponse(
-                token=str(token["token"]),
-                token_id=int(token["token_id"]),
-                user_id=int(u["id"]),
-                role="admin",
-                issued_at=str(token.get("issued_at")),
-                expires_at=str(token.get("expires_at")),
-            )
-
-    user = db.get_user_by_username(body.username)
-    if not user:
-        # [日誌強化] 找不到帳號
-        logger.warning(f"[LOGIN_DEBUG] 登入失敗: 資料庫中找不到帳號 '{body.username}'")
-        raise HTTPException(status_code=401, detail="bad_credentials")
-
-    # [日誌強化] 帳號存在，印出 Hash 的前綴以便確認加密格式是否異常
-    raw_hash_preview = str(user.get("password_hash", ""))[:15]
-    logger.info(f"[LOGIN_DEBUG] 帳號 '{body.username}' 存在 (ID: {user['id']}), DB 儲存的 Hash 前綴為: {raw_hash_preview}...")
-
-    from sheep_platform_security import verify_password
-    is_valid = False
     try:
+        allowed, retry_after = _token_issue_limiter.check(ip, cost=1.0)
+        if not allowed:
+            db.log_sys_event("LOGIN_FAIL", None, f"IP {ip} 登入頻率過高觸發限制", {"ip": ip})
+            headers = {"Retry-After": str(int(max(1, retry_after or 1.0)))}
+            raise HTTPException(status_code=429, detail="rate_limited", headers=headers)
+
+        if body.name == "compute":
+            env_user = os.environ.get("SHEEP_COMPUTE_USER", "sheep").strip()
+            env_pass = os.environ.get("SHEEP_COMPUTE_PASS", "").strip()
+            if env_user and env_pass and body.username == env_user and body.password == env_pass:
+                u = db.get_user_by_username(env_user)
+                if not u:
+                    from sheep_platform_security import hash_password
+                    pw_str = hash_password(env_pass)
+                    if isinstance(pw_str, bytes): pw_str = pw_str.decode('utf-8')
+                    db.create_user(env_user, pw_str, role="admin")
+                    u = db.get_user_by_username(env_user)
+                else:
+                    _conn = db._conn()
+                    try:
+                        _conn.execute("UPDATE users SET role = 'admin', run_enabled = 1, disabled = 0 WHERE id = ?", (u["id"],))
+                        _conn.commit()
+                    finally:
+                        _conn.close()
+                    u = db.get_user_by_username(env_user)
+                
+                token = db.create_api_token(int(u["id"]), ttl_seconds=int(body.ttl_seconds), name="compute")
+                return TokenResponse(
+                    token=str(token["token"]),
+                    token_id=int(token["token_id"]),
+                    user_id=int(u["id"]),
+                    role="admin",
+                    issued_at=str(token.get("issued_at")),
+                    expires_at=str(token.get("expires_at")),
+                )
+
+        user = db.get_user_by_username(body.username)
+        if not user:
+            db.log_sys_event("LOGIN_FAIL", None, f"帳號不存在: '{body.username}'", {"ip": ip, "username": body.username})
+            raise HTTPException(status_code=401, detail="bad_credentials")
+
+        from sheep_platform_security import verify_password
+        is_valid = False
         raw_hash = user["password_hash"]
-        if isinstance(raw_hash, str):
-            import ast
-            if raw_hash.startswith("b'") or raw_hash.startswith('b"'):
-                try:
-                    raw_hash = ast.literal_eval(raw_hash).decode("utf-8")
-                except Exception:
-                    raw_hash = raw_hash[2:-1]
-        
-        is_valid = verify_password(body.password, raw_hash)
-        logger.info(f"[LOGIN_DEBUG] Primary verify_password 驗證結果: {is_valid}")
-    except Exception as e:
-        logger.error(f"[LOGIN_DEBUG] Primary verify_password 發生異常: {e}")
-        # 備援驗證方案
         try:
-            pw_bin = body.password.encode("utf-8")
-            hash_bin = raw_hash.encode("utf-8") if isinstance(raw_hash, str) else raw_hash
-            is_valid = verify_password(pw_bin, hash_bin)
-            logger.info(f"[LOGIN_DEBUG] Fallback verify_password 驗證結果: {is_valid}")
-        except Exception as verify_err:
-            logger.error(f"[LOGIN_DEBUG] Fallback verify_password 發生異常: {verify_err}", exc_info=True)
-            is_valid = False
+            if isinstance(raw_hash, str):
+                import ast
+                if raw_hash.startswith("b'") or raw_hash.startswith('b"'):
+                    try:
+                        raw_hash = ast.literal_eval(raw_hash).decode("utf-8")
+                    except Exception:
+                        raw_hash = raw_hash[2:-1]
+            is_valid = verify_password(body.password, raw_hash)
+        except Exception as e:
+            try:
+                pw_bin = body.password.encode("utf-8")
+                hash_bin = raw_hash.encode("utf-8") if isinstance(raw_hash, str) else raw_hash
+                is_valid = verify_password(pw_bin, hash_bin)
+            except Exception as verify_err:
+                db.log_sys_event("LOGIN_ERROR", user["id"], f"密碼比對模組異常: {verify_err}", {"ip": ip})
+                is_valid = False
 
-    if not is_valid:
-        # [日誌強化] 密碼比對失敗
-        logger.warning(f"[LOGIN_DEBUG] 登入失敗: 帳號 '{body.username}' 的密碼比對不符")
-        raise HTTPException(status_code=401, detail="bad_credentials")
+        if not is_valid:
+            db.log_sys_event("LOGIN_FAIL", user["id"], f"密碼錯誤: '{body.username}'", {"ip": ip})
+            raise HTTPException(status_code=401, detail="bad_credentials")
 
-    if int(user.get("disabled") or 0) != 0:
-        logger.warning(f"[LOGIN_DEBUG] 登入失敗: 帳號 '{body.username}' 已被停用 (disabled=1)")
-        raise HTTPException(status_code=403, detail="user_disabled")
+        if int(user.get("disabled") or 0) != 0:
+            db.log_sys_event("LOGIN_FAIL", user["id"], f"帳號已被停用: '{body.username}'", {"ip": ip})
+            raise HTTPException(status_code=403, detail="user_disabled")
 
-    logger.info(f"[LOGIN_DEBUG] 登入成功: 帳號 '{body.username}' 驗證通過")
-    token = db.create_api_token(int(user["id"]), ttl_seconds=int(body.ttl_seconds), name=str(body.name or "worker"))
-
-    return TokenResponse(
-        token=str(token["token"]),
-        token_id=int(token["token_id"]),
-        user_id=int(user["id"]),
-        role=str(user.get("role") or "user"),
-        issued_at=str(token.get("issued_at")),
-        expires_at=str(token.get("expires_at")),
-    )
+        token = db.create_api_token(int(user["id"]), ttl_seconds=int(body.ttl_seconds), name=str(body.name or "worker"))
+        db.log_sys_event("LOGIN_SUCCESS", user["id"], f"登入成功: '{body.username}'", {"ip": ip})
+        
+        return TokenResponse(
+            token=str(token["token"]),
+            token_id=int(token["token_id"]),
+            user_id=int(user["id"]),
+            role=str(user.get("role") or "user"),
+            issued_at=str(token.get("issued_at")),
+            expires_at=str(token.get("expires_at")),
+        )
+    except HTTPException:
+        raise
+    except Exception as fatal_e:
+        import traceback
+        err_str = traceback.format_exc()
+        db.log_sys_event("LOGIN_CRASH", None, f"登入系統崩潰: {fatal_e}", {"trace": err_str, "ip": ip, "username": body.username})
+        raise HTTPException(status_code=500, detail="Internal Server Error")
 @app.post("/auth/register")
 def web_register(req: Request, body: WebRegisterIn):
     ip = _client_ip(req) or "unknown_ip"
-    logger.info(f"[REGISTER_DEBUG] 收到註冊請求: 原始帳號='{body.username}', IP={ip}")
-
-    allowed, retry_after = _register_ip_limiter.check(f"reg_ip:{ip}", cost=1.0)
-    if not allowed:
-        logger.warning(f"[REGISTER_DEBUG] IP {ip} 觸發註冊速率限制")
-        raise HTTPException(
-            status_code=429, 
-            detail=f"警告!!!檢測出您正在惡意攻擊網站，請於 {int(retry_after)} 秒後再試。"
-        )
-
-    from sheep_platform_security import normalize_username, hash_password
-    uname = normalize_username(body.username)
-    
-    # [日誌強化] 紀錄各種欄位驗證失敗的原因
-    if not uname or len(uname) > 64:
-        logger.warning(f"[REGISTER_DEBUG] 註冊失敗: 正規化後的帳號無效或過長 (uname='{uname}')")
-        raise HTTPException(status_code=400, detail="invalid_username")
-    if not body.tos_ok:
-        logger.warning(f"[REGISTER_DEBUG] 註冊失敗: 使用者未同意服務條款 (tos_ok=False)")
-        raise HTTPException(status_code=400, detail="must_accept_tos")
-    if len(body.password) < 6:
-        logger.warning(f"[REGISTER_DEBUG] 註冊失敗: 密碼長度不足 (len={len(body.password)})")
-        raise HTTPException(status_code=400, detail="password_too_short")
-    
-    if db.get_user_by_username(uname):
-        logger.warning(f"[REGISTER_DEBUG] 註冊失敗: 帳號已存在 DB 中 (uname='{uname}')")
-        raise HTTPException(status_code=400, detail="user_exists")
-        
     try:
-        pw_hashed = hash_password(body.password)
-        pw_hash_str = pw_hashed.decode('utf-8') if isinstance(pw_hashed, bytes) else str(pw_hashed)
-        uid = db.create_user(username=uname, password_hash=pw_hash_str, role="user", wallet_address="", wallet_chain="TRC20")
-        db.write_audit_log(uid, "register", {"username": uname})
-        
-        try:
-            cycle = db.get_active_cycle()
-            if cycle:
-                db.assign_tasks_for_user(uid, cycle_id=int(cycle["id"]), min_tasks=2)
-        except Exception as assign_e:
-            logger.error(f"[REGISTER_DEBUG] 新手任務派發失敗 (UID: {uid}): {assign_e}")
-            
-        logger.info(f"[REGISTER_DEBUG] 註冊成功: 帳號='{uname}', 獲得 UID={uid}")
-        return {"ok": True, "user_id": uid}
+        allowed, retry_after = _register_ip_limiter.check(f"reg_ip:{ip}", cost=1.0)
+        if not allowed:
+            db.log_sys_event("REGISTER_FAIL", None, f"IP {ip} 註冊頻率過高觸發限制", {"ip": ip})
+            raise HTTPException(
+                status_code=429, 
+                detail=f"警告!!!檢測出您正在惡意攻擊網站，請於 {int(retry_after)} 秒後再試。"
+            )
 
-    except ValueError as ve:
-        # 捕捉 validate_username 或 hash_password 內拋出的 ValueError
-        logger.error(f"[REGISTER_DEBUG] 註冊被攔截 (ValueError): {ve}")
-        raise HTTPException(status_code=400, detail=str(ve))
+        from sheep_platform_security import normalize_username, hash_password
+        uname = normalize_username(body.username)
+        
+        if not uname or len(uname) > 64:
+            db.log_sys_event("REGISTER_FAIL", None, "帳號無效或過長", {"username": body.username, "ip": ip})
+            raise HTTPException(status_code=400, detail="invalid_username")
+        if not body.tos_ok:
+            db.log_sys_event("REGISTER_FAIL", None, "未同意服務條款", {"username": body.username, "ip": ip})
+            raise HTTPException(status_code=400, detail="must_accept_tos")
+        if len(body.password) < 6:
+            db.log_sys_event("REGISTER_FAIL", None, "密碼長度不足", {"username": body.username, "ip": ip})
+            raise HTTPException(status_code=400, detail="password_too_short")
+        
+        if db.get_user_by_username(uname):
+            db.log_sys_event("REGISTER_FAIL", None, "帳號已存在", {"username": body.username, "ip": ip})
+            raise HTTPException(status_code=400, detail="user_exists")
+            
+        try:
+            pw_hashed = hash_password(body.password)
+            pw_hash_str = pw_hashed.decode('utf-8') if isinstance(pw_hashed, bytes) else str(pw_hashed)
+            uid = db.create_user(username=uname, password_hash=pw_hash_str, role="user", wallet_address="", wallet_chain="TRC20")
+            
+            try:
+                cycle = db.get_active_cycle()
+                if cycle:
+                    db.assign_tasks_for_user(uid, cycle_id=int(cycle["id"]), min_tasks=2)
+            except Exception as assign_e:
+                db.log_sys_event("REGISTER_WARNING", uid, f"新手任務派發失敗: {assign_e}", {"ip": ip})
+                
+            db.log_sys_event("REGISTER_SUCCESS", uid, f"註冊成功: '{uname}'", {"ip": ip})
+            return {"ok": True, "user_id": uid}
+
+        except ValueError as ve:
+            db.log_sys_event("REGISTER_FAIL", None, f"註冊被攔截(數值異常): {ve}", {"username": body.username, "ip": ip})
+            raise HTTPException(status_code=400, detail=str(ve))
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"[REGISTER_DEBUG] 註冊發生未預期錯誤 (Exception): {e}", exc_info=True)
+        import traceback
+        err_str = traceback.format_exc()
+        db.log_sys_event("REGISTER_CRASH", None, f"註冊系統崩潰: {e}", {"trace": err_str, "ip": ip, "username": body.username})
         raise HTTPException(status_code=500, detail="register_failed")
 
 @app.get("/user/me")
