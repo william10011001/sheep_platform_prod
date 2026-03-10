@@ -4266,7 +4266,7 @@ def _login_form() -> None:
     if not submitted:
         return
 
-    st.toast("⏳ 收到登入請求，正在驗證...", icon="⏳")
+    st.toast(" 收到登入請求，正在驗證...", icon="⏳")
 
     try:
         uname = normalize_username(username)
@@ -4369,7 +4369,7 @@ def _login_form() -> None:
     if not submitted:
         return
 
-    st.toast("⏳ 收到註冊請求，正在處理...", icon="⏳")
+    st.toast(" 收到註冊請求，正在處理...", icon="⏳")
 
     try:
         uname = normalize_username(username)
