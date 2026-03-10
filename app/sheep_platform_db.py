@@ -1592,36 +1592,35 @@ def list_factor_pools(cycle_id: int) -> list:
     raise RuntimeError(f"資料庫高併發鎖定，無法讀取策略池列表。請稍後再試。({last_err})")
 
 def log_sys_event(event_type: str, user_id: Optional[int], message: str, detail: dict = None) -> None:
-    """專家級監視：非同步背景寫入，保證絕對不卡死主執行緒，並強制雙重輸出"""
+    """專家級監視：同步寫入，過濾無效洗版，確保不會塞爆資料庫連線"""
+    # [核彈級修復] 絕對禁止寫入 TASK_ASSIGN_SKIP！
+    # 由於 Worker 會高頻掃描數千名用戶，若不阻擋此日誌，會瞬間榨乾 Postgres 的 100 個連線上限。
+    # 這是導致 API 容器在啟動時拿不到連線直接崩潰死亡、Nginx 報錯 502、前端無限轉圈圈的真正元兇！
+    if event_type == "TASK_ASSIGN_SKIP":
+        return
+
     import sys
     import json
-    import threading
 
     try:
         payload_str = json.dumps(detail or {}, ensure_ascii=False)
     except Exception:
         payload_str = "{}"
         
-    # 第一層防護：強制印出到伺服器標準錯誤輸出 (就算 DB 炸了，docker compose logs api 也能看到)
     print(f"[SYS_EVENT] {event_type} | UID:{user_id} | MSG:{message} | DETAIL:{payload_str}", file=sys.stderr, flush=True)
 
-    def _bg_write():
+    try:
+        conn = _conn()
         try:
-            conn = _conn()
-            try:
-                conn.execute(
-                    "INSERT INTO sys_monitor_events (event_type, user_id, message, detail_json, created_at) VALUES (?, ?, ?, ?, ?)",
-                    (event_type, user_id, message, payload_str, _now_iso())
-                )
-                conn.commit()
-            finally:
-                conn.close()
-        except Exception as e:
-            print(f"[CRITICAL DB ERROR] 背景寫入 sys_monitor_events 失敗: {e}", file=sys.stderr, flush=True)
-
-    # 第二層防護：丟進背景執行緒，主程式立刻放行，消滅日誌寫入引發的連環死鎖
-    t = threading.Thread(target=_bg_write, daemon=True)
-    t.start()
+            conn.execute(
+                "INSERT INTO sys_monitor_events (event_type, user_id, message, detail_json, created_at) VALUES (?, ?, ?, ?, ?)",
+                (event_type, user_id, message, payload_str, _now_iso())
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"[CRITICAL DB ERROR] 寫入 sys_monitor_events 失敗: {e}", file=sys.stderr, flush=True)
 
 def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, max_tasks: int = 6, preferred_family: str = "") -> None:
     import time, random
