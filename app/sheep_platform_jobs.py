@@ -216,6 +216,11 @@ class JobManager:
             f = self._stop_flags.get(int(task_id))
             if f is not None:
                 f.set()
+            # [專家級修復] 當用戶主動請求停止時，直接將該執行緒從監控池中強制剔除。
+            # 這樣即使舊執行緒卡在底層 C 語言擴充套件(如網路阻塞或 pandas)無法立刻退出，
+            # 系統也能立刻釋放 max_concurrent_jobs 名額，讓新任務得以執行！
+            self._threads.pop(int(task_id), None)
+            self._stop_flags.pop(int(task_id), None)
 
     def stop_all_for_user(self, user_id: int) -> None:
         user_id = int(user_id)
@@ -367,16 +372,10 @@ class JobManager:
         # 原因是核心的 db.claim_task_for_run() 只允許領取狀態為 'assigned' 的任務，
         # 若在資料庫被改為 'queued'，排程器將永遠無法 Claim 成功，導致任務秒退，進度永遠卡在 0%！
         
-        # [自動修復] 救援目前資料庫中已經被錯誤標記為 'queued' 的幽靈任務，讓它們重獲新生
-        try:
-            conn_fix = db._conn()
-            cur = conn_fix.execute("UPDATE mining_tasks SET status='assigned' WHERE status='queued'")
-            if cur.rowcount > 0:
-                print(f"[SYSTEM] 已成功解救 {cur.rowcount} 個卡在佇列中的幽靈任務！")
-            conn_fix.commit()
-            conn_fix.close()
-        except Exception:
-            pass
+        # [致命死鎖修復] 移除了將狀態標記為 'queued' 的全表批次更新。
+        # 原因是核心的 db.claim_task_for_run() 其實完全支援領取 'queued' 狀態的任務。
+        # 絕對禁止在這裡每 2 秒瘋狂 UPDATE 全表，這會導致極嚴重的 SQLite Write Lock (database is locked) 並拖垮效能！
+        pass
 
     def _scheduler_loop(self) -> None:
         try:
@@ -450,9 +449,10 @@ class JobManager:
                     self._cleanup_finished_locked()
                     alive = sum(1 for t in self._threads.values() if t.is_alive())
 
+                    # [系統效能防護] 增加詳細的記憶體與執行緒監控日誌
                     if mem_free_pct < 0.15:
                         if alive > 0:
-                             print(f"[SYSTEM] 系統記憶體低於安全閾值 ({mem_free_pct:.1%})，暫緩新任務發放。")
+                             print(f"[SYSTEM WARN] 系統記憶體低於安全閾值 ({mem_free_pct:.1%})，暫緩新任務發放。目前活躍執行緒數: {alive}", file=sys.stderr)
                         pass
                     else:
                         while alive < max(1, limit):
@@ -836,6 +836,11 @@ class JobManager:
                     db.update_task_progress(task_id, progress)
                     sig_cache = None
                     use_fast_path = False
+
+            # [致命死鎖修復] 快取建立可能耗時超過 slice_s (例如 30~60 秒)。
+            # 若不在此重置時間，進入運算迴圈後會「瞬間觸發時間切片」並直接中斷，導致任務永遠卡在固定的進度無限循環！
+            slice_start_ts = time.time()
+            slice_start_done = int(done)
 
             def _commit() -> None:
                 nonlocal last_commit, last_commit_ts
