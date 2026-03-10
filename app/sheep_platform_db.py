@@ -455,6 +455,19 @@ def _conn() -> _DBConn:
             c.autocommit = False
         except Exception:
             pass
+            
+        # [專家級防護] 注入連線級別的超時保護，徹底消滅無窮等待(Deadlock/Lock wait)
+        try:
+            with c.cursor() as cur:
+                cur.execute("SET statement_timeout = '7000';")  # 7秒強制中止查詢
+                cur.execute("SET lock_timeout = '5000';")       # 5秒拿不到鎖直接報錯
+            c.commit() # 必須 commit，確保設定生效且不留下懸空交易
+        except Exception:
+            try:
+                c.rollback()
+            except Exception:
+                pass
+                
         # 修復：正確的參數順序為 _DBConn(conn, pool)
         conn_obj = _DBConn(c, pool_obj)
         conn_obj.kind = "postgres"  # 保留 kind 屬性供後續方言判斷使用
@@ -949,13 +962,24 @@ def init_db() -> None:
 
 
 def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
-    raw = str(username or "")
-    uname_norm = normalize_username(raw)
-    if not uname_norm:
-        log_sys_event("AUTH_LOGIN_ERROR", None, "登入嘗試失敗: 格式化後為空", {"raw_username": raw})
+    try:
+        raw = str(username or "")
+        uname_norm = normalize_username(raw)
+        if not uname_norm:
+            log_sys_event("AUTH_LOGIN_ERROR", None, "登入嘗試失敗: 格式化後為空", {"raw_username": raw})
+            return None
+    except Exception as norm_err:
+        import traceback
+        log_sys_event("AUTH_LOGIN_CRASH", None, f"normalize_username 異常: {norm_err}", {"trace": traceback.format_exc()})
         return None
 
-    conn = _conn()
+    try:
+        conn = _conn()
+    except Exception as conn_err:
+        import traceback
+        log_sys_event("AUTH_LOGIN_CRASH", None, f"取得 DB 連線卡死或失敗: {conn_err}", {"trace": traceback.format_exc()})
+        return None
+
     try:
         # 1. 優先走 username_norm
         try:
@@ -1032,18 +1056,29 @@ def create_user(
     wallet_address: str = "",
     wallet_chain: str = "",
 ) -> int:
-    uname = str(username or "").strip()
-    uname_norm = normalize_username(uname)
-    if not uname_norm:
-        log_sys_event("AUTH_REG_ERROR", None, "註冊失敗: 無效的使用者名稱", {"raw_username": username})
-        raise ValueError("invalid username")
-        
-    if isinstance(password_hash, bytes):
-        pw_str = password_hash.decode("utf-8")
-    else:
-        pw_str = str(password_hash or "")
-        
-    conn = _conn()
+    try:
+        uname = str(username or "").strip()
+        uname_norm = normalize_username(uname)
+        if not uname_norm:
+            log_sys_event("AUTH_REG_ERROR", None, "註冊失敗: 無效的使用者名稱", {"raw_username": username})
+            raise ValueError("invalid username")
+            
+        if isinstance(password_hash, bytes):
+            pw_str = password_hash.decode("utf-8")
+        else:
+            pw_str = str(password_hash or "")
+    except Exception as pre_e:
+        import traceback
+        log_sys_event("AUTH_REG_CRASH", None, f"註冊前置處理失敗: {pre_e}", {"trace": traceback.format_exc()})
+        raise pre_e
+
+    try:
+        conn = _conn()
+    except Exception as conn_err:
+        import traceback
+        log_sys_event("AUTH_REG_CRASH", None, f"註冊時取得連線失敗: {conn_err}", {"trace": traceback.format_exc()})
+        raise conn_err
+
     try:
         if getattr(conn, "kind", "sqlite") == "postgres":
             row = conn.execute(
@@ -1109,7 +1144,13 @@ def is_user_locked(user_id: int) -> bool:
 
 
 def update_user_login_state(user_id: int, success: bool = True) -> None:
-    conn = _conn()
+    try:
+        conn = _conn()
+    except Exception as e:
+        import traceback
+        log_sys_event("AUTH_LOGIN_CRASH", user_id, f"更新登入狀態時取得連線失敗: {e}", {"trace": traceback.format_exc()})
+        return
+
     try:
         if success:
             now = _now_iso()
