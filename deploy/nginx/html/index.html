@@ -675,6 +675,9 @@
                             speed = done / elapsed;
                         }
 
+                        // [專家級防呆] 針對 queued 狀態且已有進度的任務，強制視為「背景運行中」以保持進度條與 ETA 的計算
+                        const isEffectivelyRunning = isRunning || (status === 'queued' && done > 0 && total > 0);
+
                         // 時間格式化工具：秒轉換為直觀可讀格式
                         const formatT = (sec) => {
                             if (sec === undefined || sec === null || isNaN(sec) || !isFinite(sec) || sec < 0) return '--';
@@ -690,13 +693,13 @@
                             if (isError) return elapsed > 0 ? `已耗時 ${formatT(elapsed)}` : '';
                             if (isCompleted) return elapsed > 0 ? `總耗時 ${formatT(elapsed)}` : '';
                             
-                            // 僅在運行中且有有效計算進度時，顯示精準剩餘時間
-                            if (isRunning && total > 0 && done > 0 && speed > 0.001) {
+                            // [專家級修復] 放寬 ETA 顯示條件，只要速度大於極小值就顯示估計，避免卡在估算中
+                            if (isEffectivelyRunning && total > 0 && speed > 0.0001) {
                                 const remainSec = Math.max(0, (total - done) / speed);
                                 const totalSec = Math.max(0, total / speed);
                                 return `剩餘 ${formatT(remainSec)} / 總計 ${formatT(totalSec)}`;
                             }
-                            if (elapsed > 0) return `已耗時 ${formatT(elapsed)} / 估算中...`;
+                            if (elapsed > 0) return `已耗時 ${formatT(elapsed)} / 準備算力中...`;
                             return '';
                         };
 
@@ -732,18 +735,20 @@
                             return { text: '建構參數網格中...', percent: 100, isIndeterminate: true, colorClass: 'from-purple-500 to-pink-500', errorDetail: '', timeText };
                         }
 
-                        // 強制優先顯示運算進度，即使目前被判定為 assigned/queued
-                        if (hasGridProgress || phase === 'grid_search' || phase === 'running' || isRunning) {
+                        // [專家級修復] 強制優先顯示運算進度，即使目前被判定為 assigned/queued
+                        if (hasGridProgress || phase === 'grid_search' || phase === 'running' || isEffectivelyRunning) {
                             if (hasGridProgress) {
                                 const pct = Math.round((done / total) * 100);
-                                const prefix = isRunning ? '參數運算' : '排程等待中';
-                                return { text: `${prefix} (${Math.floor(done)}/${total})`, percent: pct, isIndeterminate: !isRunning, colorClass: isRunning ? 'from-blue-500 to-indigo-400' : 'from-amber-500 to-orange-400', errorDetail: '', timeText };
+                                // 取消排程等待中的橘黃色干擾，只要有進度就視為暫時切片，保持藍色運算狀態
+                                const prefix = isRunning ? '參數運算' : '背景切片中';
+                                return { text: `${prefix} (${Math.floor(done)}/${total})`, percent: pct, isIndeterminate: !isEffectivelyRunning, colorClass: 'from-blue-500 to-indigo-400', errorDetail: '', timeText };
                             }
-                            return { text: '準備開始運算...', percent: 100, isIndeterminate: true, colorClass: 'from-blue-500 to-indigo-400', errorDetail: '', timeText };
+                            return { text: '準備開始運算...', percent: 0, isIndeterminate: true, colorClass: 'from-blue-500 to-indigo-400', errorDetail: '', timeText };
                         }
 
                         if (status === 'assigned' || status === 'queued') {
-                            return { text: '等待分配算力...', percent: 100, isIndeterminate: true, colorClass: 'from-amber-500 to-orange-400', errorDetail: '', timeText };
+                            // [專家級修復] 等待分配算力時，進度應為 0 而非 100，避免前端視覺卡死在滿格
+                            return { text: '等待分配算力...', percent: 0, isIndeterminate: true, colorClass: 'from-amber-500 to-orange-400', errorDetail: '', timeText };
                         }
 
                         return { text: '初始化...', percent: 0, isIndeterminate: true, colorClass: 'from-slate-500 to-slate-400', errorDetail: '', timeText };

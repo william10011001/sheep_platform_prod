@@ -846,17 +846,23 @@ class JobManager:
                 last_commit = done
                 last_commit_ts = time.time()
                 
-                # 計算本次執行的總耗時 (包含之前累積的 + 這次的)
+                # [專家級修復] 精確計算本次執行的總耗時與純運算速度
                 current_run_elapsed = float(max(0.0, time.time() - t0))
                 total_elapsed = prev_elapsed_s + current_run_elapsed
                 
-                # 計算「純運算期間」的速度 (只看這個切片進度，避免被快取建立時間拉低速度)
+                # 計算「純運算期間」的速度
                 slice_elapsed = float(max(0.001, time.time() - slice_start_ts))
                 slice_done = max(0, done - slice_start_done)
-                speed = float(slice_done / slice_elapsed) if slice_done > 0 else 0.0
                 
-                # 只有當速度合理時才估算 ETA，否則回傳 None 讓前端顯示等待
-                eta = float((combos_total - done) / speed) if speed > 0.1 and combos_total > done else None
+                # 如果進度有增加，更新速度；否則沿用上一次的有效速度，避免被短暫的 I/O 卡頓歸零
+                if slice_done > 0:
+                    speed = float(slice_done / slice_elapsed)
+                else:
+                    speed = float(progress.get("speed_cps") or 0.0)
+                
+                # [專家級修復] 加入最低速度保護，避免 ETA 變成無限大
+                safe_speed = max(0.001, speed)
+                eta = float((combos_total - done) / safe_speed) if combos_total > done else 0.0
                 
                 progress["combos_done"] = int(done)
                 progress["elapsed_s"] = round(total_elapsed, 3)
@@ -1065,10 +1071,13 @@ class JobManager:
                         except Exception:
                             pass
                     else:
+                        # [專家級修復] 最大化錯誤顯示，確保前端絕對能抓到 error 狀態跳出 100% 卡死
                         prog["phase"] = "error"
+                        prog["phase_msg"] = f"系統崩潰，已停止運算"
                         prog["last_error"] = f"系統執行異常: {safe_err_msg}"
                         prog["debug_traceback"] = err_trace
                         prog["error_ts"] = db.utc_now_iso()
+                        prog["combos_total"] = prog.get("combos_total", 0) # 保留進度以供除錯
                         try:
                             db.update_task_progress(task_id, prog)
                             db.update_task_status(task_id, "error")
