@@ -1401,9 +1401,17 @@ def ensure_cycle_rollover() -> None:
                 conn.execute("UPDATE mining_cycles SET status = 'completed' WHERE id = ?", (active["id"],))
                 
                 new_end = (now_dt + _safe_td(days=7)).isoformat()
-                cur2 = conn.execute("INSERT INTO mining_cycles (name, status, start_ts, end_ts) VALUES (?, ?, ?, ?)",
-                                (f"Cycle {active['id'] + 1}", "active", now_str, new_end))
-                new_cycle_id = cur2.lastrowid
+                if getattr(conn, "kind", "sqlite") == "postgres":
+                    row_cyc = conn.execute("INSERT INTO mining_cycles (name, status, start_ts, end_ts) VALUES (?, ?, ?, ?) RETURNING id",
+                                    (f"Cycle {active['id'] + 1}", "active", now_str, new_end)).fetchone()
+                    new_cycle_id = int((row_cyc or {}).get("id") or 0)
+                else:
+                    cur2 = conn.execute("INSERT INTO mining_cycles (name, status, start_ts, end_ts) VALUES (?, ?, ?, ?)",
+                                    (f"Cycle {active['id'] + 1}", "active", now_str, new_end))
+                    new_cycle_id = int(cur2.lastrowid)
+                
+                if new_cycle_id <= 0:
+                    raise ValueError(f"無法取得新週期的 ID (new_cycle_id={new_cycle_id})，資料庫方言解析異常")
                 
                 try:
                     conn.execute("""
@@ -1555,19 +1563,44 @@ def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, m
                     pools = conn.execute("SELECT id, num_partitions FROM factor_pools WHERE cycle_id = ? AND active = 1", (cycle_id,)).fetchall()
                     
                 if not pools:
-                    # [專家級監視] 深入調查為何沒有 active=1 的 pools，找出導致不派任務的根因
-                    total_pools = conn.execute("SELECT COUNT(*) as c FROM factor_pools WHERE cycle_id = ?", (cycle_id,)).fetchone()["c"]
-                    inactive_pools = conn.execute("SELECT COUNT(*) as c FROM factor_pools WHERE cycle_id = ? AND active = 0", (cycle_id,)).fetchone()["c"]
-                    all_cycles = [dict(r) for r in conn.execute("SELECT id, status FROM mining_cycles ORDER BY id DESC LIMIT 3").fetchall()]
-                    
-                    log_sys_event("TASK_ASSIGN_FAIL", user_id, f"目前週期 {cycle_id} 沒有活躍的策略池可供派發", {
-                        "cycle_id": cycle_id,
-                        "preferred_family": preferred_family,
-                        "total_pools_in_cycle": total_pools,
-                        "inactive_pools_in_cycle": inactive_pools,
-                        "recent_cycles": all_cycles,
-                        "db_kind": getattr(conn, "kind", "unknown")
-                    })
+                    # [專家級監視與主動修復] 偵測到當前週期無 Pool，啟動緊急跨週期 Pool 繼承機制
+                    try:
+                        last_p_cycle = conn.execute("SELECT cycle_id FROM factor_pools WHERE active = 1 AND cycle_id > 0 ORDER BY cycle_id DESC LIMIT 1").fetchone()
+                        if last_p_cycle and last_p_cycle["cycle_id"] != cycle_id:
+                            source_cid = last_p_cycle["cycle_id"]
+                            log_sys_event("TASK_ASSIGN_RESCUE", user_id, f"偵測到週期 {cycle_id} 缺乏 Pool，緊急從週期 {source_cid} 繼承", {"source_cid": source_cid})
+                            
+                            conn.execute("""
+                                INSERT INTO factor_pools (cycle_id, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, created_at)
+                                SELECT ?, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, ?
+                                FROM factor_pools WHERE cycle_id = ? AND active = 1
+                            """, (cycle_id, _now_iso(), source_cid))
+                            conn.commit()
+                            
+                            # 重新讀取
+                            pools = conn.execute("SELECT id, num_partitions FROM factor_pools WHERE cycle_id = ? AND active = 1", (cycle_id,)).fetchall()
+                    except Exception as rescue_e:
+                        conn.rollback()
+                        import traceback
+                        log_sys_event("TASK_ASSIGN_RESCUE_FAIL", user_id, f"緊急繼承 Pool 失敗: {rescue_e}", {"trace": traceback.format_exc()})
+
+                if not pools:
+                    # 如果依舊沒有 Pool，則寫入詳盡的 Debug 資訊
+                    try:
+                        total_pools = conn.execute("SELECT COUNT(*) as c FROM factor_pools WHERE cycle_id = ?", (cycle_id,)).fetchone()["c"]
+                        inactive_pools = conn.execute("SELECT COUNT(*) as c FROM factor_pools WHERE cycle_id = ? AND active = 0", (cycle_id,)).fetchone()["c"]
+                        all_cycles = [dict(r) for r in conn.execute("SELECT id, status FROM mining_cycles ORDER BY id DESC LIMIT 3").fetchall()]
+                        
+                        log_sys_event("TASK_ASSIGN_FAIL", user_id, f"目前週期 {cycle_id} 仍無活躍策略池，停止派發", {
+                            "cycle_id": cycle_id,
+                            "preferred_family": preferred_family,
+                            "total_pools_in_cycle": total_pools,
+                            "inactive_pools_in_cycle": inactive_pools,
+                            "recent_cycles": all_cycles,
+                            "db_kind": getattr(conn, "kind", "unknown")
+                        })
+                    except Exception:
+                        pass
                     break
                     
                 # 抓取該用戶已經擁有過的所有 (pool_id, partition_idx)
@@ -2201,14 +2234,24 @@ def create_factor_pool(cycle_id: int, name: str, symbol: str, timeframe_min: int
                 continue
 
             expanded_name = f"{name} [{s}_{t}m]" if auto_expand else name
-            cur = conn.execute(
-                """
-                INSERT INTO factor_pools (cycle_id, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (cycle_id, expanded_name, s, t, int(years), family, json.dumps(grid_spec, ensure_ascii=False), json.dumps(risk_spec, ensure_ascii=False), int(num_partitions), int(seed), 1 if active else 0, _now_iso())
-            )
-            ids.append(cur.lastrowid)
+            if getattr(conn, "kind", "sqlite") == "postgres":
+                row_pool = conn.execute(
+                    """
+                    INSERT INTO factor_pools (cycle_id, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id
+                    """,
+                    (cycle_id, expanded_name, s, t, int(years), family, json.dumps(grid_spec, ensure_ascii=False), json.dumps(risk_spec, ensure_ascii=False), int(num_partitions), int(seed), 1 if active else 0, _now_iso())
+                ).fetchone()
+                ids.append(int((row_pool or {}).get("id") or 0))
+            else:
+                cur = conn.execute(
+                    """
+                    INSERT INTO factor_pools (cycle_id, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (cycle_id, expanded_name, s, t, int(years), family, json.dumps(grid_spec, ensure_ascii=False), json.dumps(risk_spec, ensure_ascii=False), int(num_partitions), int(seed), 1 if active else 0, _now_iso())
+                )
+                ids.append(int(cur.lastrowid))
         conn.commit()
         return ids
     except Exception as e:
@@ -2273,12 +2316,21 @@ def create_strategy_from_submission(sub_id: int, allocation_pct: float, note: st
         cand = conn.execute("SELECT params_json FROM candidates WHERE id = ?", (sub["candidate_id"],)).fetchone()
         params = cand["params_json"] if cand else "{}"
         
-        cur = conn.execute(
-            "INSERT INTO strategies (submission_id, user_id, pool_id, params_json, status, allocation_pct, note, created_at, expires_at) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?)",
-            (sub_id, sub["user_id"], sub["pool_id"], params, allocation_pct, note, _now_iso(), "2099-12-31T23:59:59Z")
-        )
+        if getattr(conn, "kind", "sqlite") == "postgres":
+            row = conn.execute(
+                "INSERT INTO strategies (submission_id, user_id, pool_id, params_json, status, allocation_pct, note, created_at, expires_at) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?) RETURNING id",
+                (sub_id, sub["user_id"], sub["pool_id"], params, allocation_pct, note, _now_iso(), "2099-12-31T23:59:59Z")
+            ).fetchone()
+            new_id = int((row or {}).get("id") or 0)
+        else:
+            cur = conn.execute(
+                "INSERT INTO strategies (submission_id, user_id, pool_id, params_json, status, allocation_pct, note, created_at, expires_at) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?)",
+                (sub_id, sub["user_id"], sub["pool_id"], params, allocation_pct, note, _now_iso(), "2099-12-31T23:59:59Z")
+            )
+            new_id = int(cur.lastrowid)
+            
         conn.commit()
-        return cur.lastrowid
+        return new_id
     finally:
         conn.close()
 
@@ -2435,11 +2487,18 @@ def claim_task_for_run(task_id: int) -> bool:
 def create_submission(candidate_id: int, user_id: int, pool_id: int, audit: dict) -> int:
     conn = _conn()
     try:
-        cur = conn.execute("INSERT INTO submissions (candidate_id, user_id, pool_id, audit_json, submitted_at) VALUES (?, ?, ?, ?, ?)",
-                           (candidate_id, user_id, pool_id, json.dumps(audit, ensure_ascii=False), _now_iso()))
+        if getattr(conn, "kind", "sqlite") == "postgres":
+            row = conn.execute("INSERT INTO submissions (candidate_id, user_id, pool_id, audit_json, submitted_at) VALUES (?, ?, ?, ?, ?) RETURNING id",
+                               (candidate_id, user_id, pool_id, json.dumps(audit, ensure_ascii=False), _now_iso())).fetchone()
+            sub_id = int((row or {}).get("id") or 0)
+        else:
+            cur = conn.execute("INSERT INTO submissions (candidate_id, user_id, pool_id, audit_json, submitted_at) VALUES (?, ?, ?, ?, ?)",
+                               (candidate_id, user_id, pool_id, json.dumps(audit, ensure_ascii=False), _now_iso()))
+            sub_id = int(cur.lastrowid)
+            
         conn.execute("UPDATE candidates SET is_submitted = 1 WHERE id = ?", (candidate_id,))
         conn.commit()
-        return cur.lastrowid
+        return sub_id
     finally:
         conn.close()
 
