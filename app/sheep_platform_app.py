@@ -4285,6 +4285,8 @@ def _login_form() -> None:
     if not submitted:
         return
 
+    st.toast("正在驗證登入資訊...", icon="⏳")
+
     try:
         if captcha_enabled:
             dt = float(time.time() - float(st.session_state.get("captcha_t0") or time.time()))
@@ -4337,7 +4339,7 @@ def _login_form() -> None:
                 db.update_user_login_state(int(user["id"]), success=False)
             except Exception:
                 pass
-            st.error("登入失敗：密碼錯誤。(管理員預設已重置為 @@Wm105020)")
+            st.error("登入失敗：密碼錯誤。(如為管理員請使用預設密碼)")
             return
 
         try:
@@ -4398,6 +4400,8 @@ def _login_form() -> None:
 
     if not submitted:
         return
+
+    st.toast("正在處理註冊請求...", icon="⏳")
 
     try:
         uname = normalize_username(username)
