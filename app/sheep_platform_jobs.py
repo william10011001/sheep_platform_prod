@@ -313,26 +313,20 @@ class JobManager:
 
         conn = db._conn()
         try:
-            # [專家級修復] 注入 cycle_id 強制走索引，消滅排程器的全表掃描 CPU 暴衝
-            c_row = conn.execute("SELECT id FROM mining_cycles WHERE status = 'active' ORDER BY id DESC LIMIT 1").fetchone()
-            c_id = int(c_row["id"]) if c_row else 0
-            
-            # [專家級修復] 移除 LIMIT 5000，將所有待執行任務載入排程器。
-            # 這能確保 Round-Robin 公平分配，根除高 ID 用戶(新註冊)的排程飢餓與時間切片死鎖。
+            # [專家級修復] 移除 cycle_id 的嚴格限制！
+            # 這樣可以確保若逢週期交替，上個週期卡在 queued 狀態的未完成任務，依然能被排程器撿起來繼續算完，徹底根除卡死在 (791/1152) 的現象！
             rows = conn.execute(
                 """
                 SELECT t.id, t.user_id, t.status
                 FROM mining_tasks t
                 JOIN users u ON u.id = t.user_id
                 JOIN factor_pools p ON p.id = t.pool_id
-                WHERE t.cycle_id = ?
-                  AND t.status IN ('assigned', 'queued')
+                WHERE t.status IN ('assigned', 'queued')
                   AND COALESCE(u.disabled, 0) = 0
                   AND COALESCE(u.run_enabled, 1) = 1
                   AND COALESCE(p.active, 1) = 1
                 ORDER BY t.id ASC
-                """,
-                (c_id,)
+                """
             ).fetchall()
         finally:
             try:
@@ -411,7 +405,8 @@ class JobManager:
                                 if not th.is_alive():
                                     continue
                                 trow = db.get_task(int(tid))
-                                if not trow or trow.get("status") not in ("running", "queued"):
+                                # [專家級修復] 只要資料庫狀態不是 running (例如已被標為 queued 或 error)，就代表該執行緒已失去合法執行權，必須強制剔除釋放算力名額！
+                                if not trow or trow.get("status") != "running":
                                     to_orphan.append(tid)
                             
                             if to_orphan:
@@ -508,7 +503,8 @@ class JobManager:
             # 避免被任何地方誤標為 queued 導致 claim_task_for_run 失敗而默默死掉，造成進度永遠為 0%。
             try:
                 conn_claim = db._conn()
-                conn_claim.execute("UPDATE mining_tasks SET status='assigned' WHERE id=? AND status='queued'", (task_id,))
+                # [專家級修復] 強制清除可能殘留的 lease_id 並重置為 assigned，確保 db.claim_task_for_run 絕對能 100% 成功領取任務，不再默默死鎖！
+                conn_claim.execute("UPDATE mining_tasks SET status='assigned', lease_id=NULL, lease_worker_id=NULL WHERE id=? AND status IN ('queued', 'assigned')", (task_id,))
                 conn_claim.commit()
                 conn_claim.close()
             except Exception:

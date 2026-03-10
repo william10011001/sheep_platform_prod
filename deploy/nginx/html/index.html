@@ -675,8 +675,14 @@
                             speed = done / elapsed;
                         }
 
-                        // [專家級防呆] 針對 queued 狀態且已有進度的任務，強制視為「背景運行中」以保持進度條與 ETA 的計算
-                        const isEffectivelyRunning = isRunning || (status === 'queued' && done > 0 && total > 0);
+                        // [專家級防呆] 加入 run_enabled 判斷，若使用者已點擊結束挖礦，則不應顯示為運行或切片中
+                        const userRunEnabled = tasksData.run_enabled;
+                        const isEffectivelyRunning = (isRunning || (status === 'queued' && done > 0 && total > 0)) && userRunEnabled;
+
+                        if (!userRunEnabled && (status === 'queued' || status === 'assigned')) {
+                            const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+                            return { text: `已暫停運算 (${Math.floor(done)}/${total})`, percent: pct, isIndeterminate: false, colorClass: 'from-slate-500 to-slate-400', errorDetail: '', timeText: '等待重新啟動...' };
+                        }
 
                         // 時間格式化工具：秒轉換為直觀可讀格式
                         const formatT = (sec) => {
