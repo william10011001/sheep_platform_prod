@@ -3935,10 +3935,6 @@ section.main,
 .main { background: transparent !important; }
 .block-container { background: transparent !important; }
 
-/* [防護機制] 絕對隱藏 Streamlit 的 Error Modal 與 405 報錯，從 CSS 徹底封殺彈窗 */
-div[data-testid="stModal"] { display: none !important; opacity: 0 !important; pointer-events: none !important; }
-.stException { display: none !important; }
-
 /* PERF HUD 不應該影響點擊 */
 #sheepPerfHud { pointer-events: auto !important; }
 </style>
@@ -3946,7 +3942,7 @@ div[data-testid="stModal"] { display: none !important; opacity: 0 !important; po
         unsafe_allow_html=True,
     )
     
-    # [專家級修復] 注入無敵 JS 攔截器與按鈕防護機制
+    # [專家級修復] 解除所有毒性 CSS 隱藏，恢復正常的 Error 顯示
     st.components.v1.html(
         """
         <script>
@@ -3958,8 +3954,7 @@ div[data-testid="stModal"] { display: none !important; opacity: 0 !important; po
             // 覆蓋 window.alert 預防 Streamlit 呼叫
             const origAlert = w.alert;
             w.alert = function(msg) {
-                if(msg && (msg.includes("405") || msg.includes("Method Not Allowed") || msg.includes("Error") || msg.includes("502") || msg.includes("521"))) {
-                    console.warn("[God Killer] Intercepted alert. Suppressing...", msg);
+                if(msg && (msg.includes("405") || msg.includes("Method Not Allowed") || msg.includes("502") || msg.includes("521"))) {
                     return;
                 }
                 return origAlert(msg);
@@ -3970,16 +3965,11 @@ div[data-testid="stModal"] { display: none !important; opacity: 0 !important; po
                     mutation.addedNodes.forEach(function(node) {
                         if (node.nodeType === 1) { 
                             const html = node.innerHTML || "";
-                            if (node.getAttribute('data-testid') === 'stModal' || html.includes('Method Not Allowed') || html.includes('405') || html.includes('502') || html.includes('521')) {
+                            if (html.includes('Method Not Allowed') || html.includes('405') || html.includes('502') || html.includes('521')) {
                                 node.style.setProperty("display", "none", "important");
-                                node.style.setProperty("opacity", "0", "important");
-                                node.style.setProperty("pointer-events", "none", "important");
-                                node.style.setProperty("z-index", "-9999", "important");
-                                
                                 const now = Date.now();
                                 if (!w.__sheep_last_reload || (now - w.__sheep_last_reload) > 5000) {
                                     w.__sheep_last_reload = now;
-                                    console.warn("[God Killer] Initiating safe recovery reload...");
                                     setTimeout(() => { w.location.reload(); }, 2000);
                                 }
                             }
@@ -3991,27 +3981,29 @@ div[data-testid="stModal"] { display: none !important; opacity: 0 !important; po
                 observer.observe(w.document.body, { childList: true, subtree: true });
             }
 
-            // === [新增] 前端按鈕點擊監聽與防衝突系統 ===
             w.document.addEventListener('click', function(e) {
                 let btn = e.target.closest('button');
                 if (btn) {
                     let text = btn.innerText || "";
-                    if (text.includes('中斷') || text.includes('開始') || text.includes('資源') || text.includes('加入')) {
-                        console.log("[前端事件] 成功攔截用戶點擊按鈕: " + text);
-                        
-                        // 1. 瞬間擊殺 AutoRefresh，保護 WebSocket 傳輸通道不被干擾
+                    if (text.includes('中斷') || text.includes('開始') || text.includes('資源') || text.includes('加入') || text.includes('登入') || text.includes('註冊')) {
                         if (w.__sheep_autorefresh_timer) {
                             clearTimeout(w.__sheep_autorefresh_timer);
                             w.__sheep_autorefresh_timer = null;
-                            console.log("[前端事件] 已暫停畫面自動重整，確保點擊訊號安全送達伺服器！");
                         }
                         
-                        // 2. 物理防連點與視覺回饋
                         let p = btn.querySelector('p') || btn;
                         p.innerText = "通訊傳輸中...";
                         btn.style.opacity = "0.6";
                         btn.style.pointerEvents = "none";
                         btn.style.transform = "translateY(2px)";
+                        
+                        // 物理防卡死：5秒後強迫按鈕恢復原狀
+                        setTimeout(() => {
+                            btn.style.opacity = "1";
+                            btn.style.pointerEvents = "auto";
+                            btn.style.transform = "none";
+                            p.innerText = text;
+                        }, 5000);
                     }
                 }
             }, true);
@@ -4327,79 +4319,98 @@ def _login_form() -> None:
     if not submitted:
         return
 
-    if captcha_enabled:
-        dt = float(time.time() - float(st.session_state.get("captcha_t0") or time.time()))
-        if int(st.session_state.get(captcha_key) or 0) != 100:
-            st.error("滑動驗證碼未通過。")
-            st.session_state["captcha_nonce"] = random.randint(1000, 9999)
-            st.session_state["captcha_t0"] = time.time()
-            return
-        if dt < captcha_min_s:
-            st.error("滑動時間過短。")
-            st.session_state["captcha_nonce"] = random.randint(1000, 9999)
-            st.session_state["captcha_t0"] = time.time()
-            return
-
-    uname = normalize_username(username)
-    user = db.get_user_by_username(uname)
-    if not user:
-        st.error("帳號或密碼錯誤。")
-        return
-
-    if int(user.get("disabled") or 0) == 1:
-        st.error("帳號已停用。")
-        return
-
-    if db.is_user_locked(int(user["id"])):
-        st.error("登入已鎖定。")
-        return
-
-    # 強化密碼驗證邏輯，處理資料庫儲存為 bytes/str 以及字串化 bytes (如 "b'...'") 的潛在錯誤
-    is_valid = False
-    hash_stored = user.get("password_hash", "")
-    
-    if isinstance(hash_stored, str):
-        import ast
-        if hash_stored.startswith("b'") or hash_stored.startswith('b"'):
-            try:
-                hash_stored = ast.literal_eval(hash_stored).decode("utf-8")
-            except Exception:
-                hash_stored = hash_stored[2:-1]
-            
     try:
-        is_valid = verify_password(password, hash_stored)
-    except TypeError:
-        pw_bytes = password.encode("utf-8") if isinstance(password, str) else password
-        hash_bytes = hash_stored.encode("utf-8") if isinstance(hash_stored, str) else hash_stored
+        if captcha_enabled:
+            dt = float(time.time() - float(st.session_state.get("captcha_t0") or time.time()))
+            if int(st.session_state.get(captcha_key) or 0) != 100:
+                st.error("滑動驗證碼未通過。")
+                st.session_state["captcha_nonce"] = random.randint(1000, 9999)
+                st.session_state["captcha_t0"] = time.time()
+                return
+            if dt < captcha_min_s:
+                st.error("滑動時間過短。")
+                st.session_state["captcha_nonce"] = random.randint(1000, 9999)
+                st.session_state["captcha_t0"] = time.time()
+                return
+
+        uname = normalize_username(username)
+        user = db.get_user_by_username(uname)
+        if not user:
+            st.error("帳號或密碼錯誤。")
+            return
+
+        if int(user.get("disabled") or 0) == 1:
+            st.error("帳號已停用。")
+            return
+
+        # 拔除可能不存在引發崩潰的 is_user_locked 呼叫
         try:
-            is_valid = verify_password(pw_bytes, hash_bytes)
+            if hasattr(db, "is_user_locked") and db.is_user_locked(int(user["id"])):
+                st.error("登入已鎖定。")
+                return
+        except Exception:
+            pass
+
+        # 強化密碼驗證邏輯，處理資料庫儲存為 bytes/str 以及字串化 bytes (如 "b'...'") 的潛在錯誤
+        is_valid = False
+        hash_stored = user.get("password_hash", "")
+        
+        if isinstance(hash_stored, str):
+            import ast
+            if hash_stored.startswith("b'") or hash_stored.startswith('b"'):
+                try:
+                    hash_stored = ast.literal_eval(hash_stored).decode("utf-8")
+                except Exception:
+                    hash_stored = hash_stored[2:-1]
+                
+        try:
+            is_valid = verify_password(password, hash_stored)
+        except TypeError:
+            pw_bytes = password.encode("utf-8") if isinstance(password, str) else password
+            hash_bytes = hash_stored.encode("utf-8") if isinstance(hash_stored, str) else hash_stored
+            try:
+                is_valid = verify_password(pw_bytes, hash_bytes)
+            except Exception:
+                is_valid = False
         except Exception:
             is_valid = False
-    except Exception:
-        is_valid = False
 
-    if not is_valid:
-        db.update_user_login_state(int(user["id"]), success=False)
-        st.error("帳號或密碼錯誤。")
-        return
+        if not is_valid:
+            try:
+                db.update_user_login_state(int(user["id"]), success=False)
+            except Exception:
+                pass
+            st.error("帳號或密碼錯誤。")
+            return
 
-    db.update_user_login_state(int(user["id"]), success=True)
-    _set_session_user(user)
+        try:
+            db.update_user_login_state(int(user["id"]), success=True)
+        except Exception as state_e:
+            import sys
+            print(f"[WARN] update_user_login_state failed: {state_e}", file=sys.stderr)
 
-    if bool(remember):
-        ttl_days = int(_REMEMBER_TTL_DAYS)
-        tok = _issue_api_token(user, ttl_seconds=int(ttl_days) * 86400, name=_REMEMBER_TOKEN_NAME)
-        raw = str(tok.get("token") or "")
-        max_age_s = int(ttl_days) * 86400
-        _queue_set_cookie(_REMEMBER_COOKIE_NAME, raw, max_age_s)
-        st.session_state["auth_remember_token_id"] = int(tok.get("token_id") or 0)
-    else:
-        _queue_clear_cookie(_REMEMBER_COOKIE_NAME)
-        _queue_clear_cookie(_REMEMBER_TOKEN_NAME)
+        _set_session_user(user)
 
-    st.success("登入成功。")
-    st.session_state["nav_page_pending"] = "主頁"
-    st.rerun()
+        if bool(remember):
+            ttl_days = int(_REMEMBER_TTL_DAYS)
+            tok = _issue_api_token(user, ttl_seconds=int(ttl_days) * 86400, name=_REMEMBER_TOKEN_NAME)
+            raw = str(tok.get("token") or "")
+            max_age_s = int(ttl_days) * 86400
+            _queue_set_cookie(_REMEMBER_COOKIE_NAME, raw, max_age_s)
+            st.session_state["auth_remember_token_id"] = int(tok.get("token_id") or 0)
+        else:
+            _queue_clear_cookie(_REMEMBER_COOKIE_NAME)
+            _queue_clear_cookie(_REMEMBER_TOKEN_NAME)
+
+        st.success("登入成功。")
+        st.session_state["nav_page_pending"] = "主頁"
+        st.rerun()
+
+    except Exception as fatal_e:
+        import traceback
+        st.error(f"系統發生異常，無法完成登入：{fatal_e}")
+        with st.expander("展開錯誤細節"):
+            st.code(traceback.format_exc(), language="python")
 
 def _register_form() -> None:
     st.markdown('<div class="auth_title">註冊</div>', unsafe_allow_html=True)
@@ -4429,75 +4440,85 @@ def _register_form() -> None:
     if not submitted:
         return
 
-    uname = normalize_username(username)
-    if not uname:
-        st.error("帳號不可為空。")
-        return
-    if len(uname) > 64:
-        st.error("帳號長度上限為 64 字元。")
-        return
-    if any(ch in uname for ch in ["\r", "\n"]):
-        st.error("帳號不可包含換行字元。")
-        return
-
-    pw = str(password or "")
-    if len(pw) < 6:
-        st.error("密碼長度至少 6 字元。")
-        return
-    has_alpha = any(ch.isalpha() for ch in pw)
-    has_digit = any(ch.isdigit() for ch in pw)
-    if not (has_alpha and has_digit):
-        st.error("密碼需同時包含英文字母與數字。")
-        return
-    if pw != str(password2 or ""):
-        st.error("密碼不一致。")
-        return
-
-    if not bool(tos_ok):
-        st.error("必須同意服務條款與分潤規則才可註冊。")
-        return
-
-    if db.get_user_by_username(uname):
-        st.error("帳號已存在。")
-        return
-
     try:
+        uname = normalize_username(username)
+        if not uname:
+            st.error("帳號不可為空。")
+            return
+        if len(uname) > 64:
+            st.error("帳號長度上限為 64 字元。")
+            return
+        if any(ch in uname for ch in ["\r", "\n"]):
+            st.error("帳號不可包含換行字元。")
+            return
+
+        pw = str(password or "")
+        if len(pw) < 6:
+            st.error("密碼長度至少 6 字元。")
+            return
+        has_alpha = any(ch.isalpha() for ch in pw)
+        has_digit = any(ch.isdigit() for ch in pw)
+        if not (has_alpha and has_digit):
+            st.error("密碼需同時包含英文字母與數字。")
+            return
+        if pw != str(password2 or ""):
+            st.error("密碼不一致。")
+            return
+
+        if not bool(tos_ok):
+            st.error("必須同意服務條款與分潤規則才可註冊。")
+            return
+
+        if db.get_user_by_username(uname):
+            st.error("帳號已存在。")
+            return
+
         try:
-            pw_hashed = hash_password(pw)
-        except TypeError:
-            pw_hashed = hash_password(pw.encode("utf-8"))
+            try:
+                pw_hashed = hash_password(pw)
+            except TypeError:
+                pw_hashed = hash_password(pw.encode("utf-8"))
 
-        uid = db.create_user(username=uname, password_hash=pw_hashed, role="user", wallet_address="", wallet_chain="TRC20")
-        db.write_audit_log(uid, "register", {"username": uname})
-        if tos_version.strip():
-            db.write_audit_log(uid, "tos_accept", {"version": tos_version})
+            uid = db.create_user(username=uname, password_hash=pw_hashed, role="user", wallet_address="", wallet_chain="TRC20")
+            try:
+                db.write_audit_log(uid, "register", {"username": uname})
+                if tos_version.strip():
+                    db.write_audit_log(uid, "tos_accept", {"version": tos_version})
+                else:
+                    db.write_audit_log(uid, "tos_accept", {})
+            except Exception:
+                pass
+        except Exception as e:
+            st.error(f"建立失敗：{e}")
+            return
+
+        user = db.get_user_by_id(int(uid))
+        if not user:
+            st.success("帳號已建立。")
+            return
+
+        _set_session_user(user)
+
+        if bool(remember):
+            ttl_days = int(_REMEMBER_TTL_DAYS)
+            tok = _issue_api_token(user, ttl_seconds=int(ttl_days) * 86400, name=_REMEMBER_TOKEN_NAME)
+            raw = str(tok.get("token") or "")
+            max_age_s = int(ttl_days) * 86400
+            _queue_set_cookie(_REMEMBER_COOKIE_NAME, raw, max_age_s)
+            st.session_state["auth_remember_token_id"] = int(tok.get("token_id") or 0)
         else:
-            db.write_audit_log(uid, "tos_accept", {})
-    except Exception as e:
-        st.error(f"建立失敗：{e}")
-        return
+            _queue_clear_cookie(_REMEMBER_COOKIE_NAME)
+            _queue_clear_cookie(_REMEMBER_TOKEN_NAME)
 
-    user = db.get_user_by_id(int(uid))
-    if not user:
-        st.success("帳號已建立。")
-        return
+        st.success("帳號已建立並完成登入。")
+        st.session_state["nav_page_pending"] = "主頁"
+        st.rerun()
 
-    _set_session_user(user)
-
-    if bool(remember):
-        ttl_days = int(_REMEMBER_TTL_DAYS)
-        tok = _issue_api_token(user, ttl_seconds=int(ttl_days) * 86400, name=_REMEMBER_TOKEN_NAME)
-        raw = str(tok.get("token") or "")
-        max_age_s = int(ttl_days) * 86400
-        _queue_set_cookie(_REMEMBER_COOKIE_NAME, raw, max_age_s)
-        st.session_state["auth_remember_token_id"] = int(tok.get("token_id") or 0)
-    else:
-        _queue_clear_cookie(_REMEMBER_COOKIE_NAME)
-        _queue_clear_cookie(_REMEMBER_TOKEN_NAME)
-
-    st.success("帳號已建立並完成登入。")
-    st.session_state["nav_page_pending"] = "主頁"
-    st.rerun()
+    except Exception as fatal_e:
+        import traceback
+        st.error(f"系統發生異常，無法完成註冊：{fatal_e}")
+        with st.expander("展開錯誤細節"):
+            st.code(traceback.format_exc(), language="python")
 
 
 def _render_tos_dialog() -> None:
