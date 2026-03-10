@@ -279,13 +279,27 @@ class _DBConn:
         self._c.rollback()
 
     def close(self):
-        if not self._closed and self._p:
+        if not self._closed:
             try:
-                self._p.putconn(self._c)
+                is_pg = (getattr(self, "kind", "") == "postgres")
+                if is_pg and self._p:
+                    # [專家級防護] 歸還連線前強制 rollback，徹底清除 IDLE IN TRANSACTION 與懸空鎖！
+                    # 這是解決 PostgreSQL 中 SELECT 讀寫鎖阻塞 ALTER TABLE (導致全站轉圈圈且無日誌) 的終極解法
+                    try:
+                        self._c.rollback()
+                    except Exception:
+                        pass
+                    self._p.putconn(self._c)
+                elif not is_pg:
+                    # [專家級修復] SQLite 必須真實關閉連線，防止伺服器 File Descriptor 記憶體洩漏
+                    try:
+                        self._c.close()
+                    except Exception:
+                        pass
             except Exception as e:
                 import traceback
                 import sys
-                print(f"[FATAL DB ERROR] 連線歸還連線池失敗: {e}\n{traceback.format_exc()}", file=sys.stderr, flush=True)
+                print(f"[FATAL DB ERROR] 連線關閉/歸還失敗: {e}\n{traceback.format_exc()}", file=sys.stderr, flush=True)
             finally:
                 self._closed = True
 
@@ -691,6 +705,12 @@ def init_db() -> None:
                 CREATE INDEX IF NOT EXISTS idx_sys_monitor_events_type_ts ON sys_monitor_events(event_type, created_at);
                 """
             )
+
+            # [專家級防護] 立刻 commit 基礎表結構，釋放 AccessExclusiveLock，防止 DDL 長時間鎖定資料庫引發死鎖
+            try:
+                conn.commit()
+            except Exception:
+                conn.rollback()
 
             # [專家級修復] 將所有修改獨立為單筆交易，每執行一步就獨立存檔
             statements = [
