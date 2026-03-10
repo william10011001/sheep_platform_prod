@@ -1945,7 +1945,7 @@ visibility: hidden !important;
                         if (node.nodeType === 1) { // Element
                             // 攔截 Streamlit 的 Error Modal
                             if (node.getAttribute('data-testid') === 'stModal' || node.innerHTML.includes('Method Not Allowed')) {
-                                if (node.innerHTML.includes('Method Not Allowed') || node.innerHTML.includes('405')) {
+                                if (node.innerHTML.includes('Method Not Allowed') || node.innerHTML.includes(' 405 ') || node.innerHTML.includes('Error: 405')) {
                                     node.style.display = 'none';
                                     node.style.opacity = '0';
                                     console.warn("[UI Guard] Intercepted 405 Method Not Allowed modal. Forcing silent reload.");
@@ -3948,7 +3948,7 @@ section.main,
             
             const origAlert = w.alert;
             w.alert = function(msg) {
-                if(msg && (msg.includes("405") || msg.includes("Method Not Allowed") || msg.includes("502") || msg.includes("521"))) { return; }
+                if(msg && (msg.includes(" 405 ") || msg.includes("Method Not Allowed") || msg.includes("502 Bad Gateway") || msg.includes("Error 521"))) { return; }
                 return origAlert(msg);
             };
 
@@ -3957,7 +3957,7 @@ section.main,
                     mutation.addedNodes.forEach(function(node) {
                         if (node.nodeType === 1) { 
                             const html = node.innerHTML || "";
-                            if (html.includes('Method Not Allowed') || html.includes('405') || html.includes('502') || html.includes('521')) {
+                            if (html.includes('Method Not Allowed') || html.includes(' 405 ') || html.includes('502 Bad Gateway') || html.includes('Error 521')) {
                                 node.style.setProperty("display", "none", "important");
                                 const now = Date.now();
                                 if (!w.__sheep_last_reload || (now - w.__sheep_last_reload) > 5000) {
@@ -4359,10 +4359,8 @@ def _login_form() -> None:
             _queue_clear_cookie(_REMEMBER_COOKIE_NAME)
             _queue_clear_cookie(_REMEMBER_TOKEN_NAME)
 
-        # [雙重保險] JS 強制重新載入 + Python rerun
         st.success("登入成功！正在載入主控台...")
         st.session_state["nav_page_pending"] = "主頁"
-        st.components.v1.html("<script>setTimeout(function() { window.parent.location.reload(); }, 300);</script>", height=0)
         try:
             st.rerun()
         except Exception:
@@ -4575,11 +4573,8 @@ def _register_form() -> None:
             _queue_clear_cookie(_REMEMBER_COOKIE_NAME)
             _queue_clear_cookie(_REMEMBER_TOKEN_NAME)
 
-        st.success("✅ 帳號已建立並完成登入！正在載入主控台...")
+        st.success(" 帳號已建立並完成登入！正在載入主控台...")
         st.session_state["nav_page_pending"] = "主頁"
-        
-        # 雙重保險刷新
-        st.components.v1.html("<script>setTimeout(function() { window.parent.location.reload(); }, 300);</script>", height=0)
         try:
             st.rerun()
         except Exception:
