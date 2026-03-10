@@ -363,22 +363,20 @@ class JobManager:
         for uid, tids in to_enqueue.items():
             self.enqueue_many(int(uid), tids, backtest_panel2)
 
-        # 2. [專家級修復] 批次更新 assigned -> queued，將數千次 I/O 壓縮成極少數批次，徹底消除資料庫鎖死
-        if to_mark_queued:
-            conn2 = db._conn()
-            try:
-                now = db.utc_now_iso()
-                chunk_size = 100
-                for i in range(0, len(to_mark_queued), chunk_size):
-                    chunk = to_mark_queued[i:i+chunk_size]
-                    ph = ",".join(["?"] * len(chunk))
-                    conn2.execute(f"UPDATE mining_tasks SET status='queued', updated_at=? WHERE id IN ({ph})", [now] + chunk)
-                conn2.commit()
-            except Exception as e:
-                import sys
-                print(f"[DB WARN] _auto_enqueue_orphans batch update failed: {e}", file=sys.stderr)
-            finally:
-                conn2.close()
+        # [致命死鎖修復] 移除了將狀態標記為 'queued' 的批次更新。
+        # 原因是核心的 db.claim_task_for_run() 只允許領取狀態為 'assigned' 的任務，
+        # 若在資料庫被改為 'queued'，排程器將永遠無法 Claim 成功，導致任務秒退，進度永遠卡在 0%！
+        
+        # [自動修復] 救援目前資料庫中已經被錯誤標記為 'queued' 的幽靈任務，讓它們重獲新生
+        try:
+            conn_fix = db._conn()
+            cur = conn_fix.execute("UPDATE mining_tasks SET status='assigned' WHERE status='queued'")
+            if cur.rowcount > 0:
+                print(f"[SYSTEM] 已成功解救 {cur.rowcount} 個卡在佇列中的幽靈任務！")
+            conn_fix.commit()
+            conn_fix.close()
+        except Exception:
+            pass
 
     def _scheduler_loop(self) -> None:
         try:
@@ -506,6 +504,16 @@ class JobManager:
             return
 
         try:
+            # [致命漏洞修復] 確保任務在 claim 之前絕對處於 assigned 狀態，
+            # 避免被任何地方誤標為 queued 導致 claim_task_for_run 失敗而默默死掉，造成進度永遠為 0%。
+            try:
+                conn_claim = db._conn()
+                conn_claim.execute("UPDATE mining_tasks SET status='assigned' WHERE id=? AND status='queued'", (task_id,))
+                conn_claim.commit()
+                conn_claim.close()
+            except Exception:
+                pass
+
             if not db.claim_task_for_run(task_id):
                 with self._lock:
                     self._threads.pop(task_id, None)

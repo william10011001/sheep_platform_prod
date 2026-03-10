@@ -6483,14 +6483,15 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
             if to_queue2:
                 for qid in to_queue2:
                     try:
-                        db.update_task_status(qid, "queued")
+                        # [致命死鎖修復] 絕對不能將 DB 狀態設為 queued，否則 claim_task_for_run 會永遠失敗！
+                        db.update_task_status(qid, "assigned")
                         trow = db.get_task(int(qid)) or {}
                         try:
                             prog0 = json.loads(trow.get("progress_json") or "{}")
                         except Exception:
                             prog0 = {}
                         prog0["phase"] = "queued"
-                        prog0["phase_msg"] = "持續性部署：程序已掛載至等待序列..."
+                        prog0["phase_msg"] = "程序等待序列..."
                         prog0["updated_at"] = _iso(_utc_now())
                         db.update_task_progress(qid, prog0)
                     except Exception:
