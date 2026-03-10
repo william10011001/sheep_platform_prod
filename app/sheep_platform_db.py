@@ -982,69 +982,54 @@ def init_db() -> None:
 
 
 def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
-    log_sys_event("AUTH_LOGIN_STEP_1", None, "進入查詢帳號函數", {"input_username": username})
+    log_sys_event("AUTH_LOGIN_TRACE_1", None, "成功進入 get_user_by_username 函數第一行", {"input": username})
     try:
         raw = str(username or "")
         uname_norm = normalize_username(raw)
         if not uname_norm:
-            log_sys_event("AUTH_LOGIN_ERROR", None, "登入嘗試失敗: 格式化後為空", {"raw_username": raw})
+            log_sys_event("AUTH_LOGIN_ERROR", None, "格式化帳號為空", {"raw": raw})
             return None
-    except Exception as norm_err:
-        import traceback
-        log_sys_event("AUTH_LOGIN_CRASH", None, f"normalize_username 異常: {norm_err}", {"trace": traceback.format_exc()})
+    except Exception as e:
+        log_sys_event("AUTH_LOGIN_CRASH", None, f"normalize 崩潰: {e}", {})
         return None
 
+    log_sys_event("AUTH_LOGIN_TRACE_2", None, "準備請求資料庫連線池", {"uname_norm": uname_norm})
     try:
         conn = _conn()
-    except Exception as conn_err:
-        import traceback
-        log_sys_event("AUTH_LOGIN_CRASH", None, f"取得 DB 連線卡死或失敗: {conn_err}", {"trace": traceback.format_exc()})
+    except Exception as e:
+        log_sys_event("AUTH_LOGIN_CRASH", None, f"請求連線池失敗: {e}", {})
         return None
 
+    log_sys_event("AUTH_LOGIN_TRACE_3", None, "成功取得資料庫連線，準備執行 SQL SELECT", {})
     try:
-        # 1. 優先走 username_norm
         try:
-            row = conn.execute(
-                "SELECT * FROM users WHERE username_norm = ? LIMIT 1",
-                (uname_norm,),
-            ).fetchone()
+            row = conn.execute("SELECT * FROM users WHERE username_norm = ? LIMIT 1", (uname_norm,)).fetchone()
             if row:
-                log_sys_event("AUTH_LOGIN_STEP_2", None, "成功從一階正規化查詢找到帳號", {"uname": uname_norm})
+                log_sys_event("AUTH_LOGIN_TRACE_4", None, "SQL 查詢成功並找到用戶", {"id": row.get("id")})
                 return dict(row)
         except Exception as e:
             conn.rollback()
-            import traceback
-            log_sys_event("AUTH_LOGIN_WARN", None, f"1階查詢失敗: {e}", {"trace": traceback.format_exc(), "uname": uname_norm})
+            log_sys_event("AUTH_LOGIN_WARN", None, f"1階查詢失敗: {e}", {})
 
-        # 2. 後備：直接用 username
+        log_sys_event("AUTH_LOGIN_TRACE_5", None, "準備執行2階與3階查詢", {})
         try:
-            row2 = conn.execute(
-                "SELECT * FROM users WHERE lower(username) = ? OR username = ? LIMIT 1",
-                (uname_norm, raw.strip()),
-            ).fetchone()
+            row2 = conn.execute("SELECT * FROM users WHERE lower(username) = ? OR username = ? LIMIT 1", (uname_norm, raw.strip())).fetchone()
             if row2:
+                log_sys_event("AUTH_LOGIN_TRACE_6", None, "2階查詢成功", {})
                 return dict(row2)
-        except Exception as e:
+        except Exception:
             conn.rollback()
-            import traceback
-            log_sys_event("AUTH_LOGIN_WARN", None, f"2階查詢失敗: {e}", {"trace": traceback.format_exc(), "uname": uname_norm})
             
-        # 3. 終極防護：暴力全表掃描
         try:
             rows = conn.execute("SELECT * FROM users").fetchall()
             for r in rows:
                 if str(r.get("username", "")).lower() == uname_norm or str(r.get("username_norm", "")) == uname_norm:
+                    log_sys_event("AUTH_LOGIN_TRACE_7", None, "3階全表掃描成功", {})
                     return dict(r)
-        except Exception as e:
+        except Exception:
             conn.rollback()
-            import traceback
-            log_sys_event("AUTH_LOGIN_ERROR", None, f"3階查詢崩潰: {e}", {"trace": traceback.format_exc(), "uname": uname_norm})
 
-        log_sys_event("AUTH_LOGIN_NOT_FOUND", None, "找不到該用戶", {"uname": uname_norm})
-        return None
-    except Exception as fatal_e:
-        import traceback
-        log_sys_event("AUTH_LOGIN_FATAL", None, f"獲取用戶時發生嚴重資料庫錯誤: {fatal_e}", {"trace": traceback.format_exc()})
+        log_sys_event("AUTH_LOGIN_NOT_FOUND", None, "資料庫中沒有此用戶", {})
         return None
     finally:
         conn.close()
@@ -1078,61 +1063,49 @@ def create_user(
     wallet_address: str = "",
     wallet_chain: str = "",
 ) -> int:
-    log_sys_event("AUTH_REG_STEP_1", None, "進入註冊建立帳號函數", {"input_username": username, "role": role})
+    log_sys_event("AUTH_REG_TRACE_1", None, "成功進入 create_user 函數第一行", {"input_username": username})
     try:
         uname = str(username or "").strip()
         uname_norm = normalize_username(uname)
         if not uname_norm:
-            log_sys_event("AUTH_REG_ERROR", None, "註冊失敗: 無效的使用者名稱", {"raw_username": username})
+            log_sys_event("AUTH_REG_ERROR", None, "無效的註冊名稱", {})
             raise ValueError("invalid username")
             
-        if isinstance(password_hash, bytes):
-            pw_str = password_hash.decode("utf-8")
-        else:
-            pw_str = str(password_hash or "")
-    except Exception as pre_e:
-        import traceback
-        log_sys_event("AUTH_REG_CRASH", None, f"註冊前置處理失敗: {pre_e}", {"trace": traceback.format_exc()})
-        raise pre_e
+        pw_str = password_hash.decode("utf-8") if isinstance(password_hash, bytes) else str(password_hash or "")
+    except Exception as e:
+        log_sys_event("AUTH_REG_CRASH", None, f"註冊前置變數處理失敗: {e}", {})
+        raise e
 
+    log_sys_event("AUTH_REG_TRACE_2", None, "準備請求資料庫連線", {})
     try:
         conn = _conn()
-    except Exception as conn_err:
-        import traceback
-        log_sys_event("AUTH_REG_CRASH", None, f"註冊時取得連線失敗: {conn_err}", {"trace": traceback.format_exc()})
-        raise conn_err
+    except Exception as e:
+        log_sys_event("AUTH_REG_CRASH", None, f"註冊取得連線失敗: {e}", {})
+        raise e
 
+    log_sys_event("AUTH_REG_TRACE_3", None, "連線取得成功，準備執行 INSERT", {})
     try:
         if getattr(conn, "kind", "sqlite") == "postgres":
             row = conn.execute(
-                """
-                INSERT INTO users (username, username_norm, password_hash, role, disabled, run_enabled, wallet_address, wallet_chain, created_at)
-                VALUES (?, ?, ?, ?, 0, 0, ?, ?, ?)
-                RETURNING id
-                """,
-                (uname, uname_norm, pw_str, str(role or "user"), str(wallet_address or ""), str(wallet_chain or ""), _now_iso()),
+                "INSERT INTO users (username, username_norm, password_hash, role, disabled, run_enabled, wallet_address, wallet_chain, created_at) VALUES (?, ?, ?, ?, 0, 0, ?, ?, ?) RETURNING id",
+                (uname, uname_norm, pw_str, str(role or "user"), str(wallet_address or ""), str(wallet_chain or ""), _now_iso())
             ).fetchone()
             conn.commit()
             new_id = int((row or {}).get("id") or 0)
-            log_sys_event("AUTH_REG_SUCCESS", new_id, "成功註冊用戶 (PG)", {"uname": uname_norm})
+            log_sys_event("AUTH_REG_TRACE_4", new_id, "INSERT 成功 (PG)", {})
             return new_id
 
         cur = conn.execute(
-            """
-            INSERT INTO users (username, username_norm, password_hash, role, disabled, run_enabled, wallet_address, wallet_chain, created_at)
-            VALUES (?, ?, ?, ?, 0, 0, ?, ?, ?)
-            """,
-            (uname, uname_norm, pw_str, str(role or "user"), str(wallet_address or ""), str(wallet_chain or ""), _now_iso()),
+            "INSERT INTO users (username, username_norm, password_hash, role, disabled, run_enabled, wallet_address, wallet_chain, created_at) VALUES (?, ?, ?, ?, 0, 0, ?, ?, ?)",
+            (uname, uname_norm, pw_str, str(role or "user"), str(wallet_address or ""), str(wallet_chain or ""), _now_iso())
         )
         conn.commit()
         new_id = int(cur.lastrowid)
-        log_sys_event("AUTH_REG_SUCCESS", new_id, "成功註冊用戶 (SQLite)", {"uname": uname_norm})
+        log_sys_event("AUTH_REG_TRACE_4", new_id, "INSERT 成功 (SQLite)", {})
         return new_id
     except Exception as e:
-        import traceback
         conn.rollback()
-        err_msg = str(e)
-        log_sys_event("AUTH_REG_FATAL", None, f"註冊資料庫寫入失敗: {err_msg}", {"trace": traceback.format_exc(), "uname": uname_norm})
+        log_sys_event("AUTH_REG_FATAL", None, f"寫入 DB 失敗 (可能是帳號重複): {e}", {})
         raise e
     finally:
         conn.close()
@@ -1167,47 +1140,33 @@ def is_user_locked(user_id: int) -> bool:
 
 
 def update_user_login_state(user_id: int, success: bool = True) -> None:
-    log_sys_event("AUTH_LOGIN_STATE_STEP_1", user_id, "進入更新登入狀態函數", {"success": success})
+    log_sys_event("AUTH_STATE_TRACE_1", user_id, "成功進入 update_user_login_state 第一行", {"success": success})
     try:
         conn = _conn()
     except Exception as e:
-        import traceback
-        log_sys_event("AUTH_LOGIN_CRASH", user_id, f"更新登入狀態時取得連線失敗: {e}", {"trace": traceback.format_exc()})
+        log_sys_event("AUTH_STATE_CRASH", user_id, f"取得連線失敗: {e}", {})
         return
 
+    log_sys_event("AUTH_STATE_TRACE_2", user_id, "成功取得連線，準備執行 UPDATE", {})
     try:
         if success:
             now = _now_iso()
             try:
-                # 第一步：獨立更新登入狀態並立刻存檔，確保登入行為 100% 成功
                 conn.execute("UPDATE users SET last_login_at = ?, run_enabled = 0 WHERE id = ?", (now, int(user_id)))
                 conn.commit()
-                log_sys_event("AUTH_LOGIN_SUCCESS", user_id, "登入狀態已更新", {})
+                log_sys_event("AUTH_STATE_TRACE_3", user_id, "users 表更新成功", {})
             except Exception as e:
-                import traceback
                 conn.rollback()
-                log_sys_event("AUTH_LOGIN_FATAL", user_id, f"更新登入時間失敗: {e}", {"trace": traceback.format_exc()})
+                log_sys_event("AUTH_STATE_FATAL", user_id, f"更新 user 表失敗: {e}", {})
             
-            # 第二步：釋放幽靈任務 (獨立交易)，即便缺少欄位報錯也不會導致登入失敗
+            log_sys_event("AUTH_STATE_TRACE_4", user_id, "準備釋放幽靈任務", {})
             try:
-                conn.execute(
-                    "UPDATE mining_tasks SET status='assigned', lease_id=NULL, lease_worker_id=NULL, lease_expires_at=NULL, updated_at=? WHERE user_id=? AND status IN ('running', 'queued')",
-                    (now, int(user_id)),
-                )
+                conn.execute("UPDATE mining_tasks SET status='assigned', lease_id=NULL, lease_worker_id=NULL, lease_expires_at=NULL, updated_at=? WHERE user_id=? AND status IN ('running', 'queued')", (now, int(user_id)))
                 conn.commit()
+                log_sys_event("AUTH_STATE_TRACE_5", user_id, "幽靈任務釋放成功", {})
             except Exception as e_lease:
-                conn.rollback() # 極致防護：遇到欄位缺失時必須 rollback 解除鎖死
-                import traceback
-                log_sys_event("AUTH_LOGIN_WARN", user_id, f"幽靈任務釋放(完整版)失敗，嘗試降級版: {e_lease}", {"trace": traceback.format_exc()})
-                try:
-                    conn.execute(
-                        "UPDATE mining_tasks SET status='assigned', updated_at=? WHERE user_id=? AND status IN ('running', 'queued')",
-                        (now, int(user_id)),
-                    )
-                    conn.commit()
-                except Exception as e_fallback:
-                    conn.rollback()
-                    log_sys_event("AUTH_LOGIN_WARN", user_id, f"幽靈任務釋放(降級版)失敗: {e_fallback}", {"trace": traceback.format_exc()})
+                conn.rollback()
+                log_sys_event("AUTH_STATE_WARN", user_id, f"幽靈任務釋放失敗: {e_lease}", {})
     finally:
         conn.close()
 
@@ -1592,35 +1551,39 @@ def list_factor_pools(cycle_id: int) -> list:
     raise RuntimeError(f"資料庫高併發鎖定，無法讀取策略池列表。請稍後再試。({last_err})")
 
 def log_sys_event(event_type: str, user_id: Optional[int], message: str, detail: dict = None) -> None:
-    """專家級監視：同步寫入，過濾無效洗版，確保不會塞爆資料庫連線"""
-    # [核彈級修復] 絕對禁止寫入 TASK_ASSIGN_SKIP！
-    # 由於 Worker 會高頻掃描數千名用戶，若不阻擋此日誌，會瞬間榨乾 Postgres 的 100 個連線上限。
-    # 這是導致 API 容器在啟動時拿不到連線直接崩潰死亡、Nginx 報錯 502、前端無限轉圈圈的真正元兇！
+    """終極監視：非同步背景獨立執行緒，保證絕對不被主程式的死鎖拖累"""
     if event_type == "TASK_ASSIGN_SKIP":
         return
 
     import sys
     import json
+    import threading
 
     try:
         payload_str = json.dumps(detail or {}, ensure_ascii=False)
     except Exception:
         payload_str = "{}"
-        
+
+    # 第一道防線：直接印到 Docker Console，就算資料庫炸了也看得到
     print(f"[SYS_EVENT] {event_type} | UID:{user_id} | MSG:{message} | DETAIL:{payload_str}", file=sys.stderr, flush=True)
 
-    try:
-        conn = _conn()
+    def _bg_write():
         try:
-            conn.execute(
-                "INSERT INTO sys_monitor_events (event_type, user_id, message, detail_json, created_at) VALUES (?, ?, ?, ?, ?)",
-                (event_type, user_id, message, payload_str, _now_iso())
-            )
-            conn.commit()
-        finally:
-            conn.close()
-    except Exception as e:
-        print(f"[CRITICAL DB ERROR] 寫入 sys_monitor_events 失敗: {e}", file=sys.stderr, flush=True)
+            conn = _conn()
+            try:
+                conn.execute(
+                    "INSERT INTO sys_monitor_events (event_type, user_id, message, detail_json, created_at) VALUES (?, ?, ?, ?, ?)",
+                    (event_type, user_id, message, payload_str, _now_iso())
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception:
+            pass
+
+    # 第二道防線：丟進背景執行緒，主程式不需等待寫入完成，徹底消滅日誌引發的連環卡死
+    t = threading.Thread(target=_bg_write, daemon=True)
+    t.start()
 
 def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, max_tasks: int = 6, preferred_family: str = "") -> None:
     import time, random
