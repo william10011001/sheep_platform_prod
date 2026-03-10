@@ -952,11 +952,12 @@ def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
     raw = str(username or "")
     uname_norm = normalize_username(raw)
     if not uname_norm:
+        log_sys_event("AUTH_LOGIN_ERROR", None, "登入嘗試失敗: 格式化後為空", {"raw_username": raw})
         return None
 
     conn = _conn()
     try:
-        # 1. 優先走 username_norm（新 schema / 已補欄位的 DB）
+        # 1. 優先走 username_norm
         try:
             row = conn.execute(
                 "SELECT * FROM users WHERE username_norm = ? LIMIT 1",
@@ -964,10 +965,12 @@ def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
             ).fetchone()
             if row:
                 return dict(row)
-        except Exception:
+        except Exception as e:
             conn.rollback()
+            import traceback
+            log_sys_event("AUTH_LOGIN_WARN", None, f"1階查詢失敗: {e}", {"trace": traceback.format_exc(), "uname": uname_norm})
 
-        # 2. 後備：直接用 username（大小寫不敏感）查，至少讓登入不炸
+        # 2. 後備：直接用 username
         try:
             row2 = conn.execute(
                 "SELECT * FROM users WHERE lower(username) = ? OR username = ? LIMIT 1",
@@ -975,18 +978,27 @@ def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
             ).fetchone()
             if row2:
                 return dict(row2)
-        except Exception:
+        except Exception as e:
             conn.rollback()
+            import traceback
+            log_sys_event("AUTH_LOGIN_WARN", None, f"2階查詢失敗: {e}", {"trace": traceback.format_exc(), "uname": uname_norm})
             
-        # 3. 終極防護：暴力全表掃描。完全無視 SQL 方言或缺少欄位問題，只要使用者存在就必能找回
+        # 3. 終極防護：暴力全表掃描
         try:
             rows = conn.execute("SELECT * FROM users").fetchall()
             for r in rows:
                 if str(r.get("username", "")).lower() == uname_norm or str(r.get("username_norm", "")) == uname_norm:
                     return dict(r)
-        except Exception:
+        except Exception as e:
             conn.rollback()
+            import traceback
+            log_sys_event("AUTH_LOGIN_ERROR", None, f"3階查詢崩潰: {e}", {"trace": traceback.format_exc(), "uname": uname_norm})
 
+        log_sys_event("AUTH_LOGIN_NOT_FOUND", None, "找不到該用戶", {"uname": uname_norm})
+        return None
+    except Exception as fatal_e:
+        import traceback
+        log_sys_event("AUTH_LOGIN_FATAL", None, f"獲取用戶時發生嚴重資料庫錯誤: {fatal_e}", {"trace": traceback.format_exc()})
         return None
     finally:
         conn.close()
@@ -1023,6 +1035,7 @@ def create_user(
     uname = str(username or "").strip()
     uname_norm = normalize_username(uname)
     if not uname_norm:
+        log_sys_event("AUTH_REG_ERROR", None, "註冊失敗: 無效的使用者名稱", {"raw_username": username})
         raise ValueError("invalid username")
         
     if isinstance(password_hash, bytes):
@@ -1042,7 +1055,9 @@ def create_user(
                 (uname, uname_norm, pw_str, str(role or "user"), str(wallet_address or ""), str(wallet_chain or ""), _now_iso()),
             ).fetchone()
             conn.commit()
-            return int((row or {}).get("id") or 0)
+            new_id = int((row or {}).get("id") or 0)
+            log_sys_event("AUTH_REG_SUCCESS", new_id, "成功註冊用戶 (PG)", {"uname": uname_norm})
+            return new_id
 
         cur = conn.execute(
             """
@@ -1052,7 +1067,15 @@ def create_user(
             (uname, uname_norm, pw_str, str(role or "user"), str(wallet_address or ""), str(wallet_chain or ""), _now_iso()),
         )
         conn.commit()
-        return int(cur.lastrowid)
+        new_id = int(cur.lastrowid)
+        log_sys_event("AUTH_REG_SUCCESS", new_id, "成功註冊用戶 (SQLite)", {"uname": uname_norm})
+        return new_id
+    except Exception as e:
+        import traceback
+        conn.rollback()
+        err_msg = str(e)
+        log_sys_event("AUTH_REG_FATAL", None, f"註冊資料庫寫入失敗: {err_msg}", {"trace": traceback.format_exc(), "uname": uname_norm})
+        raise e
     finally:
         conn.close()
 
@@ -1090,9 +1113,15 @@ def update_user_login_state(user_id: int, success: bool = True) -> None:
     try:
         if success:
             now = _now_iso()
-            # 第一步：獨立更新登入狀態並立刻存檔，確保登入行為 100% 成功
-            conn.execute("UPDATE users SET last_login_at = ?, run_enabled = 0 WHERE id = ?", (now, int(user_id)))
-            conn.commit()
+            try:
+                # 第一步：獨立更新登入狀態並立刻存檔，確保登入行為 100% 成功
+                conn.execute("UPDATE users SET last_login_at = ?, run_enabled = 0 WHERE id = ?", (now, int(user_id)))
+                conn.commit()
+                log_sys_event("AUTH_LOGIN_SUCCESS", user_id, "登入狀態已更新", {})
+            except Exception as e:
+                import traceback
+                conn.rollback()
+                log_sys_event("AUTH_LOGIN_FATAL", user_id, f"更新登入時間失敗: {e}", {"trace": traceback.format_exc()})
             
             # 第二步：釋放幽靈任務 (獨立交易)，即便缺少欄位報錯也不會導致登入失敗
             try:
@@ -1101,13 +1130,19 @@ def update_user_login_state(user_id: int, success: bool = True) -> None:
                     (now, int(user_id)),
                 )
                 conn.commit()
-            except Exception:
+            except Exception as e_lease:
                 conn.rollback() # 極致防護：遇到欄位缺失時必須 rollback 解除鎖死
-                conn.execute(
-                    "UPDATE mining_tasks SET status='assigned', updated_at=? WHERE user_id=? AND status IN ('running', 'queued')",
-                    (now, int(user_id)),
-                )
-                conn.commit()
+                import traceback
+                log_sys_event("AUTH_LOGIN_WARN", user_id, f"幽靈任務釋放(完整版)失敗，嘗試降級版: {e_lease}", {"trace": traceback.format_exc()})
+                try:
+                    conn.execute(
+                        "UPDATE mining_tasks SET status='assigned', updated_at=? WHERE user_id=? AND status IN ('running', 'queued')",
+                        (now, int(user_id)),
+                    )
+                    conn.commit()
+                except Exception as e_fallback:
+                    conn.rollback()
+                    log_sys_event("AUTH_LOGIN_WARN", user_id, f"幽靈任務釋放(降級版)失敗: {e_fallback}", {"trace": traceback.format_exc()})
     finally:
         conn.close()
 
@@ -1395,8 +1430,17 @@ def ensure_cycle_rollover() -> None:
                         "INSERT INTO audit_logs (user_id, action, payload_json, created_at) VALUES (NULL, ?, ?, ?)",
                         ("cycle_auto_inheritance", json.dumps({"from": active["id"], "to": new_cycle_id}), now_str)
                     )
+                    conn.execute(
+                        "INSERT INTO sys_monitor_events (event_type, user_id, message, detail_json, created_at) VALUES (?, ?, ?, ?, ?)",
+                        ("CYCLE_ROLLOVER_OK", None, f"成功從週期 {active['id']} 繼承 Pool 至 {new_cycle_id}", json.dumps({"from": active["id"], "to": new_cycle_id}), now_str)
+                    )
                 except Exception as cycle_fatal:
+                    import traceback
                     print(f"[CRITICAL DB ERROR] 週期 Pool 繼承失敗: {cycle_fatal}")
+                    conn.execute(
+                        "INSERT INTO sys_monitor_events (event_type, user_id, message, detail_json, created_at) VALUES (?, ?, ?, ?, ?)",
+                        ("CYCLE_ROLLOVER_FAIL", None, f"週期 Pool 繼承失敗: {cycle_fatal}", json.dumps({"trace": traceback.format_exc()}), now_str)
+                    )
                     
                 conn.commit()
     except Exception:
@@ -1511,7 +1555,19 @@ def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, m
                     pools = conn.execute("SELECT id, num_partitions FROM factor_pools WHERE cycle_id = ? AND active = 1", (cycle_id,)).fetchall()
                     
                 if not pools:
-                    log_sys_event("TASK_ASSIGN_FAIL", user_id, f"目前週期 {cycle_id} 沒有活躍的策略池可供派發", {"cycle_id": cycle_id})
+                    # [專家級監視] 深入調查為何沒有 active=1 的 pools，找出導致不派任務的根因
+                    total_pools = conn.execute("SELECT COUNT(*) as c FROM factor_pools WHERE cycle_id = ?", (cycle_id,)).fetchone()["c"]
+                    inactive_pools = conn.execute("SELECT COUNT(*) as c FROM factor_pools WHERE cycle_id = ? AND active = 0", (cycle_id,)).fetchone()["c"]
+                    all_cycles = [dict(r) for r in conn.execute("SELECT id, status FROM mining_cycles ORDER BY id DESC LIMIT 3").fetchall()]
+                    
+                    log_sys_event("TASK_ASSIGN_FAIL", user_id, f"目前週期 {cycle_id} 沒有活躍的策略池可供派發", {
+                        "cycle_id": cycle_id,
+                        "preferred_family": preferred_family,
+                        "total_pools_in_cycle": total_pools,
+                        "inactive_pools_in_cycle": inactive_pools,
+                        "recent_cycles": all_cycles,
+                        "db_kind": getattr(conn, "kind", "unknown")
+                    })
                     break
                     
                 # 抓取該用戶已經擁有過的所有 (pool_id, partition_idx)
