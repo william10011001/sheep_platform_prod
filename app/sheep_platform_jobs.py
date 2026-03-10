@@ -544,6 +544,8 @@ class JobManager:
             prev_best_any_metrics = progress.get("best_any_metrics", None)
             prev_best_any_params = progress.get("best_any_params", None)
             prev_best_any_passed = bool(progress.get("best_any_passed") or False)
+            # [修復] 讀取之前的耗時，避免重新排隊後時長歸零重算
+            prev_elapsed_s = float(progress.get("elapsed_s") or 0.0)
 
             progress.update(
                 {
@@ -560,7 +562,7 @@ class JobManager:
                     "phase_progress": 0.0,
                     "phase_msg": "",
                     "last_error": None,
-                    "elapsed_s": 0.0,
+                    "elapsed_s": prev_elapsed_s,
                     "speed_cps": 0.0,
                     "eta_s": None,
                     "updated_at": db.utc_now_iso(),
@@ -648,7 +650,7 @@ class JobManager:
                 progress["phase"] = "sync_data"
                 progress["phase_progress"] = f
                 progress["phase_msg"] = mmsg
-                progress["elapsed_s"] = round(float(max(0.0, now - t0)), 3)
+                progress["elapsed_s"] = round(prev_elapsed_s + float(max(0.0, now - t0)), 3)
 
                 m = _SYNC_RE.match(mmsg)
                 if m:
@@ -780,8 +782,6 @@ class JobManager:
                 _c3.close()
 
             slice_s = float(max(3.0, min(600.0, slice_s)))
-            slice_start_ts = time.time()
-            slice_start_done = int(done)
 
             risk_n = max(1, len(risk_grid))
             start_family_i = int(done // risk_n)
@@ -837,8 +837,7 @@ class JobManager:
                     sig_cache = None
                     use_fast_path = False
 
-            # [致命死鎖修復] 快取建立可能耗時超過 slice_s (例如 30~60 秒)。
-            # 若不在此重置時間，進入運算迴圈後會「瞬間觸發時間切片」並直接中斷，導致任務永遠卡在固定的進度無限循環！
+            # [致命死鎖與時長估算修復] 必須在快取計算「之後」才開始記錄切片時間，否則第一圈就會瞬間超時！
             slice_start_ts = time.time()
             slice_start_done = int(done)
 
@@ -846,11 +845,21 @@ class JobManager:
                 nonlocal last_commit, last_commit_ts
                 last_commit = done
                 last_commit_ts = time.time()
-                elapsed = float(max(0.0, time.time() - t0))
-                speed = float(done / elapsed) if elapsed > 0 else 0.0
-                eta = float((combos_total - done) / speed) if speed > 0 and combos_total > done else None
+                
+                # 計算本次執行的總耗時 (包含之前累積的 + 這次的)
+                current_run_elapsed = float(max(0.0, time.time() - t0))
+                total_elapsed = prev_elapsed_s + current_run_elapsed
+                
+                # 計算「純運算期間」的速度 (只看這個切片進度，避免被快取建立時間拉低速度)
+                slice_elapsed = float(max(0.001, time.time() - slice_start_ts))
+                slice_done = max(0, done - slice_start_done)
+                speed = float(slice_done / slice_elapsed) if slice_done > 0 else 0.0
+                
+                # 只有當速度合理時才估算 ETA，否則回傳 None 讓前端顯示等待
+                eta = float((combos_total - done) / speed) if speed > 0.1 and combos_total > done else None
+                
                 progress["combos_done"] = int(done)
-                progress["elapsed_s"] = round(elapsed, 3)
+                progress["elapsed_s"] = round(total_elapsed, 3)
                 progress["speed_cps"] = round(speed, 6)
                 progress["eta_s"] = round(eta, 3) if eta is not None else None
                 progress["best_any_score"] = float(best_any_score) if best_any_score is not None else None
