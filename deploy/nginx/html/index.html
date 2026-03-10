@@ -78,6 +78,11 @@
 </head>
 <body>
     <div id="app" class="min-h-screen flex flex-col">
+        <div v-if="toastMsg" class="fixed top-20 right-4 z-[9999] px-6 py-3 rounded-md shadow-lg border backdrop-blur-md transition-all duration-300"
+             :class="toastType === 'error' ? 'bg-red-900/80 border-red-500 text-white' : (toastType === 'success' ? 'bg-emerald-900/80 border-emerald-500 text-white' : 'bg-slate-800/80 border-blue-500 text-white')">
+            {{ toastMsg }}
+        </div>
+
         <nav class="border-b border-red-900/50 bg-black/50 backdrop-blur-md sticky top-0 z-50">
             <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between h-16">
                 <div class="flex items-center gap-3">
@@ -332,6 +337,19 @@
                 const pingMs = ref(0);
                 let pollTimer = null;
                 
+                // 新增 Toast 狀態管理
+                const toastMsg = ref('');
+                const toastType = ref('info'); // 'info', 'success', 'error'
+                let toastTimer = null;
+                const showToast = (msg, type = 'info', duration = 3000) => {
+                    toastMsg.value = msg;
+                    toastType.value = type;
+                    if (toastTimer) clearTimeout(toastTimer);
+                    if (duration > 0) {
+                        toastTimer = setTimeout(() => { toastMsg.value = ''; }, duration);
+                    }
+                };
+                
                 const authForm = reactive({ username: '', password: '' });
                 const dashData = reactive({ tasks_count: 0, strategies_active: 0, payouts_unpaid: 0, strategies: [], payouts: [], min_sharpe: 0.6 });
                 const tasksData = reactive({ tasks: [], run_enabled: false });
@@ -406,13 +424,26 @@
 
                 const fetchApi = async (endpoint, options = {}) => {
                     const token = localStorage.getItem('sheep_token');
-                    const headers = { 'Content-Type': 'application/json' };
+                    const headers = { 'Content-Type': 'application/json', ...options.headers };
                     if (token) headers['Authorization'] = `Bearer ${token}`;
                     const start = performance.now();
-                    const res = await fetch(`${API_BASE}${endpoint}`, { ...options, headers });
-                    pingMs.value = Math.round(performance.now() - start);
-                    if (!res.ok) throw new Error(await res.text());
-                    return res.json();
+                    
+                    try {
+                        const res = await fetch(`${API_BASE}${endpoint}`, { ...options, headers });
+                        pingMs.value = Math.round(performance.now() - start);
+                        if (!res.ok) {
+                            let errorText = await res.text();
+                            try {
+                                const errObj = JSON.parse(errorText);
+                                errorText = JSON.stringify(errObj); // 嘗試格式化顯示
+                            } catch(e) {}
+                            throw new Error(`API 錯誤 (${res.status}): ${errorText}`);
+                        }
+                        return await res.json();
+                    } catch (error) {
+                        console.error(`[fetchApi Error] ${endpoint}:`, error);
+                        throw error;
+                    }
                 };
 
                 const checkAuth = async () => {
@@ -447,13 +478,18 @@
 
                 // 極致修復的驗證邏輯：完整解析後端錯誤，避免誤報
                 const handleAuth = async () => {
-                    errorMsg.value = ''; isLoading.value = true;
+                    errorMsg.value = ''; 
+                    isLoading.value = true;
+                    showToast('⏳ 正在驗證登入資訊...', 'info', 0); // 持續顯示直到流程結束
+                    
                     try {
                         const endpoint = isLoginMode.value ? '/token' : '/auth/register';
                         const body = isLoginMode.value 
                             ? { username: authForm.username, password: authForm.password, ttl_seconds: 86400 * 30, name: "worker" }
                             : { username: authForm.username, password: authForm.password, tos_ok: true };
                             
+                        // 注意：如果後端是標準 OAuth2PasswordRequestForm，這裡的 JSON 會報 422 錯誤。
+                        // 我們保留原邏輯，但透過強化報錯讓您能第一時間發現。
                         const res = await fetch(`${API_BASE}${endpoint}`, { 
                             method: 'POST', 
                             headers: { 'Content-Type': 'application/json' }, 
@@ -462,32 +498,55 @@
                         
                         if (!res.ok) {
                             let detail = '';
+                            let fullError = await res.text();
                             try { 
-                                const errData = await res.json(); 
-                                detail = errData.detail; 
-                            } catch(e){}
+                                const errData = JSON.parse(fullError);
+                                detail = errData.detail || errData.message || fullError;
+                                // 處理 FastAPI 驗證錯誤陣列
+                                if (Array.isArray(detail)) {
+                                    detail = detail.map(d => `${d.loc?.join('.')}: ${d.msg}`).join(', ');
+                                }
+                            } catch(e){ detail = fullError; }
                             
                             if(detail === 'user_exists') throw new Error('註冊失敗：該帳號已被其他人註冊');
                             if(detail === 'password_too_short') throw new Error('註冊失敗：密碼至少需要6個字元');
                             if(detail === 'invalid_username') throw new Error('註冊失敗：帳號格式無效');
-                            throw new Error(isLoginMode.value ? '登入失敗：帳號或密碼錯誤' : '連線失敗或發生未知錯誤');
+                            
+                            // 顯示最詳細的錯誤根因
+                            throw new Error(`請求失敗 [狀態碼 ${res.status}]: ${detail}`);
                         }
                         
                         if(!isLoginMode.value) {
+                            // 註冊後自動登入
+                            showToast('⏳ 註冊成功，正在自動登入...', 'info', 0);
                             const lRes = await fetch(`${API_BASE}/token`, { 
                                 method: 'POST', 
                                 headers: { 'Content-Type': 'application/json' }, 
                                 body: JSON.stringify({ username: authForm.username, password: authForm.password, ttl_seconds: 86400 * 30, name: "worker" }) 
                             });
+                            
+                            if (!lRes.ok) {
+                                const lErr = await lRes.text();
+                                throw new Error(`自動登入失敗 [狀態碼 ${lRes.status}]: ${lErr}`);
+                            }
                             const data = await lRes.json();
                             localStorage.setItem('sheep_token', data.token);
                         } else {
                             const data = await res.json();
                             localStorage.setItem('sheep_token', data.token);
                         }
-                        await checkAuth();
-                    } catch (e) { errorMsg.value = e.message; }
-                    finally { isLoading.value = false; }
+                        
+                        showToast('✅ 驗證成功，正在載入資料...', 'success', 2000);
+                        await checkAuth(); // 這裡如果報錯也會被下面的 catch 抓到
+                        
+                    } catch (e) { 
+                        console.error('[handleAuth Error]', e);
+                        errorMsg.value = e.message; 
+                        showToast(`❌ 發生錯誤: ${e.message}`, 'error', 5000);
+                    }
+                    finally { 
+                        isLoading.value = false; 
+                    }
                 };
 
                 const startMining = async () => {
@@ -565,6 +624,7 @@
                 // 👉 修復：確保 return 內輸出的函數名稱與上面定義的完全一致，不包含多餘殘留變數
                 return { 
                     user, isLoading, isLoginMode, currentTab, authForm, errorMsg, handleAuth, logout, 
+                    toastMsg, toastType, // 導出供 UI 使用
                     dashData, tasksData, leaderboard, pingMs, startMining, stopMining, 
                     getStatusText, getPhaseText, getProgress, getProgressPercent, getScore, getScoreNumber,
                     loadTasks, getShortPoolName, getScoreColorClass, formatDate,
