@@ -904,7 +904,7 @@ class JobManager:
                                     db.update_task_progress(task_id, progress)
                                 except Exception:
                                     pass
-                                db.update_task_status(task_id, "queued")
+                                db.update_task_status(task_id, "assigned")
                                 return
 
                             res = bt_module.run_backtest_from_entry_sig(
@@ -937,7 +937,7 @@ class JobManager:
                                 progress["phase_msg"] = "時間切片：進度已保存，等待下一輪排程..."
                                 progress["updated_at"] = db.utc_now_iso()
                                 db.update_task_progress(task_id, progress)
-                                db.update_task_status(task_id, "queued")
+                                db.update_task_status(task_id, "assigned")
                                 return
 
                             if done - last_commit >= 300 or (time.time() - last_commit_ts) >= 4.0:
@@ -1061,7 +1061,7 @@ class JobManager:
                         prog["error_ts"] = db.utc_now_iso()
                         try:
                             db.update_task_progress(task_id, prog)
-                            db.update_task_status(task_id, "queued")
+                            db.update_task_status(task_id, "assigned")
                         except Exception:
                             pass
                     else:
@@ -1081,7 +1081,7 @@ class JobManager:
                             pass
                 else:
                     try:
-                        db.update_task_status(task_id, "queued" if is_db_lock else "error")
+                        db.update_task_status(task_id, "assigned" if is_db_lock else "error")
                     except Exception:
                         pass
             except Exception as nested_err:

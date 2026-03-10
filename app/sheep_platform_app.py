@@ -6461,8 +6461,8 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                     _tid = int(_t["id"])
                     st_raw = str(_t.get("status") or "")
                     
-                    # 將因重啟而卡在 running 的任務判定為需要重新排程
-                    if st_raw == "running" and not job_mgr.is_running(_tid):
+                    # 將因重啟而卡在 running 或 queued 的任務判定為需要重新排程
+                    if st_raw in ("running", "queued") and not job_mgr.is_running(_tid) and not job_mgr.is_queued(int(user["id"]), _tid):
                         try:
                             db.update_task_status(_tid, "assigned")
                             st_raw = "assigned"
