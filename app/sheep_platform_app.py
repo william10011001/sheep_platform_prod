@@ -4257,50 +4257,18 @@ def _logout() -> None:
 def _login_form() -> None:
     st.markdown('<div class="auth_title">登入</div>', unsafe_allow_html=True)
 
-    captcha_enabled = (os.environ.get("SHEEP_CAPTCHA", "1").strip() != "0")
-    try:
-        captcha_min_s = float(os.environ.get("SHEEP_CAPTCHA_MIN_S", "0.8") or 0.8)
-    except Exception:
-        captcha_min_s = 0.8
-    captcha_min_s = float(max(0.2, min(10.0, captcha_min_s)))
-
-    if "captcha_nonce" not in st.session_state:
-        st.session_state["captcha_nonce"] = random.randint(1000, 9999)
-        st.session_state["captcha_t0"] = time.time()
-
-    nonce = int(st.session_state.get("captcha_nonce") or 0)
-    captcha_key = f"captcha_slider_{nonce}"
-
     with st.form("login_form", clear_on_submit=False):
         username = st.text_input("帳號", value="", autocomplete="username")
         password = st.text_input("密碼", value="", type="password", autocomplete="current-password")
         remember = st.checkbox("在本裝置記住我", value=False, key="login_remember_me")
-
-        if captcha_enabled:
-            st.markdown('<div class="small-muted">滑動驗證碼：把滑桿拖到最右邊（100）</div>', unsafe_allow_html=True)
-            st.slider(" ", min_value=0, max_value=100, value=0, step=1, key=captcha_key)
-
-        submitted = st.form_submit_button("登入")
+        submitted = st.form_submit_button("登入", use_container_width=True)
 
     if not submitted:
         return
 
-    st.toast("正在驗證登入資訊...", icon="⏳")
+    st.toast("⏳ 收到登入請求，正在驗證...", icon="⏳")
 
     try:
-        if captcha_enabled:
-            dt = float(time.time() - float(st.session_state.get("captcha_t0") or time.time()))
-            if int(st.session_state.get(captcha_key) or 0) != 100:
-                st.error("滑動驗證碼未通過。")
-                st.session_state["captcha_nonce"] = random.randint(1000, 9999)
-                st.session_state["captcha_t0"] = time.time()
-                return
-            if dt < captcha_min_s:
-                st.error("滑動時間過短。")
-                st.session_state["captcha_nonce"] = random.randint(1000, 9999)
-                st.session_state["captcha_t0"] = time.time()
-                return
-
         uname = normalize_username(username)
         user = db.get_user_by_username(uname)
         if not user:
@@ -4396,12 +4364,12 @@ def _login_form() -> None:
 
         tos_ok = st.checkbox("我已閱讀並同意平台服務條款與分潤規則", value=False, key="register_tos_ok")
         remember = st.checkbox("在本裝置記住我", value=False, key="register_remember_me")
-        submitted = st.form_submit_button("建立帳號並登入")
+        submitted = st.form_submit_button("建立帳號並登入", use_container_width=True)
 
     if not submitted:
         return
 
-    st.toast("正在處理註冊請求...", icon="⏳")
+    st.toast("⏳ 收到註冊請求，正在處理...", icon="⏳")
 
     try:
         uname = normalize_username(username)
