@@ -3912,7 +3912,6 @@ visibility: hidden !important;
 
 
 def _force_red_bg_every_rerun() -> None:
-    # 終極保險：不管你切到哪個頁面，最後都用最高優先級把紅色網格背景蓋回來
     st.markdown(
         """
 <style id="sheepForceRedBg">
@@ -3931,18 +3930,14 @@ section.main,
   background-attachment: fixed !important;
 }
 
-/* 防止某些頁面把主容器填成純黑色遮住背景 */
 .main { background: transparent !important; }
 .block-container { background: transparent !important; }
-
-/* PERF HUD 不應該影響點擊 */
 #sheepPerfHud { pointer-events: auto !important; }
 </style>
         """,
         unsafe_allow_html=True,
     )
     
-    # [專家級修復] 解除所有毒性 CSS 隱藏，恢復正常的 Error 顯示
     st.components.v1.html(
         """
         <script>
@@ -3951,12 +3946,9 @@ section.main,
             if (w.__sheep_god_killer) return;
             w.__sheep_god_killer = true;
             
-            // 覆蓋 window.alert 預防 Streamlit 呼叫
             const origAlert = w.alert;
             w.alert = function(msg) {
-                if(msg && (msg.includes("405") || msg.includes("Method Not Allowed") || msg.includes("502") || msg.includes("521"))) {
-                    return;
-                }
+                if(msg && (msg.includes("405") || msg.includes("Method Not Allowed") || msg.includes("502") || msg.includes("521"))) { return; }
                 return origAlert(msg);
             };
 
@@ -3977,41 +3969,12 @@ section.main,
                     });
                 });
             });
-            if(w.document.body) {
-                observer.observe(w.document.body, { childList: true, subtree: true });
-            }
-
-            w.document.addEventListener('click', function(e) {
-                let btn = e.target.closest('button');
-                if (btn) {
-                    let text = btn.innerText || "";
-                    // [專家級修復] 移除對「登入」與「註冊」按鈕的強硬攔截。若後端秒回錯誤(如未勾選條款)，按鈕被鎖定5秒會讓用戶誤以為卡死沒反應。
-                    if (text.includes('中斷') || text.includes('開始') || text.includes('資源') || text.includes('加入')) {
-                        if (w.__sheep_autorefresh_timer) {
-                            clearTimeout(w.__sheep_autorefresh_timer);
-                            w.__sheep_autorefresh_timer = null;
-                        }
-                        
-                        let p = btn.querySelector('p') || btn;
-                        p.innerText = "通訊傳輸中...";
-                        btn.style.opacity = "0.6";
-                        btn.style.pointerEvents = "none";
-                        btn.style.transform = "translateY(2px)";
-                        
-                        setTimeout(() => {
-                            btn.style.opacity = "1";
-                            btn.style.pointerEvents = "auto";
-                            btn.style.transform = "none";
-                            if (p) p.innerText = text;
-                        }, 5000);
-                    }
-                }
-            }, true);
+            if(w.document.body) { observer.observe(w.document.body, { childList: true, subtree: true }); }
         })();
         </script>
         """,
         height=0,
-    )                                                       
+    )                                                
 _LAST_ROLLOVER_CHECK = 0.0
 
 def _kill_stuck_fullscreen_iframes() -> None:
@@ -4339,25 +4302,15 @@ def _login_form() -> None:
         uname = normalize_username(username)
         user = db.get_user_by_username(uname)
         if not user:
-            st.error("帳號或密碼錯誤。")
+            st.error("登入失敗：找不到此帳號。")
             return
 
         if int(user.get("disabled") or 0) == 1:
-            st.error("帳號已停用。")
+            st.error("登入失敗：帳號已停用。")
             return
 
-        # 拔除可能不存在引發崩潰的 is_user_locked 呼叫
-        try:
-            if hasattr(db, "is_user_locked") and db.is_user_locked(int(user["id"])):
-                st.error("登入已鎖定。")
-                return
-        except Exception:
-            pass
-
-        # 強化密碼驗證邏輯，處理資料庫儲存為 bytes/str 以及字串化 bytes (如 "b'...'") 的潛在錯誤
         is_valid = False
         hash_stored = user.get("password_hash", "")
-        
         if isinstance(hash_stored, str):
             import ast
             if hash_stored.startswith("b'") or hash_stored.startswith('b"'):
@@ -4380,19 +4333,18 @@ def _login_form() -> None:
 
         if not is_valid:
             try:
-                db.log_sys_event("AUTH_LOGIN_FAILED", int(user["id"]), "密碼驗證失敗", {"pwd_len": len(password), "hash_len": len(hash_stored), "uname": uname})
+                db.log_sys_event("AUTH_LOGIN_FAILED", int(user["id"]), "密碼錯誤", {"uname": uname})
                 db.update_user_login_state(int(user["id"]), success=False)
             except Exception:
                 pass
-            st.error("登入失敗：帳號或密碼錯誤。(預設管理員密碼已重置為 @@Wm105020)")
+            st.error("登入失敗：密碼錯誤。(管理員預設已重置為 @@Wm105020)")
             return
 
         try:
-            db.log_sys_event("AUTH_LOGIN_SUCCESS", int(user["id"]), "密碼驗證成功", {"uname": uname})
+            db.log_sys_event("AUTH_LOGIN_SUCCESS", int(user["id"]), "登入成功", {"uname": uname})
             db.update_user_login_state(int(user["id"]), success=True)
-        except Exception as state_e:
-            import sys
-            print(f"[WARN] update_user_login_state failed: {state_e}", file=sys.stderr)
+        except Exception:
+            pass
 
         _set_session_user(user)
 
@@ -4407,9 +4359,14 @@ def _login_form() -> None:
             _queue_clear_cookie(_REMEMBER_COOKIE_NAME)
             _queue_clear_cookie(_REMEMBER_TOKEN_NAME)
 
-        st.success("登入成功。")
+        # [雙重保險] JS 強制重新載入 + Python rerun
+        st.success("登入成功！正在載入主控台...")
         st.session_state["nav_page_pending"] = "主頁"
-        st.rerun()
+        st.components.v1.html("<script>setTimeout(function() { window.parent.location.reload(); }, 300);</script>", height=0)
+        try:
+            st.rerun()
+        except Exception:
+            pass
 
     except Exception as fatal_e:
         import traceback
@@ -4417,7 +4374,6 @@ def _login_form() -> None:
         with st.expander("展開錯誤細節"):
             st.code(traceback.format_exc(), language="python")
 
-def _register_form() -> None:
     st.markdown('<div class="auth_title">註冊</div>', unsafe_allow_html=True)
 
     tos_text = ""
@@ -4527,8 +4483,113 @@ def _register_form() -> None:
         st.error(f"系統發生異常，無法完成註冊：{fatal_e}")
         with st.expander("展開錯誤細節"):
             st.code(traceback.format_exc(), language="python")
+def _register_form() -> None:
+    st.markdown('<div class="auth_title">註冊</div>', unsafe_allow_html=True)
 
+    tos_text = ""
+    tos_version = ""
+    try:
+        conn = db._conn()
+        try:
+            tos_text = str(db.get_setting(conn, "tos_text", "") or "")
+            tos_version = str(db.get_setting(conn, "tos_version", "") or "")
+        finally:
+            conn.close()
+    except Exception:
+        pass
 
+    with st.form("register_form", clear_on_submit=False):
+        username = st.text_input("帳號", value="")
+        password = st.text_input("密碼", value="", type="password", placeholder="至少 6 碼，需包含英文字母與數字")
+        password2 = st.text_input("確認密碼", value="", type="password")
+
+        tos_ok = st.checkbox("我已閱讀並同意平台服務條款與分潤規則", value=False, key="register_tos_ok")
+        remember = st.checkbox("在本裝置記住我", value=False, key="register_remember_me")
+        submitted = st.form_submit_button("建立帳號並登入")
+
+    if not submitted:
+        return
+
+    try:
+        uname = normalize_username(username)
+        if not uname:
+            st.error("註冊失敗：帳號不可為空。")
+            return
+        if len(uname) > 64:
+            st.error("註冊失敗：帳號長度上限為 64 字元。")
+            return
+        
+        pw = str(password or "")
+        if len(pw) < 6:
+            st.error("註冊失敗：密碼長度至少 6 字元。")
+            return
+        has_alpha = any(ch.isalpha() for ch in pw)
+        has_digit = any(ch.isdigit() for ch in pw)
+        if not (has_alpha and has_digit):
+            st.error("註冊失敗：密碼需同時包含英文字母與數字。")
+            return
+        if pw != str(password2 or ""):
+            st.error("註冊失敗：兩次輸入的密碼不一致。")
+            return
+
+        if not bool(tos_ok):
+            st.error("註冊失敗：必須同意服務條款與分潤規則才可註冊。")
+            return
+
+        if db.get_user_by_username(uname):
+            st.error("註冊失敗：此帳號已存在，請更換一個。")
+            return
+
+        try:
+            try:
+                pw_hashed = hash_password(pw)
+            except TypeError:
+                pw_hashed = hash_password(pw.encode("utf-8"))
+
+            uid = db.create_user(username=uname, password_hash=pw_hashed, role="user", wallet_address="", wallet_chain="TRC20")
+            try:
+                db.write_audit_log(uid, "register", {"username": uname})
+                if tos_version.strip():
+                    db.write_audit_log(uid, "tos_accept", {"version": tos_version})
+            except Exception:
+                pass
+        except Exception as e:
+            st.error(f"建立失敗：{e}")
+            return
+
+        user = db.get_user_by_id(int(uid))
+        if not user:
+            st.success("✅ 帳號已建立！請從右側重新登入。")
+            return
+
+        _set_session_user(user)
+
+        if bool(remember):
+            ttl_days = int(_REMEMBER_TTL_DAYS)
+            tok = _issue_api_token(user, ttl_seconds=int(ttl_days) * 86400, name=_REMEMBER_TOKEN_NAME)
+            raw = str(tok.get("token") or "")
+            max_age_s = int(ttl_days) * 86400
+            _queue_set_cookie(_REMEMBER_COOKIE_NAME, raw, max_age_s)
+            st.session_state["auth_remember_token_id"] = int(tok.get("token_id") or 0)
+        else:
+            _queue_clear_cookie(_REMEMBER_COOKIE_NAME)
+            _queue_clear_cookie(_REMEMBER_TOKEN_NAME)
+
+        st.success("✅ 帳號已建立並完成登入！正在載入主控台...")
+        st.session_state["nav_page_pending"] = "主頁"
+        
+        # 雙重保險刷新
+        st.components.v1.html("<script>setTimeout(function() { window.parent.location.reload(); }, 300);</script>", height=0)
+        try:
+            st.rerun()
+        except Exception:
+            pass
+
+    except Exception as fatal_e:
+        import traceback
+        st.error(f"系統發生異常，無法完成註冊：{fatal_e}")
+        with st.expander("展開錯誤細節"):
+            st.code(traceback.format_exc(), language="python")
 def _render_tos_dialog() -> None:
     tos_text = ""
     tos_version = ""
