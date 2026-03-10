@@ -439,6 +439,13 @@
                             } catch(e) {}
                             throw new Error(`API 錯誤 (${res.status}): ${errorText}`);
                         }
+                        
+                        // [專家級防護] 嚴格檢查 Response 的 Content-Type，防止 Nginx 配置錯誤或路由偏移時收到 200 OK 的 HTML 而引發解析崩潰
+                        const contentType = res.headers.get("content-type") || "";
+                        if (!contentType.includes("application/json")) {
+                            const badText = await res.text();
+                            throw new Error(`API 路由錯誤：預期收到 JSON，卻收到 ${contentType} (內容預覽：${badText.substring(0, 50)}...)`);
+                        }
                         return await res.json();
                     } catch (error) {
                         console.error(`[fetchApi Error] ${endpoint}:`, error);
