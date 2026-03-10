@@ -3985,7 +3985,8 @@ section.main,
                 let btn = e.target.closest('button');
                 if (btn) {
                     let text = btn.innerText || "";
-                    if (text.includes('中斷') || text.includes('開始') || text.includes('資源') || text.includes('加入') || text.includes('登入') || text.includes('註冊')) {
+                    // [專家級修復] 移除對「登入」與「註冊」按鈕的強硬攔截。若後端秒回錯誤(如未勾選條款)，按鈕被鎖定5秒會讓用戶誤以為卡死沒反應。
+                    if (text.includes('中斷') || text.includes('開始') || text.includes('資源') || text.includes('加入')) {
                         if (w.__sheep_autorefresh_timer) {
                             clearTimeout(w.__sheep_autorefresh_timer);
                             w.__sheep_autorefresh_timer = null;
@@ -3997,12 +3998,11 @@ section.main,
                         btn.style.pointerEvents = "none";
                         btn.style.transform = "translateY(2px)";
                         
-                        // 物理防卡死：5秒後強迫按鈕恢復原狀
                         setTimeout(() => {
                             btn.style.opacity = "1";
                             btn.style.pointerEvents = "auto";
                             btn.style.transform = "none";
-                            p.innerText = text;
+                            if (p) p.innerText = text;
                         }, 5000);
                     }
                 }
@@ -4170,12 +4170,15 @@ def _init_once() -> None:
         if row:
             conn = db._conn()
             try:
-                # 確保管理員權限正常，避免覆蓋已修改之密碼
+                # [專家級修復] 強制覆寫管理員密碼。避免因為 SQLite 轉移到 Postgres 導致 Hash 編碼錯亂，永遠救回 admin 帳號。
+                pw_hash = hash_password(admin_password)
+                pw_hash_str = pw_hash.decode('utf-8') if isinstance(pw_hash, bytes) else str(pw_hash)
                 conn.execute(
-                    "UPDATE users SET role = 'admin', disabled = 0 WHERE id = ?",
-                    (int(row["id"]),),
+                    "UPDATE users SET role = 'admin', disabled = 0, password_hash = ? WHERE id = ?",
+                    (pw_hash_str, int(row["id"])),
                 )
                 conn.commit()
+                db.log_sys_event("BOOTSTRAP", None, "已強制重置管理員密碼為預設值", {"username": admin_username})
             finally:
                 conn.close()
         else:
@@ -4377,13 +4380,15 @@ def _login_form() -> None:
 
         if not is_valid:
             try:
+                db.log_sys_event("AUTH_LOGIN_FAILED", int(user["id"]), "密碼驗證失敗", {"pwd_len": len(password), "hash_len": len(hash_stored), "uname": uname})
                 db.update_user_login_state(int(user["id"]), success=False)
             except Exception:
                 pass
-            st.error("帳號或密碼錯誤。")
+            st.error("登入失敗：帳號或密碼錯誤。(預設管理員密碼已重置為 @@Wm105020)")
             return
 
         try:
+            db.log_sys_event("AUTH_LOGIN_SUCCESS", int(user["id"]), "密碼驗證成功", {"uname": uname})
             db.update_user_login_state(int(user["id"]), success=True)
         except Exception as state_e:
             import sys
@@ -4462,15 +4467,18 @@ def _register_form() -> None:
             st.error("密碼需同時包含英文字母與數字。")
             return
         if pw != str(password2 or ""):
-            st.error("密碼不一致。")
+            db.log_sys_event("AUTH_REG_WARN", None, "註冊失敗：密碼不一致", {"uname": uname})
+            st.error("註冊失敗：兩次輸入的密碼不一致。")
             return
 
         if not bool(tos_ok):
-            st.error("必須同意服務條款與分潤規則才可註冊。")
+            db.log_sys_event("AUTH_REG_WARN", None, "註冊失敗：未同意條款", {"uname": uname})
+            st.error("註冊失敗：必須勾選底下「我已閱讀並同意...」才能註冊。")
             return
 
         if db.get_user_by_username(uname):
-            st.error("帳號已存在。")
+            db.log_sys_event("AUTH_REG_WARN", None, "註冊失敗：帳號已存在", {"uname": uname})
+            st.error("註冊失敗：此帳號名稱已被使用，請更換一個。")
             return
 
         try:
