@@ -644,42 +644,29 @@ def issue_token(req: Request, body: TokenRequest):
                     expires_at=str(token.get("expires_at")),
                 )
 
-        user = db.get_user_by_username(body.username)
+        from sheep_platform_security import verify_password, normalize_username
+        
+        # [專家級修復] 1. 登入時主動過濾帳號前後的空白字元，防止因誤按空白而導致永遠登入失敗
+        uname_norm = normalize_username(body.username)
+        user = db.get_user_by_username(uname_norm)
         if not user:
-            db.log_sys_event("LOGIN_FAIL", None, f"帳號不存在: '{body.username}'", {"ip": ip, "username": body.username})
+            db.log_sys_event("LOGIN_FAIL", None, f"帳號不存在: '{uname_norm}'", {"ip": ip, "username": uname_norm})
             raise HTTPException(status_code=401, detail="bad_credentials")
 
-        from sheep_platform_security import verify_password
-        is_valid = False
-        raw_hash = user["password_hash"]
-        try:
-            if isinstance(raw_hash, str):
-                import ast
-                if raw_hash.startswith("b'") or raw_hash.startswith('b"'):
-                    try:
-                        raw_hash = ast.literal_eval(raw_hash).decode("utf-8")
-                    except Exception:
-                        raw_hash = raw_hash[2:-1]
-            is_valid = verify_password(body.password, raw_hash)
-        except Exception as e:
-            try:
-                pw_bin = body.password.encode("utf-8")
-                hash_bin = raw_hash.encode("utf-8") if isinstance(raw_hash, str) else raw_hash
-                is_valid = verify_password(pw_bin, hash_bin)
-            except Exception as verify_err:
-                db.log_sys_event("LOGIN_ERROR", user["id"], f"密碼比對模組異常: {verify_err}", {"ip": ip})
-                is_valid = False
+        # [專家級修復] 2. 移除脆弱且多餘的 ast.literal_eval 處理邏輯，將雜湊校驗全權交給核心資安模組
+        raw_hash = user.get("password_hash", "")
+        is_valid = verify_password(body.password, raw_hash)
 
         if not is_valid:
-            db.log_sys_event("LOGIN_FAIL", user["id"], f"密碼錯誤: '{body.username}'", {"ip": ip})
+            db.log_sys_event("LOGIN_FAIL", user["id"], f"密碼錯誤: '{uname_norm}'", {"ip": ip})
             raise HTTPException(status_code=401, detail="bad_credentials")
 
         if int(user.get("disabled") or 0) != 0:
-            db.log_sys_event("LOGIN_FAIL", user["id"], f"帳號已被停用: '{body.username}'", {"ip": ip})
+            db.log_sys_event("LOGIN_FAIL", user["id"], f"帳號已被停用: '{uname_norm}'", {"ip": ip})
             raise HTTPException(status_code=403, detail="user_disabled")
 
         token = db.create_api_token(int(user["id"]), ttl_seconds=int(body.ttl_seconds), name=str(body.name or "worker"))
-        db.log_sys_event("LOGIN_SUCCESS", user["id"], f"登入成功: '{body.username}'", {"ip": ip})
+        db.log_sys_event("LOGIN_SUCCESS", user["id"], f"登入成功: '{uname_norm}'", {"ip": ip})
         
         return TokenResponse(
             token=str(token["token"]),

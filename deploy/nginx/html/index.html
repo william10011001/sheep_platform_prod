@@ -531,6 +531,9 @@
                             if(detail === 'user_exists') throw new Error('註冊失敗：該帳號已被其他人註冊');
                             if(detail === 'password_too_short') throw new Error('註冊失敗：密碼至少需要6個字元');
                             if(detail === 'invalid_username') throw new Error('註冊失敗：帳號格式無效');
+                            // [專家級修復] 針對 401 狀態碼翻譯，提供使用者友善的白話文錯誤
+                            if(detail === 'bad_credentials') throw new Error('登入失敗：帳號或密碼錯誤，請重新確認');
+                            if(detail === 'user_disabled') throw new Error('登入失敗：此帳號已被系統停用');
                             
                             // 顯示最詳細的錯誤根因
                             throw new Error(`請求失敗 [狀態碼 ${res.status}]: ${detail}`);
