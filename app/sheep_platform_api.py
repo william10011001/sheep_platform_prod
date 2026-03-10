@@ -1020,6 +1020,11 @@ def claim_task(
     if not str(dh.get("data_hash") or "").strip():
         logger.info(f"Initialize data sync for pool: {task.get('symbol')} {task.get('timeframe_min')}m")
         try:
+            # [最大化顯示錯誤與狀態] 提前寫入任務進度，讓 UI 立刻知道伺服器正在同步資料，而非卡在未知狀態直到 Timeout
+            prog_sync = dict(progress)
+            prog_sync.update({"phase": "sync_data", "phase_msg": "伺服器端正在同步歷史 K 線資料 (初次建置將耗時較久)..."})
+            db.update_task_progress(int(task["id"]), prog_sync)
+            
             csv_main, _ = bt.ensure_bitmart_data(
                 symbol=str(task.get("symbol") or ""),
                 main_step_min=int(task.get("timeframe_min") or 0),

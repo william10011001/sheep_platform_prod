@@ -74,6 +74,17 @@
         .custom-tooltip.tooltip-right-edge .tooltip-text::after {
             left: auto; right: 12px; margin-left: 0;
         }
+        
+        /* 新增：動態進度條動畫 */
+        @keyframes progress-stripes {
+            from { background-position: 1rem 0; }
+            to { background-position: 0 0; }
+        }
+        .progress-indeterminate {
+            background-image: linear-gradient(45deg, rgba(255,255,255,0.15) 25%, transparent 25%, transparent 50%, rgba(255,255,255,0.15) 50%, rgba(255,255,255,0.15) 75%, transparent 75%, transparent);
+            background-size: 1rem 1rem;
+            animation: progress-stripes 1s linear infinite;
+        }
     </style>
 </head>
 <body>
@@ -173,13 +184,18 @@
                                             <span class="text-slate-500 ml-2">({{ getPhaseText(t) }})</span>
                                         </td>
                                         <td class="py-4 px-6">
-                                            <div class="flex flex-col gap-2 w-36 ml-auto">
-                                                <div class="flex justify-between text-[14px]">
-                                                    <span class="text-slate-400">{{ getProgress(t) }}</span>
-                                                    <span class="text-slate-300">{{ getProgressPercent(t) }}%</span>
+                                            <div class="flex flex-col gap-2 w-48 ml-auto">
+                                                <div class="flex justify-between text-[13px]">
+                                                    <span class="text-slate-300 font-medium tracking-wide">{{ getProgressState(t).text }}</span>
+                                                    <span class="text-white font-bold" v-if="!getProgressState(t).isIndeterminate || getProgressState(t).percent === 100">{{ getProgressState(t).percent }}%</span>
                                                 </div>
-                                                <div class="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
-                                                    <div class="bg-gradient-to-r from-blue-500 to-indigo-400 h-1.5 rounded-full transition-all duration-500" :style="{width: getProgressPercent(t) + '%'}"></div>
+                                                <div class="w-full bg-slate-800/80 rounded-full h-2 overflow-hidden border border-white/5">
+                                                    <div class="h-full rounded-full transition-all duration-500 bg-gradient-to-r" 
+                                                         :class="[getProgressState(t).colorClass, { 'progress-indeterminate': getProgressState(t).isIndeterminate }]" 
+                                                         :style="{width: getProgressState(t).percent + '%'}"></div>
+                                                </div>
+                                                <div v-if="t.status === 'error'" class="text-[11px] text-red-400 mt-0.5 truncate max-w-[12rem]" :title="getProgressState(t).errorDetail">
+                                                    根因: {{ getProgressState(t).errorDetail }}
                                                 </div>
                                             </div>
                                         </td>
@@ -604,15 +620,53 @@
                     } 
                 };
 
-                const getProgress = (t) => { try { const p = JSON.parse(t.progress_json||'{}'); return p.combos_total ? `${p.combos_done} / ${p.combos_total}` : '-'; } catch(e){return '-';} };
-                
-                // 👉 修復：補上計算進度百分比的函數
-                const getProgressPercent = (t) => { 
-                    try { 
-                        const p = JSON.parse(t.progress_json||'{}'); 
-                        if (!p.combos_total) return 0;
-                        return Math.min(100, Math.round((p.combos_done / p.combos_total) * 100));
-                    } catch(e) { return 0; } 
+                // 👉 全新精準進度條核心邏輯：針對每一個準備階段給予獨立的進度計算與動態顯示，最大化錯誤資訊
+                const getProgressState = (t) => {
+                    try {
+                        const p = JSON.parse(t.progress_json || '{}');
+                        const phase = p.phase || 'idle';
+                        const status = t.status || 'assigned';
+                        const errorDetail = p.last_error || p.detail || p.phase_msg || '未知錯誤';
+
+                        if (status === 'error') {
+                            return { text: '程序異常', percent: 100, isIndeterminate: false, colorClass: 'from-red-600 to-red-500', errorDetail: errorDetail };
+                        }
+                        if (status === 'completed') {
+                            return { text: '運算完成', percent: 100, isIndeterminate: false, colorClass: 'from-emerald-500 to-emerald-400', errorDetail: '' };
+                        }
+
+                        if (phase === 'sync_data') {
+                            if (p.sync_total && p.sync_total > 0) {
+                                const pct = Math.min(100, Math.round((p.sync_done / p.sync_total) * 100));
+                                return { text: `同步資料 (${p.sync_done}/${p.sync_total})`, percent: pct, isIndeterminate: false, colorClass: 'from-cyan-500 to-blue-500', errorDetail: '' };
+                            }
+                            return { text: p.phase_msg || '同步伺服器資料中...', percent: 100, isIndeterminate: true, colorClass: 'from-cyan-500 to-blue-500', errorDetail: '' };
+                        }
+
+                        if (phase === 'build_grid') {
+                            if (p.build_total && p.build_total > 0) {
+                                const pct = Math.min(100, Math.round((p.build_done / p.build_total) * 100));
+                                return { text: `建構網格 (${p.build_done}/${p.build_total})`, percent: pct, isIndeterminate: false, colorClass: 'from-purple-500 to-pink-500', errorDetail: '' };
+                            }
+                            return { text: '建構參數網格中...', percent: 100, isIndeterminate: true, colorClass: 'from-purple-500 to-pink-500', errorDetail: '' };
+                        }
+
+                        if (phase === 'grid_search' || phase === 'running' || status === 'running') {
+                            if (p.combos_total && p.combos_total > 0) {
+                                const pct = Math.min(100, Math.round((p.combos_done / p.combos_total) * 100));
+                                return { text: `參數運算 (${p.combos_done}/${p.combos_total})`, percent: pct, isIndeterminate: false, colorClass: 'from-blue-500 to-indigo-400', errorDetail: '' };
+                            }
+                            return { text: '準備開始運算...', percent: 100, isIndeterminate: true, colorClass: 'from-blue-500 to-indigo-400', errorDetail: '' };
+                        }
+
+                        if (status === 'assigned' || status === 'queued') {
+                            return { text: '等待分配算力...', percent: 100, isIndeterminate: true, colorClass: 'from-amber-500 to-orange-400', errorDetail: '' };
+                        }
+
+                        return { text: '初始化...', percent: 0, isIndeterminate: true, colorClass: 'from-slate-500 to-slate-400', errorDetail: '' };
+                    } catch (e) {
+                        return { text: '狀態讀取中...', percent: 0, isIndeterminate: true, colorClass: 'from-slate-500 to-slate-400', errorDetail: '' };
+                    }
                 };
 
                 const getScoreNumber = (t) => { 
@@ -649,7 +703,7 @@
                     user, isLoading, isLoginMode, currentTab, authForm, errorMsg, handleAuth, logout, 
                     toastMsg, toastType, // 導出供 UI 使用
                     dashData, tasksData, leaderboard, pingMs, startMining, stopMining, 
-                    getStatusText, getPhaseText, getProgress, getProgressPercent, getScore, getScoreNumber,
+                    getStatusText, getPhaseText, getProgressState, getScore, getScoreNumber,
                     loadTasks, getShortPoolName, getScoreColorClass, formatDate,
                     activeTasks, paginatedCompletedTasks, ratingCurrentPage, totalRatingPages, changeRatingPage,
                     getOosStatus, submitReview
