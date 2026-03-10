@@ -418,12 +418,15 @@ class JobManager:
                                     to_orphan.append(tid)
                             
                             if to_orphan:
-                                print(f"[SYSTEM] 偵測到 {len(to_orphan)} 個卡死的執行緒，發送中止訊號並等待自然回收。")
+                                print(f"[SYSTEM] 偵測到 {len(to_orphan)} 個卡死的執行緒，發送中止訊號並強制釋放名額。")
                                 for tid in to_orphan:
                                     flag = self._stop_flags.get(tid)
                                     if flag:
                                         flag.set()
-                                    # 保留 dict 參考，讓 _cleanup_finished_locked 自然回收，避免執行緒無限增生耗盡記憶體
+                                    # [專家級修復] 絕對不能保留參考！否則卡死的執行緒會永遠佔用 max_concurrent_jobs 名額，
+                                    # 導致後續任務全部卡在 queued 而進度為 0。強制 pop 釋放名額讓系統繼續運轉！
+                                    self._threads.pop(tid, None)
+                                    self._stop_flags.pop(tid, None)
 
                         self._auto_enqueue_orphans()
                     except Exception as clean_err:
@@ -557,6 +560,59 @@ class JobManager:
             )
             db.update_task_progress(task_id, progress)
 
+            # ==== [專家級修復] 提前計算參數組合與分配數量，避免空任務浪費資源拉取 K 線 ====
+            if not isinstance(grid_spec, dict):
+                grid_spec = {}
+            try:
+                combos = bt_module.grid_combinations_from_ui(family, grid_spec)
+            except Exception as grid_err:
+                raise ValueError(f"格點生成失敗: {str(grid_err)}")
+
+            if not combos:
+                raise ValueError(f"格點參數展開為空，請檢查策略池參數範圍設定。")
+            
+            safe_cycle_id = int(task.get("cycle_id") if task.get("cycle_id") is not None else 0)
+            safe_pool_seed = int(pool.get("seed") if pool.get("seed") is not None else 0)
+            safe_partition_idx = int(partition_idx if partition_idx is not None else 0)
+            safe_num_parts = int(num_partitions if num_partitions is not None else 1)
+            
+            final_seed = safe_pool_seed ^ (safe_cycle_id & 0x7FFFFFFF)
+            rng = random.Random(final_seed)
+            rng.shuffle(combos)
+            
+            if safe_num_parts <= 0: safe_num_parts = 1
+            part = combos[safe_partition_idx % safe_num_parts :: safe_num_parts]
+
+            risk_grid = _build_risk_grid(risk_spec)
+            if family in ("TEMA_RSI", "LaguerreRSI_TEMA"):
+                mh_min = int(risk_spec.get("max_hold_min", 4))
+                mh_max = int(risk_spec.get("max_hold_max", 80))
+                mh_step = max(1, int(risk_spec.get("max_hold_step", 4)))
+                mh_list = list(range(mh_min, mh_max + 1, mh_step))
+                risk_grid = [(0.0, 0.0, int(mh)) for mh in mh_list]
+                
+            # [致命漏洞修復] 當自訂的 Risk Grid 參數錯誤時(例如 tp_min > tp_max 導致空陣列)，強制保留一組預設參數
+            if not risk_grid and family not in ("TEMA_RSI", "LaguerreRSI_TEMA"):
+                risk_grid = [(float(risk_spec.get("tp_min", 0.3))/100.0, float(risk_spec.get("sl_min", 0.3))/100.0, int(risk_spec.get("max_hold_min", 10)))]
+
+            combos_total = int(len(part) * max(1, len(risk_grid)))
+
+            # [效能防護] 如果此分片被分配到的任務數為 0，直接標記完成，跳過後續 K 線下載與運算！
+            if combos_total == 0:
+                progress["phase"] = "completed"
+                progress["phase_msg"] = "此分片無分配到任何參數組合，已自動完成。"
+                progress["combos_total"] = 0
+                progress["combos_done"] = 0
+                progress["storage_status"] = "SKIPPED_EMPTY_PARTITION"
+                progress["updated_at"] = db.utc_now_iso()
+                db.update_task_progress(task_id, progress)
+                db.update_task_status(task_id, "completed", finished=True)
+                with self._lock:
+                    self._threads.pop(task_id, None)
+                    self._stop_flags.pop(task_id, None)
+                return
+            # ==== 提前計算結束 ====
+
             _SYNC_RE = re.compile(r"^\s*(\S+)\s+已寫入\s+(\d+)\s*/\s*(\d+)\s*$")
             t0 = time.time()  # 記錄起始時間，讓同步階段也能計算耗時
 
@@ -646,45 +702,8 @@ class JobManager:
                 return
 
             progress["phase"] = "build_grid"
-            progress["phase_msg"] = "正在展開格點參數組合..."
+            progress["phase_msg"] = "正在準備運算資源..."
             db.update_task_progress(task_id, progress)
-
-            # [參數驗證] 確保 grid_spec 為有效字典
-            if not isinstance(grid_spec, dict):
-                grid_spec = {}
-                
-            try:
-                combos = bt_module.grid_combinations_from_ui(family, grid_spec)
-            except Exception as grid_err:
-                raise ValueError(f"格點生成失敗: {str(grid_err)}。請檢查策略池參數設定。")
-
-            # [防護機制] 檢查展開後的組合是否為空
-            if not combos:
-                raise ValueError(f"格點參數展開為空 (Count=0)，請檢查策略池 ({pool.get('name', 'Unknown')}) 的參數範圍設定是否合理。")
-            
-            # [深度防御] 確保所有參與種子計算的數值皆非 None 且型別正確
-            safe_cycle_id = int(task.get("cycle_id") if task.get("cycle_id") is not None else 0)
-            safe_pool_seed = int(pool.get("seed") if pool.get("seed") is not None else 0)
-            safe_partition_idx = int(partition_idx if partition_idx is not None else 0)
-            safe_num_parts = int(num_partitions if num_partitions is not None else 1)
-            
-            final_seed = safe_pool_seed ^ (safe_cycle_id & 0x7FFFFFFF)
-            rng = random.Random(final_seed)
-            rng.shuffle(combos)
-            
-            # 嚴格分片，防止 partition_idx 超出 num_partitions
-            if safe_num_parts <= 0: safe_num_parts = 1
-            part = combos[safe_partition_idx % safe_num_parts :: safe_num_parts]
-
-            risk_grid = _build_risk_grid(risk_spec)
-            if family in ("TEMA_RSI", "LaguerreRSI_TEMA"):
-                mh_min = int(risk_spec.get("max_hold_min", 4))
-                mh_max = int(risk_spec.get("max_hold_max", 80))
-                mh_step = max(1, int(risk_spec.get("max_hold_step", 4)))
-                mh_list = list(range(mh_min, mh_max + 1, mh_step))
-                risk_grid = [(0.0, 0.0, int(mh)) for mh in mh_list]
-
-            combos_total = int(len(part) * max(1, len(risk_grid)))
 
             sconn = db._conn()
             try:
