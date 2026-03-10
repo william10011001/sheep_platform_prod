@@ -470,6 +470,10 @@
                         const contentType = res.headers.get("content-type") || "";
                         if (!contentType.includes("application/json")) {
                             const badText = await res.text();
+                            // [專家級修復] 遇到 Cloudflare 520 / Nginx 502 等錯誤 HTML 時，給予友善提示，隱藏龐大代碼
+                            if (badText.includes('<html') || badText.includes('Cloudflare') || badText.includes('502 Bad Gateway')) {
+                                throw new Error(`系統連線異常 (伺服器重啟或升級中)，請稍後再試。`);
+                            }
                             throw new Error(`API 路由錯誤：預期收到 JSON，卻收到 ${contentType} (內容預覽：${badText.substring(0, 50)}...)`);
                         }
                         return await res.json();
@@ -560,6 +564,11 @@
                             // [專家級修復] 針對 401 狀態碼翻譯，提供使用者友善的白話文錯誤
                             if(detail === 'bad_credentials') throw new Error('登入失敗：帳號或密碼錯誤，請重新確認');
                             if(detail === 'user_disabled') throw new Error('登入失敗：此帳號已被系統停用');
+                            
+                            // [專家級修復] 攔截 Cloudflare 520 / 502 等伺服器離線回傳的龐大 HTML，避免擠爆畫面
+                            if (fullError.includes('<html') || fullError.includes('Cloudflare')) {
+                                throw new Error(`伺服器暫時離線或重啟中 (狀態碼 ${res.status})，請等待 30 秒後再試。`);
+                            }
                             
                             // 顯示最詳細的錯誤根因
                             throw new Error(`請求失敗 [狀態碼 ${res.status}]: ${detail}`);
