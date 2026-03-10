@@ -2973,7 +2973,7 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
                 WHERE t.updated_at >= ? AND t.updated_at <= ?
                 GROUP BY u.id, u.username, u.nickname
                 ORDER BY total_done DESC
-                LIMIT 50
+                LIMIT 300
             """
         else:
             sql_combos = """
@@ -2984,7 +2984,7 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
                 WHERE t.updated_at >= ? AND t.updated_at <= ?
                 GROUP BY u.id
                 ORDER BY total_done DESC
-                LIMIT 50
+                LIMIT 300
             """
         
         try:
@@ -3003,7 +3003,7 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
             WHERE c.created_at >= ?
             GROUP BY u.id
             ORDER BY max_score DESC
-            LIMIT 50
+            LIMIT 300
         """
         try:
             rows = conn.execute(sql_score, (cutoff_iso,)).fetchall()
@@ -3020,7 +3020,7 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
             WHERE t.updated_at >= ? AND t.status IN ('completed', 'running')
             GROUP BY u.id
             ORDER BY total_seconds DESC
-            LIMIT 50
+            LIMIT 300
         """
         try:
             rows = conn.execute(sql_time, (cutoff_iso,)).fetchall()
@@ -3038,7 +3038,7 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
             WHERE p.created_at >= ?
             GROUP BY u.id
             ORDER BY total_usdt DESC
-            LIMIT 50
+            LIMIT 300
         """
         rows = conn.execute(sql_points, (cutoff_iso,)).fetchall()
         results["points"] = [dict(r) for r in rows if r["total_usdt"] and r["total_usdt"] > 0]
