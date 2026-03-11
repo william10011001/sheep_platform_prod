@@ -8575,7 +8575,7 @@ def main() -> None:
     if "_sheep_fresh_load" not in st.session_state:
         st.session_state["_sheep_fresh_load"] = True
         st.session_state["nav_page"] = "主頁"
-        # [優化] 延遲寫入 query params，避免在啟動最繁忙時阻塞主執行緒導致 502
+        # [優化] 使用 session_state 作為唯一狀態源，僅在必要時延遲同步至 URL
         if "nav_page_pending" not in st.session_state:
             st.session_state["nav_page_pending"] = "主頁"
     else:

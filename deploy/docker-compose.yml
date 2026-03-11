@@ -81,11 +81,10 @@ services:
     environment:
       SHEEP_DB_URL: "${DO_PG_URL}"
       SHEEP_DB_PATH: ""
-      SHEEP_GIT_SHA: ${SHEEP_GIT_SHA:-unknown}
-      # [極致同步] 確保 UI 與 API 使用相同的管理員憑證，防止初始化資料庫時產生競爭衝突
-      SHEEP_COMPUTE_USER: ${SHEEP_BOOTSTRAP_ADMIN_USER}
-      SHEEP_COMPUTE_PASS: ${SHEEP_BOOTSTRAP_ADMIN_PASS}
-      # 強制開啟 Python 輸出緩衝，確保 docker logs 能即時看到 UI 錯誤
+      SHEEP_GIT_SHA: "${SHEEP_GIT_SHA:-unknown}"
+      # [極致同步] 引用 API 相同的管理員憑證環境變數名
+      SHEEP_COMPUTE_USER: "${SHEEP_BOOTSTRAP_ADMIN_USER}"
+      SHEEP_COMPUTE_PASS: "${SHEEP_BOOTSTRAP_ADMIN_PASS}"
       PYTHONUNBUFFERED: "1"
     depends_on:
       api:
