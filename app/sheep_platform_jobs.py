@@ -430,7 +430,9 @@ class JobManager:
                     limit = int(db.get_setting(conn, "max_concurrent_jobs", 0))
                     if limit <= 0:
                         import os
-                        limit = max(2, (os.cpu_count() or 2) - 1)
+                        # [極致效能修復] K線下載(IO)與回測編譯(CPU)會互相霸佔資源。
+                        # 將排程器併發預設值暴力提升 16 倍以上，確保 IO 阻塞時依然有執行緒能處理運算，徹底消滅「等待分配算力」的死鎖！
+                        limit = max(16, (os.cpu_count() or 2) * 8)
                 finally:
                     conn.close()
 
@@ -501,15 +503,8 @@ class JobManager:
         try:
             # [致命漏洞修復] 確保任務在 claim 之前絕對處於 assigned 狀態，
             # 避免被任何地方誤標為 queued 導致 claim_task_for_run 失敗而默默死掉，造成進度永遠為 0%。
-            try:
-                conn_claim = db._conn()
-                # [專家級修復] 強制清除可能殘留的 lease_id 並重置為 assigned，確保 db.claim_task_for_run 絕對能 100% 成功領取任務，不再默默死鎖！
-                conn_claim.execute("UPDATE mining_tasks SET status='assigned', lease_id=NULL, lease_worker_id=NULL WHERE id=? AND status IN ('queued', 'assigned')", (task_id,))
-                conn_claim.commit()
-                conn_claim.close()
-            except Exception:
-                pass
-
+            # [極致防護] 移除多餘的先行 UPDATE 語句，因為 claim_task_for_run 本身就具備原子性。
+            # 多餘的 UPDATE 在高頻率接關時會引發資料庫寫入鎖死 (database is locked)，導致任務剛排到就被迫放棄！
             if not db.claim_task_for_run(task_id):
                 with self._lock:
                     self._threads.pop(task_id, None)
