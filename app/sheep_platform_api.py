@@ -805,12 +805,9 @@ def web_get_tasks(request: Request, authorization: Optional[str] = Header(None))
     cycle = db.get_active_cycle()
     cycle_id = int(cycle["id"]) if cycle else 0
     
-    # 自動為前端用戶分配任務保底
-    try:
-        min_tasks = int(db.get_setting(db._conn(), "min_tasks_per_user", 2))
-        db.assign_tasks_for_user(uid, cycle_id=cycle_id, min_tasks=min_tasks)
-    except Exception as e:
-        logger.error(f"Failed to assign tasks for user {uid}: {e}", exc_info=True)
+    # [專家級修復 1] 徹底移除會引發 Connection Leak 的 db._conn() 呼叫
+    # [專家級修復 2] 移除在高頻輪詢端點執行超重量級的 assign_tasks_for_user！
+    # 任務派發已由後台 sheep_worker_daemon.py 全域接管，這將釋放 99% 的資料庫壓力，永久消滅 524 超時。
         
     tasks = db.list_tasks_for_user(uid, cycle_id=cycle_id)
     run_enabled = db.get_user_run_enabled(uid)

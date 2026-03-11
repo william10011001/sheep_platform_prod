@@ -795,9 +795,19 @@
                     return s >= 0 ? 'text-emerald-400' : 'text-red-400';
                 };
 
+                // [專家級防護] 防止網路緩慢時，3秒定時器狂發請求把 API 伺服器打死 (524 Timeout 的肇因之一)
+                let isPolling = false;
+                const safePoll = async () => {
+                    if(currentTab.value === 'tasks' && !isPolling && user.value) {
+                        isPolling = true;
+                        await loadTasks();
+                        isPolling = false;
+                    }
+                };
+
                 onMounted(() => {
                     checkAuth();
-                    pollTimer = setInterval(() => { if(currentTab.value === 'tasks') loadTasks(); }, 3000);
+                    pollTimer = setInterval(safePoll, 3000);
                     // 啟動 1000ms 畫面更新引擎
                     tickTimer = setInterval(() => { localNow.value = Date.now(); }, 1000);
                 });
