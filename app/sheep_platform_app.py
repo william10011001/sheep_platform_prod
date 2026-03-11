@@ -8575,11 +8575,9 @@ def main() -> None:
     if "_sheep_fresh_load" not in st.session_state:
         st.session_state["_sheep_fresh_load"] = True
         st.session_state["nav_page"] = "主頁"
-        try:
-            st.query_params["page"] = "主頁"
-        except Exception as query_err:
-            import traceback
-            print(f"[WARN] 無法寫入 query params: {query_err}\n{traceback.format_exc()}")
+        # [優化] 延遲寫入 query params，避免在啟動最繁忙時阻塞主執行緒導致 502
+        if "nav_page_pending" not in st.session_state:
+            st.session_state["nav_page_pending"] = "主頁"
     else:
         # 利用 URL 查詢參數持久化當前頁面狀態
         try:
