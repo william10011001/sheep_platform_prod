@@ -819,6 +819,28 @@ def web_start_tasks(request: Request, authorization: Optional[str] = Header(None
     uid = int(ctx["user"]["id"])
     db.set_user_run_enabled(uid, True)
     return {"ok": True}
+
+@app.get("/admin/candidates/all")
+def admin_get_all_candidates(request: Request, authorization: Optional[str] = Header(None)):
+    """
+    [專家級除錯與防護] 
+    1. 嚴格驗證 admin 權限，防止越權存取。
+    2. 最大化錯誤捕捉，若 DB 查詢失敗會回傳完整 traceback 以供除錯。
+    """
+    ctx = _auth_ctx(request, authorization)
+    if str(ctx["user"].get("role")) != "admin":
+        db.log_sys_event("ADMIN_API_REJECTED", ctx["user"].get("id"), "非管理員嘗試存取候選人總表 API", {"ip": _client_ip(request)})
+        raise HTTPException(status_code=403, detail="forbidden: admin only")
+    
+    try:
+        # 將 limit 拉高，確保能撈取足夠多的組合回傳給 Excel 端 (預設撈取前 10000 筆)
+        data = db.get_all_candidates_detailed(limit=10000)
+        return {"ok": True, "candidates": data}
+    except Exception as e:
+        import traceback
+        err_str = traceback.format_exc()
+        logger.error(f"[API ERROR] 取得所有候選人失敗: {err_str}")
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {e}\n{err_str}")
 @app.post("/tasks/oos/claim")
 def api_claim_oos(
     request: Request,
