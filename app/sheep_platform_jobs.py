@@ -325,7 +325,7 @@ class JobManager:
                   AND COALESCE(u.disabled, 0) = 0
                   AND COALESCE(u.run_enabled, 1) = 1
                   AND COALESCE(p.active, 1) = 1
-                ORDER BY t.id ASC
+                ORDER BY t.cycle_id DESC, t.id ASC
                 """
             ).fetchall()
         finally:
@@ -934,7 +934,7 @@ class JobManager:
                                 progress["phase_msg"] = "時間切片：進度已保存，等待下一輪排程..."
                                 progress["updated_at"] = db.utc_now_iso()
                                 db.update_task_progress(task_id, progress)
-                                db.update_task_status(task_id, "assigned")
+                                db.update_task_status(task_id, "queued")
                                 return
 
                             if done - last_commit >= 300 or (time.time() - last_commit_ts) >= 4.0:

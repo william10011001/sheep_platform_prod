@@ -686,7 +686,7 @@
 
                         // [專家級防呆] 加入 run_enabled 判斷，若使用者已點擊結束挖礦，則不應顯示為運行或切片中
                         const userRunEnabled = tasksData.run_enabled;
-                        const isEffectivelyRunning = (isRunning || (status === 'queued' && done > 0 && total > 0)) && userRunEnabled;
+                        const isEffectivelyRunning = (isRunning || ((status === 'queued' || status === 'assigned') && done > 0 && total > 0)) && userRunEnabled;
 
                         if (!userRunEnabled && (status === 'queued' || status === 'assigned')) {
                             const pct = total > 0 ? Math.round((done / total) * 100) : 0;
