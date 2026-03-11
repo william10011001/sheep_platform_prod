@@ -73,18 +73,44 @@ services:
     #       cpus: '1.5'          # 限制最多只能使用 1.5 個 CPU 核心
     #       memory: 2G           # 限制最多只能使用 2GB 記憶體
 
-  worker:
+  # [UI 網頁服務] 執行 Streamlit 介面，監聽 8501 埠號
+  ui:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.ui
     environment:
       SHEEP_DB_URL: "${DO_PG_URL}"
       SHEEP_DB_PATH: ""
-      SHEEP_GIT_SHA: ${SHEEP_GIT_SHA}
+      SHEEP_GIT_SHA: ${SHEEP_GIT_SHA:-unknown}
+      # 強制開啟 Python 輸出緩衝，確保 docker logs 能即時看到 UI 錯誤
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      api:
+        condition: service_healthy
+    volumes:
+      - ${SHEEP_HOST_DATA_DIR:-../app/data}:/app/data
+    restart: always
+    healthcheck:
+      # 主動監控 Streamlit 內部健康檢查介面
+      test: ["CMD", "curl", "-fsS", "http://localhost:8501/app/_stcore/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # [Worker 後台服務] 專職負責任務分配，使用較輕量的 api 鏡像
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.api
+    environment:
+      SHEEP_DB_URL: "${DO_PG_URL}"
+      SHEEP_DB_PATH: ""
+      SHEEP_GIT_SHA: ${SHEEP_GIT_SHA:-unknown}
       SHEEP_RUN_SCHEDULER: "1"
       SHEEP_ASSIGN_INTERVAL_S: "15"
       SHEEP_MIN_TASKS: "2"
       SHEEP_MAX_TASKS: "6"
+      PYTHONUNBUFFERED: "1"
     depends_on:
       api:
         condition: service_healthy
@@ -126,7 +152,11 @@ services:
       - certbot_www:/var/www/certbot
       - certbot_conf:/etc/letsencrypt
     depends_on:
-      - api
+      # 確保 API 與 UI 皆健康後 Nginx 才開始轉發，防止啟動瞬間的 502
+      api:
+        condition: service_healthy
+      ui:
+        condition: service_healthy
     restart: always
 
   certbot:
