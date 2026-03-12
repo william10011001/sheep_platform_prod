@@ -6726,16 +6726,25 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
         with top_b:
             prog_text = "-"
             sync = prog.get("sync")
-            if combos_total > 0:
+            if phase in ("grid_search", "completed") and combos_total > 0:
                 prog_text = f"{int(combos_done)} / {int(combos_total)}"
-            elif phase == "sync_data" and isinstance(sync, dict):
-                items = sync.get("items")
-                cur = str(sync.get("current") or "")
-                if isinstance(items, dict) and cur in items:
-                    done_i = int(items[cur].get("done", 0))
-                    total_i = int(items[cur].get("total", 0))
-                    if total_i > 0:
-                        prog_text = f"{cur} {done_i}/{total_i}"
+            elif phase == "sync_data":
+                if isinstance(sync, dict):
+                    items = sync.get("items")
+                    cur = str(sync.get("current") or "")
+                    if isinstance(items, dict) and cur in items:
+                        done_i = int(items[cur].get("done", 0))
+                        total_i = int(items[cur].get("total", 0))
+                        if total_i > 0:
+                            prog_text = f"{cur} {done_i}/{total_i}"
+                if prog_text == "-":
+                    import re
+                    _SYNC_RE = re.compile(r"^\s*(\S+)\s+已寫入\s+(\d+)\s*/\s*(\d+)\s*$")
+                    m = _SYNC_RE.match(phase_msg)
+                    if m:
+                        prog_text = f"{m.group(1)} {m.group(2)}/{m.group(3)}"
+            elif phase == "build_grid":
+                prog_text = "資源整備中"
             st.markdown(f'<div class="small-muted">運算進度</div><div style="font-size:20px; font-weight:700; color:#f8fafc; font-family:monospace;">{prog_text}</div>', unsafe_allow_html=True)
         with top_c:
             elapsed_s = prog.get("elapsed_s")
@@ -6762,7 +6771,7 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                     st.code(prog.get("debug_traceback"), language="python") 
 
         sync = prog.get("sync")
-        if combos_total > 0:
+        if phase in ("grid_search", "completed") and combos_total > 0:
             st.progress(min(1.0, float(combos_done) / float(combos_total)))
         elif phase == "sync_data":
             items = sync.get("items") if isinstance(sync, dict) else None
@@ -6782,8 +6791,11 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                     if tot > 0:
                         st.markdown(f'<div class="small-muted">資料處理 {k}：{d}/{tot}</div>', unsafe_allow_html=True)
                         st.progress(min(1.0, float(d) / float(tot)))
+            else:
+                if isinstance(phase_progress, (int, float)):
+                    st.progress(max(0.0, min(1.0, float(phase_progress))))
         elif isinstance(phase_progress, (int, float)):
-            st.progress(float(phase_progress))
+            st.progress(max(0.0, min(1.0, float(phase_progress))))
 
         grid_a, grid_b = st.columns([1.3, 1.0])
         with grid_a:
@@ -6852,13 +6864,38 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                                     prog_data = json.loads(trow.get("progress_json") or "{}")
                                     prog_data["phase"] = "idle"
                                     prog_data["last_error"] = ""
+                                    # 專家級防護：徹底清除上一輪的殘留髒數據
+                                    prog_data.pop("combos_done", None)
+                                    prog_data.pop("combos_total", None)
+                                    prog_data.pop("phase_progress", None)
+                                    prog_data.pop("sync", None)
                                     db.update_task_progress(t_id, prog_data)
                                 except Exception:
                                     pass
                             st.rerun()
                 st.markdown(f'<div style="text-align:right; font-size:12px; color:#64748b; margin-top:8px;">節點並行上限: {int(max_concurrent_jobs)}</div>', unsafe_allow_html=True)
             else:
-                st.caption("客戶端運算節點模式，接受排程分配。")
+                st.caption("用戶端接受排程分配。")
+                # [專家級防護] 賦予 Worker 模式的用戶「強制重置」的權限！
+                # 解決因為網路超時斷線導致的「伺服器認為任務在跑，但 EXE 認為沒任務」的死鎖狀態。
+                if v_status in ("running", "error", "queued") or phase in ("error", "sync_data"):
+                    if st.button("強制重置任務", key=f"reset_w_{t_id}", use_container_width=True):
+                        db.update_task_status(t_id, "assigned")
+                        trow = db.get_task(t_id)
+                        if trow:
+                            try:
+                                import json
+                                prog_data = json.loads(trow.get("progress_json") or "{}")
+                                prog_data["phase"] = "idle"
+                                prog_data["last_error"] = ""
+                                prog_data.pop("combos_done", None)
+                                prog_data.pop("combos_total", None)
+                                prog_data.pop("phase_progress", None)
+                                prog_data.pop("sync", None)
+                                db.update_task_progress(t_id, prog_data)
+                            except Exception:
+                                pass
+                        st.rerun()
 
         if best_any_params:
             with st.expander("最佳參數", expanded=False):

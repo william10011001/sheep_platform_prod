@@ -1041,16 +1041,24 @@ def claim_task(
         try:
             # [最大化顯示錯誤與狀態] 提前寫入任務進度，讓 UI 立刻知道伺服器正在同步資料，而非卡在未知狀態直到 Timeout
             prog_sync = dict(progress)
-            prog_sync.update({"phase": "sync_data", "phase_msg": "伺服器端正在同步歷史 K 線資料 (初次建置將耗時較久)..."})
+            # [專家級除錯] 徹底清空上一輪殘留的總量與階段資料，防止 UI 因為 combos_total > 0 誤判為 100% 滿進度條
+            prog_sync.pop("combos_done", None)
+            prog_sync.pop("combos_total", None)
+            prog_sync.pop("sync", None)
+            prog_sync.update({
+                "phase": "sync_data", 
+                "phase_progress": 0.0, 
+                "phase_msg": "伺服器端正在同步歷史 K 線資料 (初次建置將耗時較久)..."
+            })
             db.update_task_progress(int(task["id"]), prog_sync)
             
             csv_main, _ = bt.ensure_bitmart_data(
-                symbol=str(task.get("symbol") or ""),
-                main_step_min=int(task.get("timeframe_min") or 0),
-                years=int(years),
-                auto_sync=True,
-                skip_1m=True
-            )
+            symbol=str(task.get("symbol") or ""),
+            main_step_min=int(task.get("timeframe_min") or 0),
+            years=int(years),
+            auto_sync=True,
+            skip_1m=True
+        )
             
             # 2. 檔案存取安全檢查 (FileLock 會在 bt 模組內處理)
             if os.path.exists(csv_main):
