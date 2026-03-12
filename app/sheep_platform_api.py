@@ -1039,45 +1039,55 @@ def claim_task(
     if not str(dh.get("data_hash") or "").strip():
         logger.info(f"Initialize data sync for pool: {task.get('symbol')} {task.get('timeframe_min')}m")
         try:
-            # [最大化顯示錯誤與狀態] 提前寫入任務進度，讓 UI 立刻知道伺服器正在同步資料，而非卡在未知狀態直到 Timeout
+            # [專家級防護] 伺服器初次下載 K 線時，改為非同步背景執行，並暫時將狀態設為 syncing。
+            # 徹底杜絕 Cloudflare 100 秒超時機制切斷連線，導致 EXE 崩潰並留下幽靈 running 任務。
+            db.update_task_status(int(task["id"]), "syncing")
+            
             prog_sync = dict(progress)
-            # [專家級除錯] 徹底清空上一輪殘留的總量與階段資料，防止 UI 因為 combos_total > 0 誤判為 100% 滿進度條
             prog_sync.pop("combos_done", None)
             prog_sync.pop("combos_total", None)
             prog_sync.pop("sync", None)
             prog_sync.update({
                 "phase": "sync_data", 
                 "phase_progress": 0.0, 
-                "phase_msg": "伺服器端正在同步歷史 K 線資料 (初次建置將耗時較久)..."
+                "phase_msg": "伺服器端正在同步歷史 K 線資料 (背景建置中，請稍候)..."
             })
             db.update_task_progress(int(task["id"]), prog_sync)
             
-            csv_main, _ = bt.ensure_bitmart_data(
-            symbol=str(task.get("symbol") or ""),
-            main_step_min=int(task.get("timeframe_min") or 0),
-            years=int(years),
-            auto_sync=True,
-            skip_1m=True
-        )
-            
-            # 2. 檔案存取安全檢查 (FileLock 會在 bt 模組內處理)
-            if os.path.exists(csv_main):
-                file_size = os.path.getsize(csv_main)
-                if file_size > 1024:
-                    local_hash = _sha256_file(csv_main)
-                    # 3. 原子化寫入 DB
-                    db.set_data_hash(
-                        str(task.get("symbol") or ""), 
-                        int(task.get("timeframe_min") or 0), 
-                        int(years), 
-                        local_hash, 
-                        ts=_utc_iso()
+            def _bg_sync(tid, sym, tf, yrs, p_sync):
+                try:
+                    csv_main, _ = bt.ensure_bitmart_data(
+                        symbol=sym,
+                        main_step_min=tf,
+                        years=yrs,
+                        auto_sync=True,
+                        skip_1m=True
                     )
-                    dh = db.get_data_hash(str(task.get("symbol") or ""), int(task.get("timeframe_min") or 0), int(years))
-                else:
-                    raise RuntimeError(f"行情檔案損壞：路徑 {csv_main} 存在但大小僅 {file_size} Bytes，低於安全門檻。")
-            else:
-                raise RuntimeError(f"行情檔案遺失：預期路徑 {csv_main} 不存在。")
+                    if os.path.exists(csv_main):
+                        file_size = os.path.getsize(csv_main)
+                        if file_size > 1024:
+                            local_hash = _sha256_file(csv_main)
+                            db.set_data_hash(sym, tf, yrs, local_hash, ts=_utc_iso())
+                            
+                            # 同步完成，把任務放回 assigned 讓 Worker 自動再次領取
+                            p_sync["phase_msg"] = "伺服器資料準備完成，等待節點領取..."
+                            db.update_task_progress(tid, p_sync)
+                            db.update_task_status(tid, "assigned")
+                            return
+                except Exception as e:
+                    logger.error(f"BG Sync failed: {e}")
+                
+                # 發生異常或檔案不存在，標記為 error
+                p_sync["phase"] = "error"
+                p_sync["phase_msg"] = "伺服器同步失敗"
+                db.update_task_progress(tid, p_sync)
+                db.update_task_status(tid, "error")
+
+            import threading
+            threading.Thread(target=_bg_sync, args=(int(task["id"]), str(task.get("symbol") or ""), int(task.get("timeframe_min") or 0), int(years), prog_sync), daemon=True).start()
+            
+            # 直接回傳 None 讓 Client 先待命，直到背景執行緒把狀態改回 assigned
+            return None 
         except Exception as hash_err:
             logger.error(f"Data synchronization process failed: {hash_err}", exc_info=True)
             prog = dict(progress)

@@ -6639,7 +6639,8 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
             "completed": "程序完成",
             "expired": "許可逾期",
             "revoked": "權限撤銷",
-            "error": "程序異常"
+            "error": "程序異常",
+            "syncing": "同步建置中"
         }
         phase_map = {
             "idle": "待命",
@@ -6656,7 +6657,7 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
         def _pill_cls(kind: str) -> str:
             if kind in ("completed",): return "neutral"
             if kind in ("running",): return "neutral"
-            if kind in ("queued", "assigned"): return "warn"
+            if kind in ("queued", "assigned", "syncing"): return "warn"
             if kind in ("expired", "revoked", "error"): return "bad"
             return "neutral"
 
@@ -6878,7 +6879,7 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                 st.caption("用戶端接受排程分配。")
                 # [專家級防護] 賦予 Worker 模式的用戶「強制重置」的權限！
                 # 解決因為網路超時斷線導致的「伺服器認為任務在跑，但 EXE 認為沒任務」的死鎖狀態。
-                if v_status in ("running", "error", "queued") or phase in ("error", "sync_data"):
+                if v_status in ("running", "error", "queued", "syncing") or phase in ("error", "sync_data"):
                     if st.button("強制重置任務", key=f"reset_w_{t_id}", use_container_width=True):
                         db.update_task_status(t_id, "assigned")
                         trow = db.get_task(t_id)
