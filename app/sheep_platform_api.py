@@ -1015,6 +1015,24 @@ def claim_task(
     if not task:
         return None
 
+    # [致命修復] 確保 task 內絕對包含 lease_id，防止 Worker 因 missing_lease_id 而觸發例外崩潰
+    if not task.get("lease_id"):
+        conn = db._conn()
+        try:
+            row = conn.execute("SELECT lease_id FROM mining_tasks WHERE id=?", (int(task["id"]),)).fetchone()
+            if row and row["lease_id"]:
+                task["lease_id"] = str(row["lease_id"])
+            else:
+                import uuid
+                new_lease = uuid.uuid4().hex
+                conn.execute("UPDATE mining_tasks SET lease_id=?, lease_worker_id=? WHERE id=?", (new_lease, w["worker_id"], int(task["id"])))
+                conn.commit()
+                task["lease_id"] = new_lease
+        except Exception as e:
+            logger.error(f"Failed to inject lease_id: {e}")
+        finally:
+            conn.close()
+
     try:
         progress = json.loads(task.get("progress_json") or "{}")
     except Exception:
