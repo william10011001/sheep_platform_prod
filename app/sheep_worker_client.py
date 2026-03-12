@@ -387,7 +387,6 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
     last_sync_push_ts = 0.0
     last_sync_frac = -1.0
     last_sync_msg = ""
-    _SYNC_RE = re.compile(r"^\s*(\S+)\s+已寫入\s+(\d+)\s*/\s*(\d+)\s*$")
 
     def _progress_cb(frac: float, msg: str) -> None:
         if globals().get("GUI_QUEUE"):
@@ -408,24 +407,6 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
         progress["phase"] = "sync_data"
         progress["phase_progress"] = f
         progress["phase_msg"] = mmsg
-        
-        m = _SYNC_RE.match(mmsg)
-        if m:
-            label = str(m.group(1))
-            done_i = int(m.group(2))
-            total_i = int(m.group(3))
-
-            sync = progress.get("sync")
-            if not isinstance(sync, dict):
-                sync = {"items": {}, "current": ""}
-            items = sync.get("items")
-            if not isinstance(items, dict):
-                items = {}
-            items[label] = {"done": int(done_i), "total": int(total_i)}
-            sync["items"] = items
-            sync["current"] = label
-            progress["sync"] = sync
-
         try:
             api.progress(task_id, lease_id, progress)
         except Exception:
