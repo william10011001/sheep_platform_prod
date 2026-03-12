@@ -6576,7 +6576,7 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
 
     def _sort_task_priority(task_item: Dict[str, Any]) -> tuple:
         st_val = str(task_item.get("status") or "")
-        priority = {"running": 0, "queued": 1, "assigned": 2, "error": 3, "expired": 4, "revoked": 5, "completed": 6}
+        priority = {"running": 0, "syncing": 1, "queued": 2, "assigned": 3, "error": 4, "expired": 5, "revoked": 6, "completed": 7}
         return (priority.get(st_val, 9), -int(task_item.get("id") or 0))
 
     live_tasks = sorted(live_tasks, key=_sort_task_priority)
@@ -6593,7 +6593,7 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
             elif job_mgr.is_queued(int(user["id"]), _tid) and st_raw == "assigned":
                 view_status = "queued"
 
-        if view_status in ("running", "queued", "assigned"):
+        if view_status in ("running", "queued", "assigned", "syncing"):
             active_tasks.append((t, view_status))
         else:
             history_tasks.append((t, view_status))
@@ -6937,8 +6937,8 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                 elif job_mgr.is_queued(int(user["id"]), _tid) and st_raw == "assigned":
                     view_status = "queued"
 
-            # [專家級修復] 必須把 'error' 狀態也顯示在主畫面，否則任務閃退後會憑空消失，誤導使用者以為沒任務
-            if view_status in ("running", "queued", "assigned", "error"):
+            # [專家級修復] 必須把 'error' 與 'syncing' 狀態也顯示在主畫面，否則任務會憑空消失，誤導使用者以為沒任務
+            if view_status in ("running", "queued", "assigned", "error", "syncing"):
                 active2.append((t, view_status))
 
         if active2:
