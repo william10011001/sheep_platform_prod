@@ -6864,6 +6864,11 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
                                     prog_data = json.loads(trow.get("progress_json") or "{}")
                                     prog_data["phase"] = "idle"
                                     prog_data["last_error"] = ""
+                                    # 專家級防護：徹底清除上一輪的殘留髒數據
+                                    prog_data.pop("combos_done", None)
+                                    prog_data.pop("combos_total", None)
+                                    prog_data.pop("phase_progress", None)
+                                    prog_data.pop("sync", None)
                                     db.update_task_progress(t_id, prog_data)
                                 except Exception:
                                     pass
