@@ -761,7 +761,7 @@ def web_get_me(request: Request, authorization: Optional[str] = Header(None)):
     }
 
 @app.get("/leaderboard")
-def web_leaderboard(period_hours: int = 24):
+def web_leaderboard(period_hours: int = 9999999):
     try:
         stats = db.get_leaderboard_stats(period_hours)
         return {"ok": True, "data": stats}

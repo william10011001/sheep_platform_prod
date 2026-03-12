@@ -371,6 +371,8 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
     last_flag_check = 0.0
 
     def _should_stop() -> bool:
+        if globals().get("GUI_PAUSED", False):
+            return True
         nonlocal last_flag_check
         now = time.time()
         if now - last_flag_check < flag_poll_s:
@@ -387,6 +389,8 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
     last_sync_msg = ""
 
     def _progress_cb(frac: float, msg: str) -> None:
+        if globals().get("GUI_QUEUE"):
+            globals()["GUI_QUEUE"].put({"type": "status", "msg": msg, "frac": frac})
         nonlocal last_sync_push_ts, last_sync_frac, last_sync_msg
         now = time.time()
         f = float(frac)
@@ -504,6 +508,13 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
         t0 = time.time()
 
         def _commit(force: bool = False) -> None:
+            if globals().get("GUI_QUEUE"):
+                globals()["GUI_QUEUE"].put({
+                    "type": "progress",
+                    "done": done,
+                    "total": combos_total,
+                    "speed": speed
+                })
             nonlocal last_commit, last_commit_ts
             if not force and (done - last_commit) < commit_every and (time.time() - last_commit_ts) < 10.0:
                 return
