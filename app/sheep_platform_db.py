@@ -2577,6 +2577,10 @@ def set_data_hash(symbol: str, tf_min: int, years: int, data_hash: str, ts: str)
     try:
         set_setting(conn, data_hash_setting_key(symbol, tf_min, years), data_hash)
         set_setting(conn, data_hash_ts_setting_key(symbol, tf_min, years), ts)
+        # [史詩級修復] 補上遺失的 commit！確保資料指紋真實落地，
+        # 徹底打破「 Worker 領取 -> 查無指紋 -> 觸發同步 -> 沒存檔 -> Worker 再次領取」的無限死迴圈，
+        # 同時消滅伺服器重複建置 K 線的恐怖效能黑洞！
+        conn.commit()
     finally:
         conn.close()
 
@@ -2873,9 +2877,9 @@ def clean_zombie_tasks(timeout_minutes: int = 15) -> int:
         cutoff_dt = datetime.now(timezone.utc) - timedelta(minutes=timeout_minutes)
         cutoff_iso = cutoff_dt.isoformat()
         
-        # [極致修復] 同時抓出僵屍任務與崩潰卡死的 error 任務
+        # [極致修復] 同時抓出僵屍任務與崩潰卡死的 error 任務，並納入 syncing 狀態防止無限卡死
         rows = conn.execute(
-            "SELECT id, progress_json, status, attempt FROM mining_tasks WHERE (status = 'running' AND last_heartbeat < ?) OR status = 'error'", 
+            "SELECT id, progress_json, status, attempt FROM mining_tasks WHERE (status IN ('running', 'syncing') AND last_heartbeat < ?) OR status = 'error'", 
             (cutoff_iso,)
         ).fetchall()
         

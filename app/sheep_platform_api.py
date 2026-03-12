@@ -1071,6 +1071,8 @@ def claim_task(
                             
                             # 同步完成，把任務放回 assigned 讓 Worker 自動再次領取
                             p_sync["phase_msg"] = "伺服器資料準備完成，等待節點領取..."
+                            # [UI 完美化] 明確將階段進度設為 1.0 (100%)，讓網頁端狀態列完美滿載
+                            p_sync["phase_progress"] = 1.0
                             db.update_task_progress(tid, p_sync)
                             db.update_task_status(tid, "assigned")
                             return
