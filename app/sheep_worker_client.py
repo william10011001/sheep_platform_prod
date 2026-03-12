@@ -387,6 +387,7 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
     last_sync_push_ts = 0.0
     last_sync_frac = -1.0
     last_sync_msg = ""
+    _SYNC_RE = re.compile(r"^\s*(\S+)\s+已寫入\s+(\d+)\s*/\s*(\d+)\s*$")
 
     def _progress_cb(frac: float, msg: str) -> None:
         if globals().get("GUI_QUEUE"):
@@ -407,6 +408,24 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
         progress["phase"] = "sync_data"
         progress["phase_progress"] = f
         progress["phase_msg"] = mmsg
+        
+        m = _SYNC_RE.match(mmsg)
+        if m:
+            label = str(m.group(1))
+            done_i = int(m.group(2))
+            total_i = int(m.group(3))
+
+            sync = progress.get("sync")
+            if not isinstance(sync, dict):
+                sync = {"items": {}, "current": ""}
+            items = sync.get("items")
+            if not isinstance(items, dict):
+                items = {}
+            items[label] = {"done": int(done_i), "total": int(total_i)}
+            sync["items"] = items
+            sync["current"] = label
+            progress["sync"] = sync
+
         try:
             api.progress(task_id, lease_id, progress)
         except Exception:
@@ -416,6 +435,10 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
     progress["phase_progress"] = 0.0
     progress["phase_msg"] = ""
     api.progress(task_id, lease_id, progress)
+
+    if globals().get("GUI_QUEUE"):
+        globals()["GUI_QUEUE"].put({"type": "progress", "done": 0, "total": 1, "speed": 0.0})
+        globals()["GUI_QUEUE"].put({"type": "status", "msg": "準備同步 K 線資料...", "frac": 0.0})
 
     try:
         years = int(task.get("years") or 0) or 3
@@ -474,6 +497,9 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
         progress["phase_progress"] = 1.0
         progress["phase_msg"] = ""
         api.progress(task_id, lease_id, progress)
+        
+        if globals().get("GUI_QUEUE"):
+            globals()["GUI_QUEUE"].put({"type": "status", "msg": "正在建構參數網格...", "frac": 0.0})
 
         combos = bt.grid_combinations_from_ui(family, grid_spec)
         seed = int(task.get("seed") or 0) ^ (task_id & 0x7FFFFFFF)
@@ -495,6 +521,10 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
         progress["combos_total"] = combos_total
         api.progress(task_id, lease_id, progress)
 
+        if globals().get("GUI_QUEUE"):
+            globals()["GUI_QUEUE"].put({"type": "status", "msg": f"開始進行格點搜尋...", "frac": 0.0})
+            globals()["GUI_QUEUE"].put({"type": "progress", "done": resume_done, "total": combos_total, "speed": 0.0})
+
         fee_side = float(risk_spec.get("fee_side", 0.0002))
         slippage = float(risk_spec.get("slippage", 0.0))
         worst_case = bool(risk_spec.get("worst_case", True))
@@ -508,24 +538,29 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
         t0 = time.time()
 
         def _commit(force: bool = False) -> None:
+            nonlocal last_commit, last_commit_ts
+            
+            elapsed = float(max(0.001, time.time() - t0))
+            current_speed = float(done / elapsed) if elapsed > 0 else 0.0
+            
             if globals().get("GUI_QUEUE"):
                 globals()["GUI_QUEUE"].put({
                     "type": "progress",
                     "done": done,
                     "total": combos_total,
-                    "speed": speed
+                    "speed": current_speed
                 })
-            nonlocal last_commit, last_commit_ts
+
             if not force and (done - last_commit) < commit_every and (time.time() - last_commit_ts) < 10.0:
                 return
+                
             last_commit = done
             last_commit_ts = time.time()
-            elapsed = float(max(0.0, time.time() - t0))
-            speed = float(done / elapsed) if elapsed > 0 else 0.0
-            eta = float((combos_total - done) / speed) if speed > 0 and combos_total > done else None
+            eta = float((combos_total - done) / current_speed) if current_speed > 0 and combos_total > done else None
+            
             progress["combos_done"] = int(done)
             progress["elapsed_s"] = round(elapsed, 3)
-            progress["speed_cps"] = round(speed, 6)
+            progress["speed_cps"] = round(current_speed, 6)
             progress["eta_s"] = round(eta, 3) if eta is not None else None
             progress["best_any_score"] = float(best_any_score) if best_any_score is not None else None
             progress["best_any_metrics"] = dict(best_any_metrics) if best_any_metrics is not None else None
@@ -537,6 +572,8 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
 
         if combos_total <= 0:
             _commit(force=True)
+            if globals().get("GUI_QUEUE"):
+                globals()["GUI_QUEUE"].put({"type": "progress", "done": 1, "total": 1, "speed": 0.0})
             api.finish(task_id, lease_id, [], progress)
             return
 
@@ -672,6 +709,9 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
         _commit(force=True)
         cands = [{"score": float(s), "params": dict(p), "metrics": dict(m)} for s, p, m in best_pass[:keep_top]]
         api.finish(task_id, lease_id, cands, progress)
+        if globals().get("GUI_QUEUE"):
+            globals()["GUI_QUEUE"].put({"type": "status", "msg": "任務完成，準備回報...", "frac": 1.0})
+            globals()["GUI_QUEUE"].put({"type": "progress", "done": combos_total, "total": combos_total, "speed": 0.0})
         return
 
     except Exception as e:
