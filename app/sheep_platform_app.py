@@ -4254,6 +4254,175 @@ def _logout() -> None:
 
 
 
+def _render_slider_captcha(prefix: str) -> Tuple[str, str, str]:
+    from sheep_platform_security import generate_slider_captcha
+    
+    # 巧妙利用 captcha_slider_ 作為前綴，確保在 _logout 執行時能被原有清理機制順帶完美銷毀
+    state_key_token = f"captcha_slider_{prefix}_token"
+    state_key_target = f"captcha_slider_{prefix}_target"
+    
+    if state_key_token not in st.session_state:
+        target_x, token = generate_slider_captcha()
+        st.session_state[state_key_target] = target_x
+        st.session_state[state_key_token] = token
+    else:
+        target_x = st.session_state[state_key_target]
+        token = st.session_state[state_key_token]
+        
+    st.markdown('<div style="display:none; width:0; height:0; overflow:hidden;">', unsafe_allow_html=True)
+    cap_offset = st.text_input(f"{prefix}_offset", key=f"captcha_slider_{prefix}_offset_in", label_visibility="collapsed")
+    cap_tracks = st.text_input(f"{prefix}_tracks", key=f"captcha_slider_{prefix}_tracks_in", label_visibility="collapsed")
+    st.markdown('</div>', unsafe_allow_html=True)
+    
+    html_code = f"""
+    <!DOCTYPE html>
+    <html>
+    <body style="margin:0; padding:0; background:transparent;">
+    <div id="captcha_wrap" style="display:none; font-family: sans-serif; margin-top: 4px;">
+        <div style="font-size: 13px; color: #cbd5e1; margin-bottom: 8px; font-weight: 600;">防機器人驗證 (請向右滑動)</div>
+        <div id="bg" style="position: relative; width: 100%; max-width: 320px; height: 44px; background: rgba(15, 23, 42, 0.8); border-radius: 8px; border: 1px solid #334155; overflow: hidden;">
+            <div id="prog" style="position: absolute; top: 0; left: 0; height: 100%; width: 0; background: linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.4));"></div>
+            <div id="target" style="position: absolute; top: 0; left: {target_x}px; width: 44px; height: 100%; background: rgba(255,255,255,0.05); border: 2px dashed rgba(255,255,255,0.3); box-sizing: border-box; border-radius: 6px;"></div>
+            <div id="btn" style="position: absolute; top: 2px; left: 2px; width: 40px; height: 40px; background: #fff; border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 8px rgba(0,0,0,0.5); z-index: 10; color: #0f172a; font-weight: 900; transition: background 0.2s; user-select: none;">&rarr;</div>
+            <div id="text" style="position: absolute; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; pointer-events: none; color: #64748b; font-size: 13px; font-weight: bold; letter-spacing: 1px;">請拖曳滑塊至缺口</div>
+        </div>
+    </div>
+    <script>
+    (function() {{
+        const w = window.parent;
+        const d = w.document;
+        const prefix = "{prefix}";
+        
+        const wrap = document.getElementById("captcha_wrap");
+        const bg = document.getElementById("bg");
+        const btn = document.getElementById("btn");
+        const prog = document.getElementById("prog");
+        const text = document.getElementById("text");
+        
+        function findForm() {{
+            const iframes = d.querySelectorAll('iframe');
+            for(let f of iframes) {{
+                if(f.contentWindow === window) {{
+                    return f.closest('form');
+                }}
+            }}
+            return null;
+        }}
+        
+        const form = findForm();
+        if(!form) return;
+        
+        function checkInputs() {{
+            let inputs = form.querySelectorAll('input[type="text"], input[type="password"]');
+            let hasUname = false;
+            let hasPwd = false;
+            
+            inputs.forEach(i => {{
+                if (i.getAttribute('autocomplete') === 'username' || (i.getAttribute('aria-label') && i.getAttribute('aria-label').includes('帳號'))) {{
+                    if (i.value.trim().length > 0) hasUname = true;
+                }}
+                if (i.getAttribute('autocomplete') === 'current-password' || i.getAttribute('type') === 'password') {{
+                    if (i.value.trim().length > 0) hasPwd = true;
+                }}
+            }});
+            
+            // [關鍵防護] 只有在帳號與密碼皆有輸入的狀態下，才會解鎖顯示驗證碼 UI
+            if (hasUname && hasPwd) {{
+                wrap.style.display = "block";
+            }} else {{
+                wrap.style.display = "none";
+            }}
+        }}
+        
+        form.addEventListener('input', checkInputs, true);
+        setInterval(checkInputs, 800); 
+        checkInputs();
+        
+        let isDragging = false;
+        let startX = 0;
+        let startY = 0;
+        let currentX = 0;
+        let tracks = [];
+        let startTime = 0;
+        let maxW = 276; 
+        let isDone = false;
+
+        function getClientX(e) {{ return e.touches ? e.touches[0].clientX : e.clientX; }}
+        function getClientY(e) {{ return e.touches ? e.touches[0].clientY : e.clientY; }}
+        
+        function startDrag(e) {{
+            if(isDone) return;
+            isDragging = true;
+            startX = getClientX(e);
+            startY = getClientY(e);
+            startTime = Date.now();
+            tracks = [];
+            text.style.opacity = "0";
+            btn.style.background = "#e2e8f0";
+            maxW = bg.offsetWidth - 44;
+        }}
+        
+        function moveDrag(e) {{
+            if (!isDragging) return;
+            let dx = getClientX(e) - startX;
+            if (dx < 0) dx = 0;
+            if (dx > maxW) dx = maxW;
+            currentX = dx;
+            btn.style.left = (dx + 2) + 'px';
+            prog.style.width = (dx + 20) + 'px';
+            
+            tracks.push({{
+                x: Math.round(dx),
+                y: Math.round(getClientY(e) - startY),
+                t: Date.now() - startTime
+            }});
+        }}
+        
+        function endDrag(e) {{
+            if (!isDragging) return;
+            isDragging = false;
+            isDone = true;
+            
+            if (tracks.length < 3) {{
+                tracks.push({{x: currentX, y: 0, t: Date.now() - startTime}});
+            }}
+            
+            btn.innerHTML = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+            btn.style.background = "#10b981";
+            prog.style.background = "rgba(16, 185, 129, 0.2)";
+            
+            let offInput = form.querySelector('input[aria-label="' + prefix + '_offset"]');
+            let trackInput = form.querySelector('input[aria-label="' + prefix + '_tracks"]');
+            
+            // [專家級資料回傳] 將 Javascript 特徵回傳綁定至原生 Streamlit 隱藏 Input，完全避開 React 的跨域污染
+            if (offInput) {{
+                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+                setter.call(offInput, currentX.toString());
+                offInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
+            }}
+            if (trackInput) {{
+                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
+                setter.call(trackInput, JSON.stringify(tracks));
+                trackInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
+            }}
+        }}
+        
+        btn.addEventListener('mousedown', startDrag);
+        btn.addEventListener('touchstart', startDrag, {{passive: true}});
+        
+        document.addEventListener('mousemove', moveDrag);
+        document.addEventListener('touchmove', moveDrag, {{passive: true}}); 
+        
+        document.addEventListener('mouseup', endDrag);
+        document.addEventListener('touchend', endDrag);
+    }})();
+    </script>
+    </body>
+    </html>
+    """
+    st.components.v1.html(html_code, height=90, scrolling=False)
+    return token, cap_offset, cap_tracks
+
 def _login_form() -> None:
     st.markdown('<div class="auth_title">登入</div>', unsafe_allow_html=True)
 
@@ -4261,6 +4430,9 @@ def _login_form() -> None:
         username = st.text_input("帳號", value="", autocomplete="username")
         password = st.text_input("密碼", value="", type="password", autocomplete="current-password")
         remember = st.checkbox("在本裝置記住我", value=False, key="login_remember_me")
+        
+        cap_token, cap_offset_str, cap_tracks_str = _render_slider_captcha("login")
+        
         submitted = st.form_submit_button("登入", use_container_width=True)
 
     if not submitted:
@@ -4269,6 +4441,25 @@ def _login_form() -> None:
     st.toast(" 收到登入請求，正在驗證...", icon="⏳")
 
     try:
+        from sheep_platform_security import verify_slider_captcha
+        try:
+            cap_offset = float(cap_offset_str) if cap_offset_str else 0.0
+            cap_tracks = json.loads(cap_tracks_str) if cap_tracks_str else []
+        except Exception:
+            cap_offset = 0.0
+            cap_tracks = []
+            
+        if not cap_tracks:
+            st.error("登入失敗：防機器人驗證尚未完成，請向右拖曳滑塊。")
+            return
+            
+        is_cap_valid, cap_msg = verify_slider_captcha(cap_token, cap_offset, cap_tracks)
+        if not is_cap_valid:
+            db.log_sys_event("LOGIN_CAPTCHA_FAIL", None, f"登入驗證碼未通過: {cap_msg}", {"username": username})
+            st.error(f"登入失敗：防機器人驗證未通過 ({cap_msg})")
+            if "captcha_slider_login_token" in st.session_state: del st.session_state["captcha_slider_login_token"]
+            return
+
         uname = normalize_username(username)
         user = db.get_user_by_username(uname)
         if not user:
@@ -4342,117 +4533,6 @@ def _login_form() -> None:
         with st.expander("展開錯誤細節"):
             st.code(traceback.format_exc(), language="python")
 
-    st.markdown('<div class="auth_title">註冊</div>', unsafe_allow_html=True)
-
-    tos_text = ""
-    tos_version = ""
-    try:
-        conn = db._conn()
-        try:
-            tos_text = str(db.get_setting(conn, "tos_text", "") or "")
-            tos_version = str(db.get_setting(conn, "tos_version", "") or "")
-        finally:
-            conn.close()
-    except Exception:
-        tos_text = ""
-        tos_version = ""
-
-    with st.form("register_form", clear_on_submit=False):
-        username = st.text_input("帳號", value="")
-        password = st.text_input("密碼", value="", type="password", placeholder="至少 6 碼，需包含英文字母與數字")
-        password2 = st.text_input("確認密碼", value="", type="password")
-
-        tos_ok = st.checkbox("我已閱讀並同意平台服務條款與分潤規則", value=False, key="register_tos_ok")
-        remember = st.checkbox("在本裝置記住我", value=False, key="register_remember_me")
-        submitted = st.form_submit_button("建立帳號並登入", use_container_width=True)
-
-    if not submitted:
-        return
-
-    st.toast(" 收到註冊請求，正在處理...", icon="⏳")
-
-    try:
-        uname = normalize_username(username)
-        if not uname:
-            st.error("帳號不可為空。")
-            return
-        if len(uname) > 64:
-            st.error("帳號長度上限為 64 字元。")
-            return
-        if any(ch in uname for ch in ["\r", "\n"]):
-            st.error("帳號不可包含換行字元。")
-            return
-
-        pw = str(password or "")
-        if len(pw) < 6:
-            st.error("密碼長度至少 6 字元。")
-            return
-        has_alpha = any(ch.isalpha() for ch in pw)
-        has_digit = any(ch.isdigit() for ch in pw)
-        if not (has_alpha and has_digit):
-            st.error("密碼需同時包含英文字母與數字。")
-            return
-        if pw != str(password2 or ""):
-            db.log_sys_event("AUTH_REG_WARN", None, "註冊失敗：密碼不一致", {"uname": uname})
-            st.error("註冊失敗：兩次輸入的密碼不一致。")
-            return
-
-        if not bool(tos_ok):
-            db.log_sys_event("AUTH_REG_WARN", None, "註冊失敗：未同意條款", {"uname": uname})
-            st.error("註冊失敗：必須勾選底下「我已閱讀並同意...」才能註冊。")
-            return
-
-        if db.get_user_by_username(uname):
-            db.log_sys_event("AUTH_REG_WARN", None, "註冊失敗：帳號已存在", {"uname": uname})
-            st.error("註冊失敗：此帳號名稱已被使用，請更換一個。")
-            return
-
-        try:
-            try:
-                pw_hashed = hash_password(pw)
-            except TypeError:
-                pw_hashed = hash_password(pw.encode("utf-8"))
-
-            uid = db.create_user(username=uname, password_hash=pw_hashed, role="user", wallet_address="", wallet_chain="TRC20")
-            try:
-                db.write_audit_log(uid, "register", {"username": uname})
-                if tos_version.strip():
-                    db.write_audit_log(uid, "tos_accept", {"version": tos_version})
-                else:
-                    db.write_audit_log(uid, "tos_accept", {})
-            except Exception:
-                pass
-        except Exception as e:
-            st.error(f"建立失敗：{e}")
-            return
-
-        user = db.get_user_by_id(int(uid))
-        if not user:
-            st.success("帳號已建立。")
-            return
-
-        _set_session_user(user)
-
-        if bool(remember):
-            ttl_days = int(_REMEMBER_TTL_DAYS)
-            tok = _issue_api_token(user, ttl_seconds=int(ttl_days) * 86400, name=_REMEMBER_TOKEN_NAME)
-            raw = str(tok.get("token") or "")
-            max_age_s = int(ttl_days) * 86400
-            _queue_set_cookie(_REMEMBER_COOKIE_NAME, raw, max_age_s)
-            st.session_state["auth_remember_token_id"] = int(tok.get("token_id") or 0)
-        else:
-            _queue_clear_cookie(_REMEMBER_COOKIE_NAME)
-            _queue_clear_cookie(_REMEMBER_TOKEN_NAME)
-
-        st.success("帳號已建立並完成登入。")
-        st.session_state["nav_page_pending"] = "主頁"
-        st.rerun()
-
-    except Exception as fatal_e:
-        import traceback
-        st.error(f"系統發生異常，無法完成註冊：{fatal_e}")
-        with st.expander("展開錯誤細節"):
-            st.code(traceback.format_exc(), language="python")
 def _register_form() -> None:
     st.markdown('<div class="auth_title">註冊</div>', unsafe_allow_html=True)
 
@@ -4475,12 +4555,34 @@ def _register_form() -> None:
 
         tos_ok = st.checkbox("我已閱讀並同意平台服務條款與分潤規則", value=False, key="register_tos_ok")
         remember = st.checkbox("在本裝置記住我", value=False, key="register_remember_me")
+        
+        cap_token, cap_offset_str, cap_tracks_str = _render_slider_captcha("register")
+        
         submitted = st.form_submit_button("建立帳號並登入")
 
     if not submitted:
         return
 
     try:
+        from sheep_platform_security import verify_slider_captcha
+        try:
+            cap_offset = float(cap_offset_str) if cap_offset_str else 0.0
+            cap_tracks = json.loads(cap_tracks_str) if cap_tracks_str else []
+        except Exception:
+            cap_offset = 0.0
+            cap_tracks = []
+            
+        if not cap_tracks:
+            st.error("註冊失敗：防機器人驗證尚未完成，請向右拖曳滑塊。")
+            return
+            
+        is_cap_valid, cap_msg = verify_slider_captcha(cap_token, cap_offset, cap_tracks)
+        if not is_cap_valid:
+            db.log_sys_event("REGISTER_CAPTCHA_FAIL", None, f"註冊驗證碼未通過: {cap_msg}", {"username": username})
+            st.error(f"註冊失敗：防機器人驗證未通過 ({cap_msg})")
+            if "captcha_slider_register_token" in st.session_state: del st.session_state["captcha_slider_register_token"]
+            return
+
         uname = normalize_username(username)
         if not uname:
             st.error("註冊失敗：帳號不可為空。")
@@ -4529,7 +4631,7 @@ def _register_form() -> None:
 
         user = db.get_user_by_id(int(uid))
         if not user:
-            st.success("✅ 帳號已建立！請從右側重新登入。")
+            st.success(" 帳號已建立！請從右側重新登入。")
             return
 
         _set_session_user(user)
