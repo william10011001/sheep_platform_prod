@@ -416,6 +416,11 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
             total_i = int(m.group(3))
             if total_i > 0:
                 f = float(done_i) / float(total_i)
+            
+            # 【關鍵修復】迎合網站前端邏輯：將 K 線同步的筆數直接映射到 combos 變數上
+            # 讓 sheep123.com 的綠色進度條能準確依據資料下載量渲染！
+            progress["combos_done"] = done_i
+            progress["combos_total"] = total_i
 
         if globals().get("GUI_QUEUE"):
             globals()["GUI_QUEUE"].put({"type": "status", "msg": mmsg, "frac": f})
