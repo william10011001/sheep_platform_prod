@@ -93,11 +93,12 @@ services:
       - ${SHEEP_HOST_DATA_DIR:-../app/data}:/app/data
     restart: always
     healthcheck:
-      # 主動監控 Streamlit 內部健康檢查介面
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8501/app/_stcore/health || curl -fsS http://localhost:8501/_stcore/health || curl -fsS http://localhost:8501/healthz || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 8
+      # 放寬 timeout 並加入 start_period，給予 Pandas 與 Numba 充分的啟動/編譯緩衝時間
+      test: ["CMD-SHELL", "curl -fsS --max-time 15 http://127.0.0.1:8501/app/_stcore/health || curl -fsS --max-time 15 http://127.0.0.1:8501/_stcore/health || curl -fsS --max-time 15 http://127.0.0.1:8501/healthz || exit 1"]
+      interval: 15s
+      timeout: 20s
+      retries: 10
+      start_period: 40s
 
   # [Worker 後台服務] 專職負責任務分配，使用較輕量的 api 鏡像
   worker:
