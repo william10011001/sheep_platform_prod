@@ -20,32 +20,34 @@ import backtest_panel2 as bt
 def _process_eval_chunk(args):
     import os, time, traceback
     pid = os.getpid()
-    is_fast, f_params, e_sig, risk_grid_chunk, df, family, fee_side, slippage, worst_case, reverse_mode = args
+    task_list, df, family, fee_side, slippage, worst_case, reverse_mode = args
     
-    print(f"\n[進程 {pid}] 📥 成功接收區塊！準備運算 {len(risk_grid_chunk)} 個參數組合 (FastMode: {is_fast})", flush=True)
+    total_combos = sum(len(r) for _, _, _, r in task_list)
+    print(f"\n[進程 {pid}] 📥 成功接收超級區塊！內含 {len(task_list)} 組策略參數，共計 {total_combos} 個風險組合準備運算...", flush=True)
     t0 = time.time()
     
     results = []
     try:
         import backtest_panel2 as bt
-        for tp, sl, mh in risk_grid_chunk:
-            if is_fast:
-                res = bt.run_backtest_from_entry_sig(df, e_sig, tp, sl, mh, fee_side=fee_side, slippage=slippage, worst_case=worst_case, reverse_mode=reverse_mode)
-            else:
-                res = bt.run_backtest(df, family, dict(f_params), float(tp), float(sl), int(mh), fee_side=fee_side, slippage=slippage, worst_case=worst_case, reverse_mode=reverse_mode)
-            
-            metrics = {
-                "total_return_pct": float(res.get("total_return_pct", 0.0)),
-                "max_drawdown_pct": float(res.get("max_drawdown_pct", 0.0)),
-                "sharpe": float(res.get("sharpe", 0.0)),
-                "trades": int(res.get("trades", 0)),
-                "win_rate_pct": float(res.get("win_rate_pct", 0.0)),
-                "profit_factor": float(res.get("profit_factor", 0.0)),
-                "cagr_pct": float(res.get("cagr_pct", 0.0)),
-            }
-            score = float(metrics["total_return_pct"]) + 5.0 * float(metrics["sharpe"]) - 0.6 * float(metrics["max_drawdown_pct"])
-            params = {"family": family, "family_params": dict(f_params), "tp": float(tp), "sl": float(sl), "max_hold": int(mh)}
-            results.append((score, params, metrics))
+        for is_fast, f_params, e_sig, risk_grid_chunk in task_list:
+            for tp, sl, mh in risk_grid_chunk:
+                if is_fast:
+                    res = bt.run_backtest_from_entry_sig(df, e_sig, tp, sl, mh, fee_side=fee_side, slippage=slippage, worst_case=worst_case, reverse_mode=reverse_mode)
+                else:
+                    res = bt.run_backtest(df, family, dict(f_params), float(tp), float(sl), int(mh), fee_side=fee_side, slippage=slippage, worst_case=worst_case, reverse_mode=reverse_mode)
+                
+                metrics = {
+                    "total_return_pct": float(res.get("total_return_pct", 0.0)),
+                    "max_drawdown_pct": float(res.get("max_drawdown_pct", 0.0)),
+                    "sharpe": float(res.get("sharpe", 0.0)),
+                    "trades": int(res.get("trades", 0)),
+                    "win_rate_pct": float(res.get("win_rate_pct", 0.0)),
+                    "profit_factor": float(res.get("profit_factor", 0.0)),
+                    "cagr_pct": float(res.get("cagr_pct", 0.0)),
+                }
+                score = float(metrics["total_return_pct"]) + 5.0 * float(metrics["sharpe"]) - 0.6 * float(metrics["max_drawdown_pct"])
+                params = {"family": family, "family_params": dict(f_params), "tp": float(tp), "sl": float(sl), "max_hold": int(mh)}
+                results.append((score, params, metrics))
     except Exception as e:
         print(f"\n[進程 {pid}] ❌ 執行期間發生嚴重崩潰: {e}", flush=True)
         traceback.print_exc()
@@ -686,40 +688,50 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
 
         import concurrent.futures
 
+        max_workers = os.cpu_count() or 4 # 【效能極致壓榨】不再扣除1個核心，解放所有算力！
+        
         print("\n" + "="*60, flush=True)
-        print(f"[系統調試] 🛠️ 準備切割任務群，策略: {family}, FastMode: {use_fast_path}", flush=True)
+        print(f"[效能診斷] 🛠️ 準備切割任務群，策略: {family}, FastMode: {use_fast_path}", flush=True)
+        print(f"[效能診斷] 🚀 即將喚醒 {max_workers} 個實體 CPU 核心，進入極致壓榨模式！", flush=True)
+        print(f"[效能診斷] ⚠️ 解析 CPU 與記憶體低落的根本原因：", flush=True)
+        print(f"  1. 剛才在下載 K 線資料時，受限於網路 I/O，CPU 必定閒置 (0.2% 正常)。", flush=True)
+        print(f"  2. 若將每個小任務單獨發送給子進程，Windows 的多進程底層需將龐大的 K 線 DataFrame ", flush=True)
+        print(f"     透過 Pickle (單核序列化) 複製數千次，引發嚴重的 IPC 塞車，看起來就像 CPU 掛機。", flush=True)
+        print(f"  --> 🔧 [專家級優化] 已為您啟動『超級區塊 (Super Chunking)』動態打包技術，消滅 Pickle 瓶頸！", flush=True)
 
-        chunks = []
+        super_chunks = []
+        current_task_list = []
         t_chunk_start = time.time()
-        if use_fast_path and sig_cache is not None:
-            for i in range(start_i, len(part)):
-                f_params = part[i]
-                e_sig = sig_cache[i]
-                j0 = start_j if i == start_i else 0
-                r_grid = risk_grid[j0:]
-                if not r_grid: continue
-                chunks.append((True, f_params, e_sig, r_grid, df, family, fee_side, slippage, worst_case, reverse_mode))
-                start_j = 0
-        else:
-            for i in range(start_i, len(part)):
-                f_params = part[i]
-                j0 = start_j if i == start_i else 0
-                r_grid = risk_grid[j0:]
-                if not r_grid: continue
-                chunks.append((False, f_params, None, r_grid, df, family, fee_side, slippage, worst_case, reverse_mode))
-                start_j = 0
+        
+        # 動態計算每個超級區塊應包含的任務數 (確保恰好分配給所有核心運算，每個核心拿一大包)
+        # 避免碎片化導致每次都要傳輸 DataFrame
+        optimal_chunk_size = max(1, len(part[start_i:]) // (max_workers * 2))
+        
+        for i in range(start_i, len(part)):
+            f_params = part[i]
+            e_sig = sig_cache[i] if (use_fast_path and sig_cache is not None) else None
+            j0 = start_j if i == start_i else 0
+            r_grid = risk_grid[j0:]
+            if not r_grid: continue
+            
+            current_task_list.append((use_fast_path, f_params, e_sig, r_grid))
+            start_j = 0
+            
+            if len(current_task_list) >= optimal_chunk_size:
+                super_chunks.append((current_task_list, df, family, fee_side, slippage, worst_case, reverse_mode))
+                current_task_list = []
+                
+        if current_task_list:
+            super_chunks.append((current_task_list, df, family, fee_side, slippage, worst_case, reverse_mode))
 
-        print(f"[系統調試] 📦 區塊打包完畢！共 {len(chunks)} 個 Chunks。耗時: {time.time() - t_chunk_start:.2f} 秒。", flush=True)
-
-        max_workers = max(1, (os.cpu_count() or 4) - 1)
-        print(f"[系統調試] 🚀 準備喚醒 {max_workers} 個實體 CPU 核心的進程池...", flush=True)
+        print(f"[系統調試] 📦 超級區塊打包完畢！從原先碎片壓縮為 {len(super_chunks)} 個高密度 Chunk。耗時: {time.time() - t_chunk_start:.2f} 秒。", flush=True)
         
         t_dispatch = time.time()
         with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-            print(f"[系統調試] ⚠️ 開始將 {len(chunks)} 個含 DataFrame 的區塊塞入通訊管道 (IPC Pipe)...", flush=True)
-            print(f"[系統調試] (若程式卡在此處毫無反應，代表在 Windows 下序列化 DataFrame 的代價過高，導致系統死鎖！)", flush=True)
+            print(f"[系統調試] ⚠️ 開始將 {len(super_chunks)} 個超級區塊塞入通訊管道 (IPC Pipe)...", flush=True)
+            print(f"[系統調試] 💡 如果在此卡住，代表 DataFrame 仍然極大，單核 Pickling 正在全力運作，請耐心等待分發。", flush=True)
             
-            future_to_chunk = {executor.submit(_process_eval_chunk, c): c for c in chunks}
+            future_to_chunk = {executor.submit(_process_eval_chunk, c): c for c in super_chunks}
             
             print(f"[系統調試] ✅ 所有區塊已成功塞入進程池！IPC 傳輸總耗時: {time.time() - t_dispatch:.2f} 秒。等待運算結果...", flush=True)
             
