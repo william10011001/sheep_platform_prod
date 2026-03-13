@@ -260,11 +260,13 @@ def verify_slider_captcha(token: str, offset: float, tracks: list) -> Tuple[bool
             return False, f"X 軸軌跡超出物理邊界限制 (Min: {min(x_values)}, Max: {max(x_values)})。"
             
         # 驗證 5：Y 軸人類微小防手震特徵與腳本隨機數破解
-        # 惡意腳本會用 random.randint(-1, 2) 產生極端規律的抖動
-        y_variance = max(y_values) - min(y_values)
-        if y_variance == 0:
+        # 惡意腳本會用 random.randint(-1, 2) 產生極端規律的抖動，或是 y 永遠為 0
+        y_range = max(y_values) - min(y_values)
+        if y_range == 0:
             return False, "Y 軸缺乏人類微小手抖特徵 (判定為自動化腳本強制直行)。"
-        if y_variance > 15:
+        # [專家級修正] 人類在手機或滑鼠拖曳時，拇指弧度造成 Y 軸偏移 50~200px 是極度正常的自然現象。
+        # 只有當 Y 軸偏移超過整個螢幕高度的一大半 (例如 > 500)，才判定為腳本塞入的異常亂數。
+        if y_range > 500:
             return False, "Y 軸抖動幅度超越物理極限，判定為腳本亂數生成。"
             
         # 驗證 6：加速度變異與軌跡線性度分析 (阻殺所有等速與微小亂數腳本)
@@ -282,12 +284,13 @@ def verify_slider_captcha(token: str, offset: float, tracks: list) -> Tuple[bool
             variance_v = sum((v - avg_v)**2 for v in velocities) / len(velocities)
             
             # 人類拉動必定會有加速起步與減速對準的過程，腳本通常呈現超低變異數
-            if variance_v < 0.001:
-                return False, f"滑動呈現超自然完美等速運動 (變異數: {variance_v:.5f})，直接攔截。"
+            if variance_v < 0.0001:
+                return False, f"滑動呈現超自然完美等速運動 (變異數: {variance_v:.6f})，直接攔截。"
             
             # 檢查是否過度規律 (腳本每次都移動固定步長 ±2，人類步長變化極大)
+            # [專家級修正] 加入 max(x_deltas) > 3 條件，避免誤殺慢慢滑動(dx永遠只有 0, 1, 2)的真實人類
             unique_dx = len(set(x_deltas))
-            if unique_dx <= 4 and len(tracks) > 15:
+            if unique_dx <= 3 and max(x_deltas) > 3 and len(tracks) > 15:
                 return False, "位移步長過度規律缺乏自然變化，判定為腳本生成的線性軌跡。"
 
     except Exception as track_err:
