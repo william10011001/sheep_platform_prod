@@ -169,16 +169,12 @@
                                     {{ tasksData.run_enabled ? '授權中' : '待命中' }}
                                 </span>
                             </p>
-                            <div class="bg-black/60 border border-red-500/30 rounded-lg p-4 max-w-2xl relative overflow-hidden">
-                                <div class="absolute top-0 left-0 w-1 h-full bg-[#FF003C]"></div>
-                                <div class="text-sm text-gray-300 mb-2 flex items-center font-bold">
-                                    <svg class="w-4 h-4 mr-2 text-[#FF003C]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"></path></svg>
-                                    您的專屬節點Token
-                                </div>
-                                <div class="text-xs text-gray-400 mb-3">請將下方金鑰完整複製，並貼到桌面端程式 <span class="text-white bg-white/10 px-1 rounded">OpenNode.exe</span> 中即可啟動高速運算，不需再輸入帳號密碼。</div>
+                            <div class="bg-black/40 border border-white/10 rounded p-3 max-w-xl mb-2">
+                                <div class="text-sm text-gray-300 font-bold mb-1">專屬節點 Token</div>
+                                <div class="text-xs text-gray-500 mb-2">複製下方 Token 並貼至 OpenNode.exe 即可啟動運算</div>
                                 <div class="flex items-center gap-2">
-                                    <input type="text" readonly :value="userToken" class="cyber-input w-full px-3 py-2 rounded text-sm text-emerald-400 font-mono bg-black/80 border-white/20" @focus="$event.target.select()">
-                                    <button @click="copyToken" class="cyber-btn px-5 py-2 rounded font-bold text-sm whitespace-nowrap shadow-lg">一鍵複製</button>
+                                    <input type="text" readonly :value="userToken" class="cyber-input w-full px-2 py-1.5 rounded text-xs text-emerald-400 font-mono bg-black/80 border-white/10" @focus="$event.target.select()">
+                                    <button @click="copyToken" class="cyber-btn px-4 py-1.5 rounded font-bold text-xs whitespace-nowrap">一鍵複製</button>
                                 </div>
                             </div>
                         </div>

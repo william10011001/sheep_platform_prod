@@ -14,6 +14,35 @@ import requests
 
 import backtest_panel2 as bt
 
+# =========================================================
+# 專家級多進程核心：完全釋放 GIL 鎖，將 CPU 壓榨至 100% 滿載
+# =========================================================
+def _process_eval_chunk(args):
+    import backtest_panel2 as bt
+    is_fast, f_params, e_sig, risk_grid_chunk, df, family, fee_side, slippage, worst_case, reverse_mode = args
+    results = []
+    for tp, sl, mh in risk_grid_chunk:
+        try:
+            if is_fast:
+                res = bt.run_backtest_from_entry_sig(df, e_sig, tp, sl, mh, fee_side=fee_side, slippage=slippage, worst_case=worst_case, reverse_mode=reverse_mode)
+            else:
+                res = bt.run_backtest(df, family, dict(f_params), float(tp), float(sl), int(mh), fee_side=fee_side, slippage=slippage, worst_case=worst_case, reverse_mode=reverse_mode)
+            
+            metrics = {
+                "total_return_pct": float(res.get("total_return_pct", 0.0)),
+                "max_drawdown_pct": float(res.get("max_drawdown_pct", 0.0)),
+                "sharpe": float(res.get("sharpe", 0.0)),
+                "trades": int(res.get("trades", 0)),
+                "win_rate_pct": float(res.get("win_rate_pct", 0.0)),
+                "profit_factor": float(res.get("profit_factor", 0.0)),
+                "cagr_pct": float(res.get("cagr_pct", 0.0)),
+            }
+            score = float(metrics["total_return_pct"]) + 5.0 * float(metrics["sharpe"]) - 0.6 * float(metrics["max_drawdown_pct"])
+            params = {"family": family, "family_params": dict(f_params), "tp": float(tp), "sl": float(sl), "max_hold": int(mh)}
+            results.append((score, params, metrics))
+        except Exception:
+            pass
+    return results
 
 WORKER_VERSION = "2.1.0"
 WORKER_PROTOCOL = 2
@@ -648,83 +677,53 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
         import concurrent.futures
         import os
 
-        # 1. 收集所有需要運算的任務參數 (將原本的雙層迴圈攤平成一個列表)
-        tasks_to_run = []
+        # 1. 將任務依照家族參數 (f_params) 切塊打包 (Chunk)
+        # 讓每一進程(核心)一次接收一批任務與一份 DataFrame，極大化降低跨進程通訊(IPC)開銷，同時強迫吃滿 RAM！
+        chunks = []
         if use_fast_path and sig_cache is not None:
             for i in range(start_i, len(part)):
                 f_params = part[i]
                 e_sig = sig_cache[i]
                 j0 = start_j if i == start_i else 0
-                for j in range(j0, len(risk_grid)):
-                    tp, sl, mh = risk_grid[j]
-                    tasks_to_run.append((True, f_params, e_sig, tp, sl, mh))
+                r_grid = risk_grid[j0:]
+                if not r_grid: continue
+                chunks.append((True, f_params, e_sig, r_grid, df, family, fee_side, slippage, worst_case, reverse_mode))
+                start_j = 0  # 下個循環重置
         else:
             for i in range(start_i, len(part)):
                 f_params = part[i]
                 j0 = start_j if i == start_i else 0
-                for j in range(j0, len(risk_grid)):
-                    tp, sl, mh = risk_grid[j]
-                    tasks_to_run.append((False, f_params, None, tp, sl, mh))
+                r_grid = risk_grid[j0:]
+                if not r_grid: continue
+                chunks.append((False, f_params, None, r_grid, df, family, fee_side, slippage, worst_case, reverse_mode))
+                start_j = 0
 
-        # 2. 定義單獨執行的回測任務
-        def _eval_task(args):
-            is_fast, f_params, e_sig, tp, sl, mh = args
-            try:
-                if is_fast:
-                    res = bt.run_backtest_from_entry_sig(
-                        df, e_sig, tp, sl, mh, fee_side=fee_side, slippage=slippage, worst_case=worst_case, reverse_mode=reverse_mode
-                    )
-                else:
-                    res = bt.run_backtest(
-                        df, family, dict(f_params), float(tp), float(sl), int(mh), fee_side=fee_side, slippage=slippage, worst_case=worst_case, reverse_mode=reverse_mode
-                    )
-                metrics = _metrics_from_bt_result(res)
-                score = float(_score(metrics))
-                params = {
-                    "family": family,
-                    "family_params": dict(f_params),
-                    "tp": float(tp),
-                    "sl": float(sl),
-                    "max_hold": int(mh),
-                }
-                passed = _passes_thresholds(metrics, thr)
-                return score, params, metrics, passed
-            except Exception as e:
-                # 發生例外時安全回傳空值，避免阻斷其他平行運算
-                return 0.0, {}, {}, False
-
-        # 3. 啟動多執行緒平行運算，解鎖 CPU 算力限制
-        # 自動偵測本機處理器核心數，並配置 2 倍的執行緒來填滿 CPU
-        max_threads = min(32, (os.cpu_count() or 4) * 2)
+        # 2. 啟動多進程平行運算 (ProcessPoolExecutor)
+        # 【極限壓榨效能】完全捨棄 GIL 束縛，使用實體進程平行運算，讓 CPU 瞬間滿載至 100%
+        max_workers = max(1, (os.cpu_count() or 4) - 1)  # 留 1 個核心給系統避免死機
         
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
-            # 將任務切塊派發，確保能頻繁檢查 GUI 暫停與優雅關閉事件
-            chunk_size = max_threads * 2
-            for chunk_start in range(0, len(tasks_to_run), chunk_size):
+        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+            future_to_chunk = {executor.submit(_process_eval_chunk, c): c for c in chunks}
+            
+            for future in concurrent.futures.as_completed(future_to_chunk):
                 if _should_stop():
                     progress["phase"] = "stopped"
                     _commit(force=True)
                     api.release(task_id, lease_id, progress)
+                    executor.shutdown(wait=False, cancel_futures=True)
                     return
                 
-                chunk = tasks_to_run[chunk_start : chunk_start + chunk_size]
-                futures = [executor.submit(_eval_task, args) for args in chunk]
-                
-                # as_completed 確保誰先算完就先處理，最大化平行效能且避免 Race Condition
-                for future in concurrent.futures.as_completed(futures):
-                    if _should_stop():
-                        progress["phase"] = "stopped"
-                        _commit(force=True)
-                        api.release(task_id, lease_id, progress)
-                        return
-                    
-                    score, params, metrics, passed = future.result()
-                    if params:  # 確認有成功回傳參數(無報錯)
+                try:
+                    res_list = future.result()
+                    for score, params, metrics in res_list:
+                        passed = _passes_thresholds(metrics, thr)
                         _consider_candidate(score, params, metrics, passed)
-                    
-                    done += 1
+                        done += 1
+                except Exception:
+                    # 發生錯誤時以略過處理，確保系統強韌度
+                    pass
                 
-                # 每個小區塊算完才提交一次進度給 GUI，避免太頻繁呼叫拖慢整體運算
+                # 每個大區塊算完才提交一次進度給 GUI，大幅減輕主執行緒負擔
                 _commit()
 
         _commit(force=True)
