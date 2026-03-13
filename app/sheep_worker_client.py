@@ -17,17 +17,40 @@ import backtest_panel2 as bt
 # =========================================================
 # 專家級多進程核心：加入終端機詳細調試輸出，揭露假死真相
 # =========================================================
+GLOBAL_DF = None
+
+def _init_worker(df_in):
+    """進程初始化函數：每個子進程誕生時執行一次，綁定巨大資料至全域，消滅 IPC 瓶頸"""
+    global GLOBAL_DF
+    try:
+        GLOBAL_DF = df_in
+        import os
+        print(f"[進程 {os.getpid()}] 🚀 記憶體預載成功！K 線資料 ({len(df_in)} 筆) 已寫入全域空間。", flush=True)
+    except Exception as e:
+        import os, traceback
+        print(f"[進程 {os.getpid()}] ❌ 致命錯誤：子進程預載失敗！\n{traceback.format_exc()}", flush=True)
+        raise
+
 def _process_eval_chunk(args):
     import os, time, traceback
     pid = os.getpid()
-    task_list, df, family, fee_side, slippage, worst_case, reverse_mode = args
     
-    total_combos = sum(len(r) for _, _, _, r in task_list)
-    print(f"\n[進程 {pid}] 📥 成功接收超級區塊！內含 {len(task_list)} 組策略參數，共計 {total_combos} 個風險組合準備運算...", flush=True)
-    t0 = time.time()
-    
-    results = []
     try:
+        # 移除 df，改為從 args 解構剩下的輕量參數
+        task_list, family, fee_side, slippage, worst_case, reverse_mode = args
+        
+        # 專家級優化：直接取用初始化時載入的全域變數
+        global GLOBAL_DF
+        df = GLOBAL_DF
+        
+        if df is None:
+            raise RuntimeError(f"全域 K 線資料遺失！_init_worker 似乎未正確觸發。")
+        
+        total_combos = sum(len(r) for _, _, _, r in task_list)
+        print(f"\n[進程 {pid}] 📥 成功接收輕量區塊！參數 {len(task_list)} 組，共 {total_combos} 個組合。準備極速運算...", flush=True)
+        t0 = time.time()
+        
+        results = []
         import backtest_panel2 as bt
         for is_fast, f_params, e_sig, risk_grid_chunk in task_list:
             for tp, sl, mh in risk_grid_chunk:
@@ -48,13 +71,14 @@ def _process_eval_chunk(args):
                 score = float(metrics["total_return_pct"]) + 5.0 * float(metrics["sharpe"]) - 0.6 * float(metrics["max_drawdown_pct"])
                 params = {"family": family, "family_params": dict(f_params), "tp": float(tp), "sl": float(sl), "max_hold": int(mh)}
                 results.append((score, params, metrics))
-    except Exception as e:
-        print(f"\n[進程 {pid}] ❌ 執行期間發生嚴重崩潰: {e}", flush=True)
-        traceback.print_exc()
+                
+        t1 = time.time()
+        print(f"[進程 {pid}] 🏁 區塊運算完畢！耗時: {t1-t0:.2f} 秒，產出 {len(results)} 筆結果。", flush=True)
+        return results
         
-    t1 = time.time()
-    print(f"[進程 {pid}] 🏁 區塊運算完畢！耗時: {t1-t0:.2f} 秒，產出 {len(results)} 筆結果。", flush=True)
-    return results
+    except Exception as e:
+        print(f"\n[進程 {pid}] ❌ 執行期間發生嚴重崩潰，已攔截錯誤根因:\n{traceback.format_exc()}", flush=True)
+        raise
 
 WORKER_VERSION = "2.1.0"
 WORKER_PROTOCOL = 2
@@ -718,22 +742,23 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
             start_j = 0
             
             if len(current_task_list) >= optimal_chunk_size:
-                super_chunks.append((current_task_list, df, family, fee_side, slippage, worst_case, reverse_mode))
+                super_chunks.append((current_task_list, family, fee_side, slippage, worst_case, reverse_mode))
                 current_task_list = []
                 
         if current_task_list:
-            super_chunks.append((current_task_list, df, family, fee_side, slippage, worst_case, reverse_mode))
+            super_chunks.append((current_task_list, family, fee_side, slippage, worst_case, reverse_mode))
 
         print(f"[系統調試] 📦 超級區塊打包完畢！從原先碎片壓縮為 {len(super_chunks)} 個高密度 Chunk。耗時: {time.time() - t_chunk_start:.2f} 秒。", flush=True)
         
         t_dispatch = time.time()
-        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-            print(f"[系統調試] ⚠️ 開始將 {len(super_chunks)} 個超級區塊塞入通訊管道 (IPC Pipe)...", flush=True)
-            print(f"[系統調試] 💡 如果在此卡住，代表 DataFrame 仍然極大，單核 Pickling 正在全力運作，請耐心等待分發。", flush=True)
+        # 【效能極致壓榨】注入 initializer，讓子進程啟動時只複製一次 DataFrame，徹底消滅 IPC 傳輸瓶頸
+        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers, initializer=_init_worker, initargs=(df,)) as executor:
+            print(f"[系統調試] ⚠️ 開始將 {len(super_chunks)} 個輕量區塊塞入通訊管道 (IPC Pipe)...", flush=True)
+            print(f"[系統調試] 💡 已啟動全域預載機制 (Initializer)！傳輸時間將縮短至毫秒級別，不再卡死！", flush=True)
             
             future_to_chunk = {executor.submit(_process_eval_chunk, c): c for c in super_chunks}
             
-            print(f"[系統調試] ✅ 所有區塊已成功塞入進程池！IPC 傳輸總耗時: {time.time() - t_dispatch:.2f} 秒。等待運算結果...", flush=True)
+            print(f"[系統調試] ✅ 所有輕量區塊已瞬間塞入進程池！IPC 傳輸總耗時: {time.time() - t_dispatch:.4f} 秒。等待極速運算結果...", flush=True)
             
             for future in concurrent.futures.as_completed(future_to_chunk):
                 if _should_stop():
