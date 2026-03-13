@@ -6,6 +6,7 @@ import hashlib
 import sys
 import time
 import uuid
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -133,8 +134,17 @@ class ApiClient:
 
     def _request(self, method: str, path: str, *, json_body: Optional[Dict[str, Any]] = None, timeout_s: float = 30.0):
         url = self.base_url + path
+        last_error_msg = ""
         for attempt in range(6):
-            r = self._session.request(method, url, headers=self._headers(), json=json_body, timeout=timeout_s)
+            try:
+                r = self._session.request(method, url, headers=self._headers(), json=json_body, timeout=timeout_s)
+            except requests.exceptions.RequestException as e:
+                # 網路異常或超時，攔截錯誤並進行重試
+                last_error_msg = str(e)
+                wait_s = 2.0 + attempt * 2.0
+                time.sleep(wait_s)
+                continue
+                
             if r.status_code in (429, 503, 502):
                 # backoff
                 ra = r.headers.get("Retry-After")
@@ -155,7 +165,7 @@ class ApiClient:
             if not r.content:
                 return None
             return r.json()
-        raise RuntimeError("api_unavailable")
+        raise RuntimeError(f"api_unavailable: Failed after 6 attempts. Last network error: {last_error_msg}")
 
     def manifest(self) -> Dict[str, Any]:
         url = self.base_url + "/manifest"
@@ -178,12 +188,15 @@ class ApiClient:
         if current_task_id is not None:
             headers["X-Current-Task-Id"] = str(int(current_task_id))
         url = self.base_url + "/workers/heartbeat"
-        r = self._session.post(url, headers=headers, timeout=10)
-        if r.status_code in (429, 503, 502):
-            return
-        if r.status_code >= 400:
-            # don't crash on heartbeat
-            return
+        try:
+            r = self._session.post(url, headers=headers, timeout=10)
+            if r.status_code in (429, 503, 502):
+                return
+            if r.status_code >= 400:
+                # don't crash on heartbeat
+                return
+        except requests.exceptions.RequestException:
+            pass
 
     def claim_task(self) -> Optional[Dict[str, Any]]:
         # [極致防護] 大幅延長領取任務的超時時間至 600 秒。
@@ -393,12 +406,22 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
     _SYNC_RE = re.compile(r"^\s*(\S+)\s+已寫入\s+(\d+)\s*/\s*(\d+)\s*$")
 
     def _progress_cb(frac: float, msg: str) -> None:
+        mmsg = str(msg)
+        f = float(frac)
+
+        # 核心修復：強制從字串中解析真實進度，避免底層傳來的 frac 不準確(卡在 1.0)
+        m = _SYNC_RE.match(mmsg)
+        if m:
+            done_i = int(m.group(2))
+            total_i = int(m.group(3))
+            if total_i > 0:
+                f = float(done_i) / float(total_i)
+
         if globals().get("GUI_QUEUE"):
-            globals()["GUI_QUEUE"].put({"type": "status", "msg": msg, "frac": frac})
+            globals()["GUI_QUEUE"].put({"type": "status", "msg": mmsg, "frac": f})
+
         nonlocal last_sync_push_ts, last_sync_frac, last_sync_msg
         now = time.time()
-        f = float(frac)
-        mmsg = str(msg)
 
         # 同步回呼很密；節流：最短 0.35s 一次，或進度跳動 >= 2%，或訊息有變
         if (now - last_sync_push_ts) < 0.35 and abs(f - last_sync_frac) < 0.02 and mmsg == last_sync_msg:
@@ -412,12 +435,9 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
         progress["phase_progress"] = f
         progress["phase_msg"] = mmsg
         
-        m = _SYNC_RE.match(mmsg)
         if m:
             label = str(m.group(1))
-            done_i = int(m.group(2))
-            total_i = int(m.group(3))
-
+            
             sync = progress.get("sync")
             if not isinstance(sync, dict):
                 sync = {"items": {}, "current": ""}
