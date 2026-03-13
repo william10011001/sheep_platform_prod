@@ -94,10 +94,10 @@ services:
     restart: always
     healthcheck:
       # 主動監控 Streamlit 內部健康檢查介面
-      test: ["CMD", "curl", "-fsS", "http://localhost:8501/app/_stcore/health"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8501/app/_stcore/health || curl -fsS http://localhost:8501/_stcore/health || curl -fsS http://localhost:8501/healthz || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 8
 
   # [Worker 後台服務] 專職負責任務分配，使用較輕量的 api 鏡像
   worker:

@@ -74,11 +74,8 @@ import sheep_platform_db as db
 from sheep_platform_security import (
     hash_password,
     verify_password,
-    validate_username,
-    validate_password_strength,
     validate_wallet_address,
     normalize_username,
-    get_fernet,
 )
 from sheep_platform_jobs import JOB_MANAGER, JobManager
 from sheep_platform_audit import audit_candidate
@@ -1673,8 +1670,8 @@ def _style() -> None:
             50% { box-shadow: 0 0 30px rgba(255, 0, 60, 0.95), inset 0 0 15px rgba(255, 255, 255, 0.4); }
         }
 
-/* --- [純 CSS 綁定側邊欄按鈕特效與圖示] --- /
-/ [終極除錯與修復] 徹底隱藏錨點，避免影響 DOM 流與觸發 :has() 失效 */
+/* --- [純 CSS 綁定側邊欄按鈕特效與圖示] --- */
+/* [終極除錯與修復] 徹底隱藏錨點，避免影響 DOM 流與觸發 :has() 失效 */
 div[data-testid="stSidebar"] div.element-container:has(.sidebar-anchor) {
 position: absolute !important;
 width: 0 !important;
