@@ -438,8 +438,10 @@ def get_captcha():
         # 為了簡化，前端背景由純 CSS 生成，這裡告知前端目標位置 (背景缺口位置)
         return {"ok": True, "target_x": target_x, "token": token}
     except Exception as e:
-        db.log_sys_event("CAPTCHA_GEN_ERROR", None, f"生成驗證碼失敗: {e}", {})
-        raise HTTPException(status_code=500, detail="captcha_generation_failed")
+        import traceback
+        err_detail = traceback.format_exc()
+        db.log_sys_event("CAPTCHA_GEN_ERROR", None, f"生成驗證碼崩潰: {e}", {"trace": err_detail})
+        raise HTTPException(status_code=500, detail=f"系統驗證碼生成模組錯誤: {e}")
 
 @app.get("/healthz")
 async def healthz():

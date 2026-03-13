@@ -190,55 +190,91 @@ def json_dumps(obj) -> str:
 
 
 def generate_slider_captcha() -> Tuple[int, str]:
-    """[專家級防護] 生成隨機目標位置與強加密憑證"""
-    target_x = secrets.randbelow(150) + 50  # 隨機目標位置介於 50 到 200 之間
-    ts = datetime.now(timezone.utc).timestamp()
-    
-    # 將目標位置與過期時間封裝並加密
-    payload = json_dumps({"x": target_x, "ts": ts})
-    token_bytes = get_fernet().encrypt(payload.encode("utf-8"))
-    token_str = token_bytes.decode("utf-8")
-    
-    return target_x, token_str
+    """[專家級防護] 生成隨機目標位置與強加密憑證，加入隨機鹽值防止重放特徵分析"""
+    try:
+        target_x = secrets.randbelow(150) + 50  # 隨機缺口位置介於 50 到 200 之間
+        ts = datetime.now(timezone.utc).timestamp()
+        nonce = secrets.token_hex(8)  # 注入隨機擾動防止加密後特徵被分析
+        
+        # 將目標位置、過期時間與擾動鹽值封裝並加密
+        payload = json_dumps({"x": target_x, "ts": ts, "n": nonce})
+        token_bytes = get_fernet().encrypt(payload.encode("utf-8"))
+        
+        return target_x, token_bytes.decode("utf-8")
+    except Exception as e:
+        import sys, traceback
+        sys.stderr.write(f"\n[!!! CAPTCHA ERROR !!!] 生成驗證碼失敗\n")
+        traceback.print_exc(file=sys.stderr)
+        raise RuntimeError(f"驗證碼底層生成崩潰: {str(e)}")
 
 
 def verify_slider_captcha(token: str, offset: float, tracks: list) -> Tuple[bool, str]:
-    """[專家級防護] 驗證滑動驗證碼，包含時間、距離與軌跡行為分析"""
+    """[專家級防護] 嚴格驗證滑動驗證碼，包含高階物理行為學軌跡分析與最大化錯誤追蹤"""
     if not token or not tracks:
-        return False, "驗證碼資料缺失，請重新整理頁面。"
+        return False, "驗證資料缺失，請重新整理頁面。"
         
     try:
-        decrypted_bytes = get_fernet().decrypt(token.encode("utf-8"), ttl=300) # 5分鐘內有效
+        decrypted_bytes = get_fernet().decrypt(token.encode("utf-8"), ttl=300) # 5分鐘內嚴格有效
         payload = json.loads(decrypted_bytes.decode("utf-8"))
     except Exception as e:
-        return False, f"驗證碼已過期或遭竄改 ({type(e).__name__})。"
+        # 最大化拋出例外細節，確保管理員能分辨是逾時還是竄改
+        return False, f"驗證憑證已過期或被竄改: {type(e).__name__} - {str(e)}"
         
     target_x = payload.get("x", 0)
     
-    # 驗證 1：最終位置容錯率 (相差不能超過 5px)
-    if abs(offset - target_x) > 5.0:
-        return False, "滑動位置不精確，請重試。"
+    # 驗證 1：最終位置容錯率 (收緊至 4px)
+    diff = abs(offset - target_x)
+    if diff > 4.0:
+        return False, f"滑動位置不精確 (誤差值: {diff:.1f}px)，請重試。"
         
-    # 驗證 2：軌跡長度檢查
-    if len(tracks) < 5:
-        return False, "軌跡異常 。"
+    # 驗證 2：軌跡長度檢查 (人類滑動不可能少於 10 個採樣點)
+    if len(tracks) < 10:
+        return False, f"軌跡特徵點過少 (僅捕捉到 {len(tracks)} 點)，疑似非人類腳本。"
         
-    # 驗證 3：行為學檢查 (計算滑動過程中的時間差與位移特徵)
-    # 正常的滑動會有加速與減速的過程，不會是完美的等速運動
+    # 驗證 3：物理行為學檢查 (防抖動、極限邊界與變異加速度)
     try:
         start_time = tracks[0].get("t", 0)
         end_time = tracks[-1].get("t", 0)
         total_time = end_time - start_time
         
-        if total_time < 50: # 滑動時間小於 50ms 判定為非人類
-            return False, "操作速度異常，拒絕訪問。"
+        if total_time < 150 or total_time > 8000:
+            return False, f"操作時間異常 (耗時 {total_time}ms)，不在人類常規操作速度範圍。"
             
-        # 簡單計算 X 軸的變異數，防止線性軌跡
-        x_values = [pt.get("x", 0) for pt in tracks]
-        if max(x_values) == min(x_values) and offset > 0:
-            return False, "無效的直線軌跡特徵。"
+        x_values = []
+        y_values = []
+        for pt in tracks:
+            if "x" not in pt or "y" not in pt or "t" not in pt:
+                return False, f"軌跡資料結構損毀: 缺少必要座標參數 (x,y,t)。目前資料: {pt}"
+            x_values.append(pt["x"])
+            y_values.append(pt["y"])
             
+        # 驗證 4：X 軸軌跡邊界約束 (不該出現極端負數或超過前端容器的數值)
+        if min(x_values) < -20 or max(x_values) > 350:
+            return False, f"X 軸軌跡超出物理邊界限制 (Min: {min(x_values)}, Max: {max(x_values)})。"
+            
+        # 驗證 5：Y 軸人類微小防手震特徵 (不可能永遠維持在 0 或是同一數值)
+        y_variance = max(y_values) - min(y_values)
+        if y_variance == 0:
+            return False, "Y 軸缺乏人類微小手抖特徵 (判定為自動化腳本強制直行)。"
+            
+        # 驗證 6：加速度變異分析 (必須有加速與減速的階段，不能是完美的等速運動)
+        velocities = []
+        for i in range(1, len(tracks)):
+            dx = tracks[i]["x"] - tracks[i-1]["x"]
+            dt = tracks[i]["t"] - tracks[i-1]["t"]
+            if dt <= 0: continue
+            velocities.append(dx / dt)
+            
+        if len(velocities) > 2:
+            avg_v = sum(velocities) / len(velocities)
+            variance_v = sum((v - avg_v)**2 for v in velocities) / len(velocities)
+            if variance_v < 0.0005:
+                return False, f"滑動呈現超自然完美等速運動 (變異數: {variance_v:.5f})，直接攔截。"
+
     except Exception as track_err:
-        return False, f"軌跡解析失敗: {track_err}"
+        import sys, traceback
+        sys.stderr.write(f"\n[!!! CAPTCHA SECURITY ALARM !!!] 軌跡解析過程中發生非預期例外\n")
+        traceback.print_exc(file=sys.stderr)
+        return False, f"軌跡特徵深度解析崩潰: {str(track_err)}"
 
     return True, "驗證成功"
