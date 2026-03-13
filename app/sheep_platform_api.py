@@ -366,6 +366,9 @@ class TokenRequest(BaseModel):
     password: str
     ttl_seconds: int = 86400
     name: str = "worker"
+    captcha_token: str = ""
+    captcha_offset: float = 0.0
+    captcha_tracks: List[Dict[str, Any]] = []
 
 
 class TokenResponse(BaseModel):
@@ -380,6 +383,13 @@ class WebRegisterIn(BaseModel):
     username: str
     password: str
     tos_ok: bool
+    captcha_token: str = ""
+    captcha_offset: float = 0.0
+    captcha_tracks: List[Dict[str, Any]] = []
+
+class CaptchaOut(BaseModel):
+    token: str
+    bg_x: int
 
 
 class TaskOut(BaseModel):
@@ -419,6 +429,17 @@ class ReleaseIn(BaseModel):
     lease_id: str
     progress: Dict[str, Any]
 
+
+@app.get("/auth/captcha")
+def get_captcha():
+    try:
+        from sheep_platform_security import generate_slider_captcha
+        target_x, token = generate_slider_captcha()
+        # 為了簡化，前端背景由純 CSS 生成，這裡告知前端目標位置 (背景缺口位置)
+        return {"ok": True, "target_x": target_x, "token": token}
+    except Exception as e:
+        db.log_sys_event("CAPTCHA_GEN_ERROR", None, f"生成驗證碼失敗: {e}", {})
+        raise HTTPException(status_code=500, detail="captcha_generation_failed")
 
 @app.get("/healthz")
 async def healthz():
@@ -609,6 +630,14 @@ def issue_token(req: Request, body: TokenRequest):
     ip = _client_ip(req) or "ip"
     try:
         allowed, retry_after = _token_issue_limiter.check(ip, cost=1.0)
+        
+        # [專家級防護] 滑動驗證碼嚴格校驗 (針對網頁端請求)
+        if body.name != "compute":
+            from sheep_platform_security import verify_slider_captcha
+            is_valid, err_msg = verify_slider_captcha(body.captcha_token, body.captcha_offset, body.captcha_tracks)
+            if not is_valid:
+                db.log_sys_event("LOGIN_CAPTCHA_FAIL", None, f"驗證碼未通過: {err_msg}", {"ip": ip, "username": body.username})
+                raise HTTPException(status_code=400, detail=f"CAPTCHA_FAILED: {err_msg}")
         if not allowed:
             db.log_sys_event("LOGIN_FAIL", None, f"IP {ip} 登入頻率過高觸發限制", {"ip": ip})
             headers = {"Retry-After": str(int(max(1, retry_after or 1.0)))}
@@ -687,6 +716,12 @@ def issue_token(req: Request, body: TokenRequest):
 def web_register(req: Request, body: WebRegisterIn):
     ip = _client_ip(req) or "unknown_ip"
     try:
+        from sheep_platform_security import verify_slider_captcha
+        is_valid, err_msg = verify_slider_captcha(body.captcha_token, body.captcha_offset, body.captcha_tracks)
+        if not is_valid:
+            db.log_sys_event("REGISTER_CAPTCHA_FAIL", None, f"驗證碼未通過: {err_msg}", {"ip": ip, "username": body.username})
+            raise HTTPException(status_code=400, detail=f"CAPTCHA_FAILED: {err_msg}")
+
         allowed, retry_after = _register_ip_limiter.check(f"reg_ip:{ip}", cost=1.0)
         if not allowed:
             db.log_sys_event("REGISTER_FAIL", None, f"IP {ip} 註冊頻率過高觸發限制", {"ip": ip})

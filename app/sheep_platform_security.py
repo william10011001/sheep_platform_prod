@@ -187,3 +187,58 @@ def stable_hmac_sha256(key: bytes, message: str) -> str:
 
 def json_dumps(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def generate_slider_captcha() -> Tuple[int, str]:
+    """[專家級防護] 生成隨機目標位置與強加密憑證"""
+    target_x = secrets.randbelow(150) + 50  # 隨機目標位置介於 50 到 200 之間
+    ts = datetime.now(timezone.utc).timestamp()
+    
+    # 將目標位置與過期時間封裝並加密
+    payload = json_dumps({"x": target_x, "ts": ts})
+    token_bytes = get_fernet().encrypt(payload.encode("utf-8"))
+    token_str = token_bytes.decode("utf-8")
+    
+    return target_x, token_str
+
+
+def verify_slider_captcha(token: str, offset: float, tracks: list) -> Tuple[bool, str]:
+    """[專家級防護] 驗證滑動驗證碼，包含時間、距離與軌跡行為分析"""
+    if not token or not tracks:
+        return False, "驗證碼資料缺失，請重新整理頁面。"
+        
+    try:
+        decrypted_bytes = get_fernet().decrypt(token.encode("utf-8"), ttl=300) # 5分鐘內有效
+        payload = json.loads(decrypted_bytes.decode("utf-8"))
+    except Exception as e:
+        return False, f"驗證碼已過期或遭竄改 ({type(e).__name__})。"
+        
+    target_x = payload.get("x", 0)
+    
+    # 驗證 1：最終位置容錯率 (相差不能超過 5px)
+    if abs(offset - target_x) > 5.0:
+        return False, "滑動位置不精確，請重試。"
+        
+    # 驗證 2：軌跡長度檢查
+    if len(tracks) < 5:
+        return False, "軌跡異常 。"
+        
+    # 驗證 3：行為學檢查 (計算滑動過程中的時間差與位移特徵)
+    # 正常的滑動會有加速與減速的過程，不會是完美的等速運動
+    try:
+        start_time = tracks[0].get("t", 0)
+        end_time = tracks[-1].get("t", 0)
+        total_time = end_time - start_time
+        
+        if total_time < 50: # 滑動時間小於 50ms 判定為非人類
+            return False, "操作速度異常，拒絕訪問。"
+            
+        # 簡單計算 X 軸的變異數，防止線性軌跡
+        x_values = [pt.get("x", 0) for pt in tracks]
+        if max(x_values) == min(x_values) and offset > 0:
+            return False, "無效的直線軌跡特徵。"
+            
+    except Exception as track_err:
+        return False, f"軌跡解析失敗: {track_err}"
+
+    return True, "驗證成功"

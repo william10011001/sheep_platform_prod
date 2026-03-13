@@ -85,6 +85,17 @@
             background-size: 1rem 1rem;
             animation: progress-stripes 1s linear infinite;
         }
+
+        /* 專家級滑動驗證碼樣式 */
+        .captcha-container { position: relative; width: 100%; height: 40px; background: rgba(255, 255, 255, 0.05); border-radius: 4px; overflow: hidden; border: 1px solid rgba(255, 255, 255, 0.1); margin-top: 10px; user-select: none; }
+        .captcha-bg-text { position: absolute; width: 100%; height: 100%; line-height: 40px; text-align: center; color: rgba(255, 255, 255, 0.3); font-size: 14px; pointer-events: none; z-index: 1; }
+        .captcha-fill { position: absolute; height: 100%; background: rgba(255, 0, 60, 0.2); width: 0; z-index: 2; border-right: 1px solid rgba(255, 0, 60, 0.5); }
+        .captcha-slider { position: absolute; top: 0; left: 0; width: 40px; height: 100%; background: #2a2a2a; border: 1px solid #FF003C; border-radius: 4px; cursor: pointer; z-index: 3; display: flex; align-items: center; justify-content: center; color: #FF003C; font-weight: bold; transition: background 0.2s; box-shadow: 0 0 10px rgba(0,0,0,0.5); }
+        .captcha-slider:hover { background: #3a3a3a; box-shadow: 0 0 15px rgba(255,0,60,0.4); }
+        .captcha-slider.active { background: #FF003C; color: #fff; cursor: grabbing; }
+        .captcha-slider.success { background: #10b981; border-color: #059669; color: #fff; pointer-events: none; }
+        .captcha-slider.error { background: #ef4444; border-color: #b91c1c; color: #fff; transition: left 0.3s ease, background 0.3s; }
+        .captcha-target-hole { position: absolute; top: 0; width: 40px; height: 100%; border: 2px dashed rgba(255, 0, 60, 0.3); background: rgba(0, 0, 0, 0.3); border-radius: 4px; z-index: 1; box-sizing: border-box; }
     </style>
 </head>
 <body>
@@ -112,8 +123,26 @@
                 <form @submit.prevent="handleAuth" class="space-y-4">
                     <div><input v-model="authForm.username" type="text" placeholder="帳號" required class="cyber-input w-full px-4 py-2 rounded-md"></div>
                     <div><input v-model="authForm.password" type="password" placeholder="密碼" required class="cyber-input w-full px-4 py-2 rounded-md"></div>
+                    
+                    <div v-show="captchaState.token" class="w-full mt-4">
+                        <div class="text-xs text-gray-400 mb-1">為確保安全性，請完成下方滑動驗證：</div>
+                        <div class="captcha-container" ref="captchaContainer">
+                            <div class="captcha-bg-text">{{ captchaState.success ? '驗證成功' : '向右滑動滑塊以完成驗證' }}</div>
+                            <div class="captcha-target-hole" v-show="captchaState.targetX > 0 && !captchaState.success" :style="{ left: captchaState.targetX + 'px' }"></div>
+                            <div class="captcha-fill" :style="{ width: (captchaState.currentX + 20) + 'px' }" :class="{'!bg-emerald-500/20 !border-emerald-500': captchaState.success, '!bg-red-500/20 !border-red-500': captchaState.error}"></div>
+                            <div class="captcha-slider" 
+                                 :class="{ active: captchaState.isDragging, success: captchaState.success, error: captchaState.error }"
+                                 :style="{ left: captchaState.currentX + 'px' }"
+                                 @mousedown="onSliderDown" @touchstart.prevent="onSliderDown">
+                                <span v-if="captchaState.success">✔</span>
+                                <span v-else-if="captchaState.error">✖</span>
+                                <span v-else>→</span>
+                            </div>
+                        </div>
+                    </div>
+
                     <div v-if="errorMsg" class="text-red-500 text-sm font-bold">{{ errorMsg }}</div>
-                    <button type="submit" class="cyber-btn w-full py-2.5 rounded-md font-bold mt-4">{{ isLoginMode ? '登入' : '註冊' }}</button>
+                    <button type="submit" :disabled="!captchaState.success" class="cyber-btn w-full py-2.5 rounded-md font-bold mt-4 disabled:opacity-50 disabled:cursor-not-allowed">{{ isLoginMode ? '登入' : '註冊' }}</button>
                     
                     <div class="text-center pt-2">
                         <button type="button" @click="isLoginMode = !isLoginMode; errorMsg = ''" class="text-sm text-gray-400 hover:text-white transition-colors">
@@ -374,6 +403,95 @@
                 
                 const authForm = reactive({ username: '', password: '' });
                 const dashData = reactive({ tasks_count: 0, strategies_active: 0, payouts_unpaid: 0, strategies: [], payouts: [], min_sharpe: 0.6 });
+                
+                // 驗證碼狀態管理
+                const captchaContainer = ref(null);
+                const captchaState = reactive({
+                    token: '',
+                    targetX: 0,
+                    currentX: 0,
+                    isDragging: false,
+                    success: false,
+                    error: false,
+                    startX: 0,
+                    tracks: [],
+                    startTime: 0
+                });
+
+                const loadCaptcha = async () => {
+                    try {
+                        const res = await fetchApi('/auth/captcha');
+                        captchaState.token = res.token;
+                        captchaState.targetX = res.target_x;
+                        captchaState.currentX = 0;
+                        captchaState.success = false;
+                        captchaState.error = false;
+                        captchaState.tracks = [];
+                    } catch (e) {
+                        console.error('加載驗證碼失敗', e);
+                    }
+                };
+
+                const resetCaptcha = () => {
+                    captchaState.currentX = 0;
+                    captchaState.success = false;
+                    captchaState.error = false;
+                    captchaState.isDragging = false;
+                    captchaState.tracks = [];
+                    loadCaptcha();
+                };
+
+                const onSliderDown = (e) => {
+                    if (captchaState.success) return;
+                    captchaState.isDragging = true;
+                    captchaState.error = false;
+                    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                    captchaState.startX = clientX - captchaState.currentX;
+                    captchaState.startTime = Date.now();
+                    captchaState.tracks.push({ x: captchaState.currentX, y: 0, t: captchaState.startTime });
+
+                    document.addEventListener('mousemove', onSliderMove);
+                    document.addEventListener('touchmove', onSliderMove, { passive: false });
+                    document.addEventListener('mouseup', onSliderUp);
+                    document.addEventListener('touchend', onSliderUp);
+                };
+
+                const onSliderMove = (e) => {
+                    if (!captchaState.isDragging) return;
+                    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                    let x = clientX - captchaState.startX;
+                    const maxWalk = (captchaContainer.value ? captchaContainer.value.offsetWidth : 300) - 40;
+                    if (x < 0) x = 0;
+                    if (x > maxWalk) x = maxWalk;
+                    captchaState.currentX = x;
+                    
+                    // 記錄軌跡，用於後端行為分析
+                    captchaState.tracks.push({
+                        x: Math.round(x),
+                        y: e.touches ? Math.round(e.touches[0].clientY) : Math.round(e.clientY),
+                        t: Date.now()
+                    });
+                };
+
+                const onSliderUp = () => {
+                    if (!captchaState.isDragging) return;
+                    captchaState.isDragging = false;
+                    document.removeEventListener('mousemove', onSliderMove);
+                    document.removeEventListener('touchmove', onSliderMove);
+                    document.removeEventListener('mouseup', onSliderUp);
+                    document.removeEventListener('touchend', onSliderUp);
+
+                    // 初步前端驗證，相差小於 5 像素即允許提交
+                    if (Math.abs(captchaState.currentX - captchaState.targetX) <= 5) {
+                        captchaState.success = true;
+                    } else {
+                        captchaState.error = true;
+                        showToast('驗證失敗，請重試', 'error', 2000);
+                        setTimeout(() => {
+                            resetCaptcha();
+                        }, 500);
+                    }
+                };
                 const tasksData = reactive({ tasks: [], run_enabled: false });
                 const leaderboard = reactive({ combos: [] });
 
@@ -495,6 +613,8 @@
                             console.error('[checkAuth 錯誤] /user/me 或後續請求失敗:', e);
                             showToast(`獲取使用者資訊失敗: ${e.message}`, 'error', 5000);
                         }
+                        // 未登入狀態，載入驗證碼
+                        loadCaptcha();
                     } 
                     finally { isLoading.value = false; }
                 };
@@ -533,10 +653,20 @@
                     showToast(' 正在驗證登入資訊...', 'info', 0); // 持續顯示直到流程結束
                     
                     try {
+                        if (!captchaState.success) {
+                            throw new Error("請先完成安全滑動驗證");
+                        }
+
                         const endpoint = isLoginMode.value ? '/token' : '/auth/register';
                         const body = isLoginMode.value 
-                            ? { username: authForm.username, password: authForm.password, ttl_seconds: 86400 * 30, name: "worker" }
-                            : { username: authForm.username, password: authForm.password, tos_ok: true };
+                            ? { 
+                                username: authForm.username, password: authForm.password, ttl_seconds: 86400 * 30, name: "worker",
+                                captcha_token: captchaState.token, captcha_offset: captchaState.currentX, captcha_tracks: captchaState.tracks
+                              }
+                            : { 
+                                username: authForm.username, password: authForm.password, tos_ok: true,
+                                captcha_token: captchaState.token, captcha_offset: captchaState.currentX, captcha_tracks: captchaState.tracks
+                              };
                             
                         // 注意：如果後端是標準 OAuth2PasswordRequestForm，這裡的 JSON 會報 422 錯誤。
                         // 我們保留原邏輯，但透過強化報錯讓您能第一時間發現。
@@ -601,6 +731,8 @@
                         console.error('[handleAuth Error]', e);
                         errorMsg.value = e.message; 
                         showToast(`發生錯誤: ${e.message}`, 'error', 5000);
+                        // [專家級修復] 驗證失敗或請求失敗時，強制刷新驗證碼防止重放攻擊
+                        resetCaptcha();
                     }
                     finally { 
                         isLoading.value = false; 
@@ -819,6 +951,7 @@
                 // 👉 修復：確保 return 內輸出的函數名稱與上面定義的完全一致，不包含多餘殘留變數
                 return { 
                     user, isLoading, isLoginMode, currentTab, authForm, errorMsg, handleAuth, logout, 
+                    captchaContainer, captchaState, onSliderDown, // 導出驗證碼狀態與事件 
                     toastMsg, toastType, // 導出供 UI 使用
                     dashData, tasksData, leaderboard, pingMs, startMining, stopMining, 
                     getStatusText, getPhaseText, getProgressState, getScore, getScoreNumber,
