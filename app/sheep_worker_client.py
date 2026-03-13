@@ -15,14 +15,20 @@ import requests
 import backtest_panel2 as bt
 
 # =========================================================
-# 專家級多進程核心：完全釋放 GIL 鎖，將 CPU 壓榨至 100% 滿載
+# 專家級多進程核心：加入終端機詳細調試輸出，揭露假死真相
 # =========================================================
 def _process_eval_chunk(args):
-    import backtest_panel2 as bt
+    import os, time, traceback
+    pid = os.getpid()
     is_fast, f_params, e_sig, risk_grid_chunk, df, family, fee_side, slippage, worst_case, reverse_mode = args
+    
+    print(f"\n[進程 {pid}] 📥 成功接收區塊！準備運算 {len(risk_grid_chunk)} 個參數組合 (FastMode: {is_fast})", flush=True)
+    t0 = time.time()
+    
     results = []
-    for tp, sl, mh in risk_grid_chunk:
-        try:
+    try:
+        import backtest_panel2 as bt
+        for tp, sl, mh in risk_grid_chunk:
             if is_fast:
                 res = bt.run_backtest_from_entry_sig(df, e_sig, tp, sl, mh, fee_side=fee_side, slippage=slippage, worst_case=worst_case, reverse_mode=reverse_mode)
             else:
@@ -40,8 +46,12 @@ def _process_eval_chunk(args):
             score = float(metrics["total_return_pct"]) + 5.0 * float(metrics["sharpe"]) - 0.6 * float(metrics["max_drawdown_pct"])
             params = {"family": family, "family_params": dict(f_params), "tp": float(tp), "sl": float(sl), "max_hold": int(mh)}
             results.append((score, params, metrics))
-        except Exception:
-            pass
+    except Exception as e:
+        print(f"\n[進程 {pid}] ❌ 執行期間發生嚴重崩潰: {e}", flush=True)
+        traceback.print_exc()
+        
+    t1 = time.time()
+    print(f"[進程 {pid}] 🏁 區塊運算完畢！耗時: {t1-t0:.2f} 秒，產出 {len(results)} 筆結果。", flush=True)
     return results
 
 WORKER_VERSION = "2.1.0"
@@ -676,10 +686,13 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
 
         import concurrent.futures
         import os
+        import time
 
-        # 1. 將任務依照家族參數 (f_params) 切塊打包 (Chunk)
-        # 讓每一進程(核心)一次接收一批任務與一份 DataFrame，極大化降低跨進程通訊(IPC)開銷，同時強迫吃滿 RAM！
+        print("\n" + "="*60, flush=True)
+        print(f"[系統調試] 🛠️ 準備切割任務群，策略: {family}, FastMode: {use_fast_path}", flush=True)
+
         chunks = []
+        t_chunk_start = time.time()
         if use_fast_path and sig_cache is not None:
             for i in range(start_i, len(part)):
                 f_params = part[i]
@@ -688,7 +701,7 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
                 r_grid = risk_grid[j0:]
                 if not r_grid: continue
                 chunks.append((True, f_params, e_sig, r_grid, df, family, fee_side, slippage, worst_case, reverse_mode))
-                start_j = 0  # 下個循環重置
+                start_j = 0
         else:
             for i in range(start_i, len(part)):
                 f_params = part[i]
@@ -698,15 +711,23 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
                 chunks.append((False, f_params, None, r_grid, df, family, fee_side, slippage, worst_case, reverse_mode))
                 start_j = 0
 
-        # 2. 啟動多進程平行運算 (ProcessPoolExecutor)
-        # 【極限壓榨效能】完全捨棄 GIL 束縛，使用實體進程平行運算，讓 CPU 瞬間滿載至 100%
-        max_workers = max(1, (os.cpu_count() or 4) - 1)  # 留 1 個核心給系統避免死機
+        print(f"[系統調試] 📦 區塊打包完畢！共 {len(chunks)} 個 Chunks。耗時: {time.time() - t_chunk_start:.2f} 秒。", flush=True)
+
+        max_workers = max(1, (os.cpu_count() or 4) - 1)
+        print(f"[系統調試] 🚀 準備喚醒 {max_workers} 個實體 CPU 核心的進程池...", flush=True)
         
+        t_dispatch = time.time()
         with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+            print(f"[系統調試] ⚠️ 開始將 {len(chunks)} 個含 DataFrame 的區塊塞入通訊管道 (IPC Pipe)...", flush=True)
+            print(f"[系統調試] (若程式卡在此處毫無反應，代表在 Windows 下序列化 DataFrame 的代價過高，導致系統死鎖！)", flush=True)
+            
             future_to_chunk = {executor.submit(_process_eval_chunk, c): c for c in chunks}
+            
+            print(f"[系統調試] ✅ 所有區塊已成功塞入進程池！IPC 傳輸總耗時: {time.time() - t_dispatch:.2f} 秒。等待運算結果...", flush=True)
             
             for future in concurrent.futures.as_completed(future_to_chunk):
                 if _should_stop():
+                    print("[系統調試] 🛑 收到中斷信號，強制終止進程池...", flush=True)
                     progress["phase"] = "stopped"
                     _commit(force=True)
                     api.release(task_id, lease_id, progress)
@@ -715,15 +736,16 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
                 
                 try:
                     res_list = future.result()
+                    print(f"[系統調試] 🟢 成功回收一個區塊，獲得 {len(res_list)} 筆結果。目前總進度: {done + len(res_list)}", flush=True)
                     for score, params, metrics in res_list:
                         passed = _passes_thresholds(metrics, thr)
                         _consider_candidate(score, params, metrics, passed)
                         done += 1
-                except Exception:
-                    # 發生錯誤時以略過處理，確保系統強韌度
-                    pass
+                except Exception as e:
+                    import traceback
+                    print(f"\n[系統調試] 🚨 主進程回收結果時遭遇例外或子進程死亡: {e}", flush=True)
+                    traceback.print_exc()
                 
-                # 每個大區塊算完才提交一次進度給 GUI，大幅減輕主執行緒負擔
                 _commit()
 
         _commit(force=True)
