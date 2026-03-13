@@ -1058,7 +1058,29 @@ def claim_task(
         user_id = int(ctx["user"]["id"])
         if not db.get_user_run_enabled(user_id):
             return None
+            
+        # 1. 嘗試領取已存在的分配任務
         task = db.claim_next_task(user_id, w["worker_id"])
+        
+        # 【專家級同步優化】若目前緩存無任務，主動觸發分配邏輯，消除 Daemon 的 5 分鐘週期延遲
+        if not task:
+            try:
+                cycle = db.get_active_cycle()
+                if cycle:
+                    conn = db._conn()
+                    try:
+                        # 讀取系統設定的最小派發數量
+                        min_tasks = int(db.get_setting(conn, "min_tasks_per_user", 2))
+                    finally:
+                        conn.close()
+                        
+                    # 強制執行一次任務派發動作
+                    db.assign_tasks_for_user(user_id, cycle_id=int(cycle["id"]), min_tasks=min_tasks)
+                    # 派發完畢後立即再次領取，實現「連線即開工」
+                    task = db.claim_next_task(user_id, w["worker_id"])
+            except Exception as assign_err:
+                logger.error(f"Instant assignment failed for user {user_id}: {assign_err}")
+
     if not task:
         return None
 

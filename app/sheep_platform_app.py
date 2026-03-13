@@ -6414,9 +6414,19 @@ def _page_tasks(user: Dict[str, Any], job_mgr: JobManager) -> None:
             if not run_all:
                 if st.button("開始挖礦", key="start_all", type="primary"):
                     db.set_user_run_enabled(int(user["id"]), True)
+                    
+                    # 【專家級啟動優化】點擊按鈕瞬間立刻主動執行任務分配，不再被動等待後台 Daemon
+                    try:
+                        min_tasks_cfg = int(_cached_get_setting("min_tasks_per_user", 2))
+                        # 若週期有效，立即填滿任務池
+                        if cycle and "id" in cycle:
+                            db.assign_tasks_for_user(int(user["id"]), cycle_id=int(cycle["id"]), min_tasks=min_tasks_cfg)
+                    except Exception as e:
+                        print(f"[UI WARN] Instant assign on click failed: {e}")
+
                     st.session_state[run_key] = True
                     run_all = True
-                    st.toast("已發送啟動指令，系統將自動從策略池調度任務...")
+                    st.toast("啟動指令已送達！系統已主動分配任務區塊，GUI 將在數秒內開始運作。")
                     time.sleep(0.5)
                     st.rerun()
             else:
