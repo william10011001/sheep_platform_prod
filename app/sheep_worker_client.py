@@ -400,65 +400,71 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
         except Exception:
             return False
 
-    last_sync_push_ts = 0.0
-    last_sync_frac = -1.0
-    last_sync_msg = ""
+    last_sync_api_ts = 0.0
+    last_sync_gui_ts = 0.0
 
     def _progress_cb(frac: float, msg: str) -> None:
+        # 【強制中斷機制】如果偵測到使用者按下關閉視窗或暫停，立即拋出例外打斷底層冗長的下載阻塞！
+        if globals().get("GUI_PAUSED", False):
+            raise RuntimeError("Task stopped/paused by user during sync")
+
         import re
+        nonlocal last_sync_api_ts, last_sync_gui_ts
         mmsg = str(msg)
         f = float(frac)
+        now = time.time()
 
         # 終極修復：清除隱藏的終端機色彩碼 (ANSI) 與換行符號
         clean_msg = re.sub(r'\x1b\[[0-9;]*m', '', mmsg).strip()
 
         # 放棄嚴格的 match，改用 search 尋找字串中的數字，徹底無視多餘的前後綴
         m = re.search(r"(\S*)\s*已寫入\s*(\d+)\s*/\s*(\d+)", clean_msg)
+        
+        done_i = 0
+        total_i = 0
+        label = "sync"
         if m:
             label = str(m.group(1)) or "sync"
             done_i = int(m.group(2))
             total_i = int(m.group(3))
-            
             if total_i > 0:
                 f = float(done_i) / float(total_i)
+
+        # 1. 更新本機端 GUI (高頻：每 0.1 秒刷新一次，保證視覺平滑)
+        if now - last_sync_gui_ts > 0.1 or f >= 1.0:
+            last_sync_gui_ts = now
+            if globals().get("GUI_QUEUE"):
+                globals()["GUI_QUEUE"].put({"type": "status", "msg": clean_msg, "frac": f})
+
+        # 2. 更新伺服器進度 (極低頻：每 2.5 秒刷新一次)
+        # 這是解決「等待分配算力」的核心：避免一秒打上千次 API 導致被伺服器阻斷丟包！
+        if now - last_sync_api_ts > 2.5 or f >= 1.0:
+            last_sync_api_ts = now
             
-            # 同步給網站前端的進度與組合數，確保綠色進度條與數字完全一致
-            progress["combos_done"] = done_i
-            progress["combos_total"] = total_i
+            progress["phase"] = "sync_data"
             progress["phase_progress"] = f
+            progress["phase_msg"] = clean_msg
             
-            sync = progress.get("sync")
-            if not isinstance(sync, dict):
-                sync = {"items": {}, "current": ""}
-            items = sync.get("items")
-            if not isinstance(items, dict):
-                items = {}
-            items[label] = {"done": done_i, "total": total_i}
-            sync["items"] = items
-            sync["current"] = label
-            progress["sync"] = sync
+            if m and total_i > 0:
+                # 同步給網站前端的進度與組合數，確保綠色進度條與數字完全一致
+                progress["combos_done"] = done_i
+                progress["combos_total"] = total_i
+                
+                sync = progress.get("sync")
+                if not isinstance(sync, dict):
+                    sync = {"items": {}, "current": ""}
+                items = sync.get("items")
+                if not isinstance(items, dict):
+                    items = {}
+                items[label] = {"done": done_i, "total": total_i}
+                sync["items"] = items
+                sync["current"] = label
+                progress["sync"] = sync
 
-        if globals().get("GUI_QUEUE"):
-            globals()["GUI_QUEUE"].put({"type": "status", "msg": clean_msg, "frac": f})
-
-        nonlocal last_sync_push_ts, last_sync_frac, last_sync_msg
-        now = time.time()
-
-        if (now - last_sync_push_ts) < 0.35 and abs(f - last_sync_frac) < 0.02 and clean_msg == last_sync_msg:
-            return
-
-        last_sync_push_ts = now
-        last_sync_frac = f
-        last_sync_msg = clean_msg
-
-        progress["phase"] = "sync_data"
-        progress["phase_progress"] = f
-        progress["phase_msg"] = clean_msg
-        
-        try:
-            api.progress(task_id, lease_id, progress)
-        except Exception:
-            pass
+            try:
+                api.progress(task_id, lease_id, progress)
+            except Exception:
+                pass
 
     progress["phase"] = "sync_data"
     progress["phase_progress"] = 0.0
