@@ -652,9 +652,11 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
             api.progress(task_id, lease_id, progress)
 
         if combos_total <= 0:
+            print(f"   ⏩ [極速通關] 任務 #{task_id} 分配到的參數組合數為 0 (空區塊)，直接跳過！", flush=True)
             _commit(force=True)
             if globals().get("GUI_QUEUE"):
                 globals()["GUI_QUEUE"].put({"type": "progress", "done": 1, "total": 1, "speed": 0.0})
+                globals()["GUI_QUEUE"].put({"type": "status", "msg": f"空區塊任務，秒速跳過..."})
             api.finish(task_id, lease_id, [], progress)
             return
 
