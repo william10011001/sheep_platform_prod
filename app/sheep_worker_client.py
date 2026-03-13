@@ -757,6 +757,15 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
         return
 
     except Exception as e:
+        import traceback
+        err_msg = traceback.format_exc()
+        print(f"\n[系統錯誤] 任務執行期間發生嚴重崩潰 (Task ID: {task_id}):\n{err_msg}", flush=True)
+        
+        # 將錯誤拋到 GUI 讓使用者能直觀看見，而不是只有終端機顯示
+        if globals().get("GUI_QUEUE"):
+            brief_err = str(e).split('\n')[0][:50]
+            globals()["GUI_QUEUE"].put({"type": "status", "msg": f"任務異常中斷: {brief_err}"})
+            
         progress["phase"] = "error"
         progress["last_error"] = str(e)
         try:
@@ -767,11 +776,13 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
             api.release(task_id, lease_id, progress)
         except Exception:
             pass
+            
     try:
         api.set_current_task_id(None)
     except Exception:
         pass
-        return
+        
+    return
 
 
 def _issue_token(base_url: str, username: str, password: str, ttl_seconds: int, name: str) -> str:
