@@ -403,45 +403,29 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
     last_sync_push_ts = 0.0
     last_sync_frac = -1.0
     last_sync_msg = ""
-    _SYNC_RE = re.compile(r"^\s*(\S+)\s+已寫入\s+(\d+)\s*/\s*(\d+)\s*$")
 
     def _progress_cb(frac: float, msg: str) -> None:
+        import re
         mmsg = str(msg)
         f = float(frac)
 
-        # 核心修復：強制從字串中解析真實進度，避免底層傳來的 frac 不準確(卡在 1.0)
-        m = _SYNC_RE.match(mmsg)
+        # 終極修復：清除隱藏的終端機色彩碼 (ANSI) 與換行符號
+        clean_msg = re.sub(r'\x1b\[[0-9;]*m', '', mmsg).strip()
+
+        # 放棄嚴格的 match，改用 search 尋找字串中的數字，徹底無視多餘的前後綴
+        m = re.search(r"(\S*)\s*已寫入\s*(\d+)\s*/\s*(\d+)", clean_msg)
         if m:
+            label = str(m.group(1)) or "sync"
             done_i = int(m.group(2))
             total_i = int(m.group(3))
+            
             if total_i > 0:
                 f = float(done_i) / float(total_i)
             
-            # 【關鍵修復】迎合網站前端邏輯：將 K 線同步的筆數直接映射到 combos 變數上
-            # 讓 sheep123.com 的綠色進度條能準確依據資料下載量渲染！
+            # 同步給網站前端的進度與組合數，確保綠色進度條與數字完全一致
             progress["combos_done"] = done_i
             progress["combos_total"] = total_i
-
-        if globals().get("GUI_QUEUE"):
-            globals()["GUI_QUEUE"].put({"type": "status", "msg": mmsg, "frac": f})
-
-        nonlocal last_sync_push_ts, last_sync_frac, last_sync_msg
-        now = time.time()
-
-        # 同步回呼很密；節流：最短 0.35s 一次，或進度跳動 >= 2%，或訊息有變
-        if (now - last_sync_push_ts) < 0.35 and abs(f - last_sync_frac) < 0.02 and mmsg == last_sync_msg:
-            return
-
-        last_sync_push_ts = now
-        last_sync_frac = f
-        last_sync_msg = mmsg
-
-        progress["phase"] = "sync_data"
-        progress["phase_progress"] = f
-        progress["phase_msg"] = mmsg
-        
-        if m:
-            label = str(m.group(1))
+            progress["phase_progress"] = f
             
             sync = progress.get("sync")
             if not isinstance(sync, dict):
@@ -449,11 +433,28 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
             items = sync.get("items")
             if not isinstance(items, dict):
                 items = {}
-            items[label] = {"done": int(done_i), "total": int(total_i)}
+            items[label] = {"done": done_i, "total": total_i}
             sync["items"] = items
             sync["current"] = label
             progress["sync"] = sync
 
+        if globals().get("GUI_QUEUE"):
+            globals()["GUI_QUEUE"].put({"type": "status", "msg": clean_msg, "frac": f})
+
+        nonlocal last_sync_push_ts, last_sync_frac, last_sync_msg
+        now = time.time()
+
+        if (now - last_sync_push_ts) < 0.35 and abs(f - last_sync_frac) < 0.02 and clean_msg == last_sync_msg:
+            return
+
+        last_sync_push_ts = now
+        last_sync_frac = f
+        last_sync_msg = clean_msg
+
+        progress["phase"] = "sync_data"
+        progress["phase_progress"] = f
+        progress["phase_msg"] = clean_msg
+        
         try:
             api.progress(task_id, lease_id, progress)
         except Exception:
