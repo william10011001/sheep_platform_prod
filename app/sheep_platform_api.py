@@ -155,28 +155,29 @@ def _get_settings_cached() -> Dict[str, Any]:
     return _settings_cache
 
 def _client_ip(req: Request) -> str:
-    """[專家級防護] 嚴格校驗客戶端真實 IP，阻絕 X-Forwarded-For 偽造攻擊。
-
-    惡意腳本常利用塞入假 IP 的標頭繞過頻率限制。此處優先採用 Nginx 覆寫的 X-Real-IP，
-    若使用 X-Forwarded-For 則嚴格抓取最後一個代理節點的真實 IP。
-    """
+    """[專家級防護] 嚴格校驗客戶端真實 IP，引入內部網路驗證，徹底阻絕 X-Forwarded-For 偽造攻擊。"""
     try:
-        # 1. 優先信任 Nginx 直接覆寫的 X-Real-IP (若 Nginx 設定正確，這絕對無法由客戶端偽造)
-        xri = req.headers.get("x-real-ip") or req.headers.get("X-Real-IP") or ""
-        if xri.strip() and xri.strip() != "127.0.0.1":
-            return xri.strip()
+        # 最底層真實 TCP 連線 IP，若無代理，這絕對是客戶端真實來源
+        real_tcp_ip = str(req.client.host) if req.client and req.client.host else "0.0.0.0"
+        
+        # 核心防禦：若連線來自本地端或內部網路 (代表經過受信任的反向代理如 Nginx)，才允許讀取標頭
+        is_internal = real_tcp_ip.startswith(("127.", "10.", "192.168.", "172.")) or real_tcp_ip == "0.0.0.0"
+        
+        if is_internal:
+            # 優先信任 Nginx 直接覆寫的 X-Real-IP
+            xri = req.headers.get("x-real-ip") or req.headers.get("X-Real-IP") or ""
+            if xri.strip() and xri.strip() != "127.0.0.1":
+                return xri.strip()
 
-        # 2. X-Forwarded-For 容易被惡意腳本偽造 (例如：X-Forwarded-For: 假IP, 真IP)
-        # 防禦策略：取最後一個逗號後的 IP，這通常是最後一層受信任反向代理加上去的
-        xff = req.headers.get("x-forwarded-for") or req.headers.get("X-Forwarded-For") or ""
-        if xff:
-            ips = [ip.strip() for ip in xff.split(",") if ip.strip()]
-            if ips:
-                return ips[-1] # 取最後一個，防偽造
+            # X-Forwarded-For 防禦策略：取第一個 IP (最原始客戶端 IP)，因已確認來自內部代理故相對安全
+            xff = req.headers.get("x-forwarded-for") or req.headers.get("X-Forwarded-For") or ""
+            if xff:
+                ips = [ip.strip() for ip in xff.split(",") if ip.strip()]
+                if ips:
+                    return ips[0]
 
-        # 3. 最後防線：直接取底層 TCP 連線 IP
-        if req.client and req.client.host:
-            return str(req.client.host)
+        # 若不是來自內部反向代理 (例如駭客繞過 Nginx 直接打 Uvicorn)，拒絕信任任何偽造標頭，直接回傳 TCP IP
+        return real_tcp_ip
     except Exception:
         pass
     return "0.0.0.0"
@@ -436,10 +437,11 @@ class ReleaseIn(BaseModel):
 
 
 @app.get("/auth/captcha")
-def get_captcha():
+def get_captcha(req: Request):
     try:
+        client_ip = _client_ip(req)
         from sheep_platform_security import generate_slider_captcha
-        target_x, token = generate_slider_captcha()
+        target_x, token = generate_slider_captcha(client_ip)
         # 為了簡化，前端背景由純 CSS 生成，這裡告知前端目標位置 (背景缺口位置)
         return {"ok": True, "target_x": target_x, "token": token}
     except Exception as e:
@@ -641,7 +643,7 @@ def issue_token(req: Request, body: TokenRequest):
         # [專家級防護] 滑動驗證碼嚴格校驗 (針對網頁端請求)
         if body.name != "compute":
             from sheep_platform_security import verify_slider_captcha
-            is_valid, err_msg = verify_slider_captcha(body.captcha_token, body.captcha_offset, body.captcha_tracks)
+            is_valid, err_msg = verify_slider_captcha(body.captcha_token, body.captcha_offset, body.captcha_tracks, ip)
             if not is_valid:
                 db.log_sys_event("LOGIN_CAPTCHA_FAIL", None, f"驗證碼未通過: {err_msg}", {"ip": ip, "username": body.username})
                 raise HTTPException(status_code=400, detail=f"CAPTCHA_FAILED: {err_msg}")
@@ -724,7 +726,7 @@ def web_register(req: Request, body: WebRegisterIn):
     ip = _client_ip(req) or "unknown_ip"
     try:
         from sheep_platform_security import verify_slider_captcha
-        is_valid, err_msg = verify_slider_captcha(body.captcha_token, body.captcha_offset, body.captcha_tracks)
+        is_valid, err_msg = verify_slider_captcha(body.captcha_token, body.captcha_offset, body.captcha_tracks, ip)
         if not is_valid:
             db.log_sys_event("REGISTER_CAPTCHA_FAIL", None, f"驗證碼未通過: {err_msg}", {"ip": ip, "username": body.username})
             raise HTTPException(status_code=400, detail=f"CAPTCHA_FAILED: {err_msg}")

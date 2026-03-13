@@ -189,15 +189,15 @@ def json_dumps(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
-def generate_slider_captcha() -> Tuple[int, str]:
-    """[專家級防護] 生成隨機目標位置與強加密憑證，加入隨機鹽值防止重放特徵分析"""
+def generate_slider_captcha(client_ip: str) -> Tuple[int, str]:
+    """[專家級防護] 生成隨機目標位置與強加密憑證，加入隨機鹽值防止重放與IP強綁定"""
     try:
         target_x = secrets.randbelow(150) + 50  # 隨機缺口位置介於 50 到 200 之間
         ts = datetime.now(timezone.utc).timestamp()
         nonce = secrets.token_hex(8)  # 注入隨機擾動防止加密後特徵被分析
         
-        # 將目標位置、過期時間與擾動鹽值封裝並加密
-        payload = json_dumps({"x": target_x, "ts": ts, "n": nonce})
+        # 將目標位置、過期時間、擾動鹽值與請求者IP封裝並加密 (綁定IP防代刷池攻擊)
+        payload = json_dumps({"x": target_x, "ts": ts, "n": nonce, "ip": client_ip})
         token_bytes = get_fernet().encrypt(payload.encode("utf-8"))
         
         return target_x, token_bytes.decode("utf-8")
@@ -208,17 +208,25 @@ def generate_slider_captcha() -> Tuple[int, str]:
         raise RuntimeError(f"驗證碼生成錯誤: {str(e)}")
 
 
-def verify_slider_captcha(token: str, offset: float, tracks: list) -> Tuple[bool, str]:
+def verify_slider_captcha(token: str, offset: float, tracks: list, client_ip: str) -> Tuple[bool, str]:
     """[專家級防護] 嚴格驗證滑動驗證碼，包含高階物理行為學軌跡分析與最大化錯誤追蹤"""
     if not token or not tracks:
         return False, "驗證資料缺失，請重新整理頁面。"
         
     try:
-        decrypted_bytes = get_fernet().decrypt(token.encode("utf-8"), ttl=300) # 5分鐘內嚴格有效
+        # 縮短生命週期至 120 秒，防範重放與腳本延遲 (攻擊腳本使用了強制等待時間)
+        decrypted_bytes = get_fernet().decrypt(token.encode("utf-8"), ttl=120) 
         payload = json.loads(decrypted_bytes.decode("utf-8"))
     except Exception as e:
         # 最大化拋出例外細節，確保管理員能分辨是逾時還是竄改
-        return False, f"驗證憑證已過期: {type(e).__name__} - {str(e)}"
+        return False, f"驗證憑證已過期或無效: {type(e).__name__} - {str(e)}"
+
+    # 驗證 IP 綁定，徹底粉碎代理 IP 池分散式攻擊
+    bound_ip = payload.get("ip", "")
+    if bound_ip and bound_ip != client_ip:
+        import sys
+        sys.stderr.write(f"\n[!!! CAPTCHA ALARM !!!] IP攔截 簽發IP: {bound_ip}, 提交IP: {client_ip}\n")
+        return False, f"IP不匹配，請勿使用代理或重新整理頁面。"
         
     target_x = payload.get("x", 0)
     gen_ts = payload.get("ts", 0)
@@ -293,10 +301,25 @@ def verify_slider_captcha(token: str, offset: float, tracks: list) -> Tuple[bool
             if unique_dx <= 3 and max(x_deltas) > 3 and len(tracks) > 15:
                 return False, "滑動異常，請重試。"
 
+            # [專家級新增] 驗證 7：Y軸高頻震盪分析 (專殺攻擊腳本中的 random.randint 雜訊)
+            y_direction_changes = 0
+            for i in range(2, len(tracks)):
+                dy1 = tracks[i-1]["y"] - tracks[i-2]["y"]
+                dy2 = tracks[i]["y"] - tracks[i-1]["y"]
+                # 如果連續兩次斜率相乘小於0，代表Y軸發生非自然反向折返
+                if dy1 * dy2 < 0:
+                    y_direction_changes += 1
+            
+            # 人類滑動通常朝一個方向微偏，或偶爾修正。若超過 40% 的點都在反向折返，絕對是 random 生成的無意義雜訊
+            if len(tracks) > 10 and y_direction_changes > len(tracks) * 0.4:
+                import sys
+                sys.stderr.write(f"\n[!!! CAPTCHA ALARM !!!] 檢測到演算法雜訊，折返率異常: {y_direction_changes}/{len(tracks)}\n")
+                return False, f"滑動異常，請重試。"
+
     except Exception as track_err:
         import sys, traceback
-        sys.stderr.write(f"\n[!!! CAPTCHA SECURITY ALARM !!!] 軌跡解析過程中發生非預期例外\n")
+        sys.stderr.write(f"\n滑動異常，請重試。軌跡解析失敗\n")
         traceback.print_exc(file=sys.stderr)
-        return False, f"軌跡特徵崩潰: {str(track_err)}"
+        return False, f"滑動異常，請重試。軌跡解析失敗: {str(track_err)}"
 
     return True, "驗證成功"
