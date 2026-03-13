@@ -685,8 +685,6 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
                     best_pass = best_pass[:keep_top]
 
         import concurrent.futures
-        import os
-        import time
 
         print("\n" + "="*60, flush=True)
         print(f"[系統調試] 🛠️ 準備切割任務群，策略: {family}, FastMode: {use_fast_path}", flush=True)
