@@ -86,6 +86,8 @@ _chat_ip_limiter = RateLimiter(rate_per_minute=18.0, burst=6.0)
 
 # [新增] 註冊 IP 限制器：同一個 IP 最高爆發 2 個額度，恢復速率為每分鐘 0.2 個 (即每 5 分鐘恢復 1 個)
 _register_ip_limiter = RateLimiter(rate_per_minute=0.2, burst=2.0)
+# [極致防護] 全域註冊限制器：防止駭客使用動態代理 IP 池進行分散式機器人攻擊 (全站每分鐘最多允許 3 次註冊)
+_register_global_limiter = RateLimiter(rate_per_minute=3.0, burst=6.0)
 
 
 class _ChatHub:
@@ -153,28 +155,31 @@ def _get_settings_cached() -> Dict[str, Any]:
     return _settings_cache
 
 def _client_ip(req: Request) -> str:
-    """Best-effort client IP.
+    """[專家級防護] 嚴格校驗客戶端真實 IP，阻絕 X-Forwarded-For 偽造攻擊。
 
-    In production we sit behind Nginx. Use X-Forwarded-For / X-Real-IP if present,
-    otherwise fall back to req.client.host.
+    惡意腳本常利用塞入假 IP 的標頭繞過頻率限制。此處優先採用 Nginx 覆寫的 X-Real-IP，
+    若使用 X-Forwarded-For 則嚴格抓取最後一個代理節點的真實 IP。
     """
     try:
-        xff = req.headers.get("x-forwarded-for") or req.headers.get("X-Forwarded-For") or ""
-        if xff:
-            # First IP is the original client; the rest are proxies.
-            ip = xff.split(",", 1)[0].strip()
-            if ip:
-                return ip
-
+        # 1. 優先信任 Nginx 直接覆寫的 X-Real-IP (若 Nginx 設定正確，這絕對無法由客戶端偽造)
         xri = req.headers.get("x-real-ip") or req.headers.get("X-Real-IP") or ""
-        if xri.strip():
+        if xri.strip() and xri.strip() != "127.0.0.1":
             return xri.strip()
 
+        # 2. X-Forwarded-For 容易被惡意腳本偽造 (例如：X-Forwarded-For: 假IP, 真IP)
+        # 防禦策略：取最後一個逗號後的 IP，這通常是最後一層受信任反向代理加上去的
+        xff = req.headers.get("x-forwarded-for") or req.headers.get("X-Forwarded-For") or ""
+        if xff:
+            ips = [ip.strip() for ip in xff.split(",") if ip.strip()]
+            if ips:
+                return ips[-1] # 取最後一個，防偽造
+
+        # 3. 最後防線：直接取底層 TCP 連線 IP
         if req.client and req.client.host:
             return str(req.client.host)
     except Exception:
         pass
-    return ""
+    return "0.0.0.0"
 
 
 def _sha256_file(path: str) -> str:
@@ -724,12 +729,15 @@ def web_register(req: Request, body: WebRegisterIn):
             db.log_sys_event("REGISTER_CAPTCHA_FAIL", None, f"驗證碼未通過: {err_msg}", {"ip": ip, "username": body.username})
             raise HTTPException(status_code=400, detail=f"CAPTCHA_FAILED: {err_msg}")
 
-        allowed, retry_after = _register_ip_limiter.check(f"reg_ip:{ip}", cost=1.0)
-        if not allowed:
-            db.log_sys_event("REGISTER_FAIL", None, f"IP {ip} 註冊頻率過高觸發限制", {"ip": ip})
+        allowed_ip, retry_after_ip = _register_ip_limiter.check(f"reg_ip:{ip}", cost=1.0)
+        allowed_global, retry_after_global = _register_global_limiter.check("global_register", cost=1.0)
+        
+        if not allowed_ip or not allowed_global:
+            wait_time = int(max(retry_after_ip or 1.0, retry_after_global or 1.0))
+            db.log_sys_event("REGISTER_FAIL", None, f"IP {ip} 觸發註冊頻率限制 (IP或全域阻斷)", {"ip": ip})
             raise HTTPException(
                 status_code=429, 
-                detail=f"警告!!!檢測出您正在惡意攻擊網站，請於 {int(retry_after)} 秒後再試。"
+                detail=f"警告!!!檢測出系統註冊頻率異常，為保護系統安全，請於 {wait_time} 秒後再試。"
             )
 
         from sheep_platform_security import normalize_username, hash_password

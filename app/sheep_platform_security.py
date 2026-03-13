@@ -221,7 +221,14 @@ def verify_slider_captcha(token: str, offset: float, tracks: list) -> Tuple[bool
         return False, f"驗證憑證已過期或被竄改: {type(e).__name__} - {str(e)}"
         
     target_x = payload.get("x", 0)
+    gen_ts = payload.get("ts", 0)
     
+    # [專家級防護] 時間差攻擊阻斷 (Time-to-Solve)
+    # 機器人腳本通常在獲取 token 後毫秒級內送出。人類視覺反應加上拖曳絕對超過 1.5 秒
+    solve_time = datetime.now(timezone.utc).timestamp() - gen_ts
+    if solve_time < 1.5:
+        return False, f"操作時間極度異常 (耗時僅 {solve_time:.2f} 秒)，已攔截惡意自動化腳本。"
+        
     # 驗證 1：最終位置容錯率 (收緊至 4px)
     diff = abs(offset - target_x)
     if diff > 4.0:
@@ -252,24 +259,36 @@ def verify_slider_captcha(token: str, offset: float, tracks: list) -> Tuple[bool
         if min(x_values) < -20 or max(x_values) > 350:
             return False, f"X 軸軌跡超出物理邊界限制 (Min: {min(x_values)}, Max: {max(x_values)})。"
             
-        # 驗證 5：Y 軸人類微小防手震特徵 (不可能永遠維持在 0 或是同一數值)
+        # 驗證 5：Y 軸人類微小防手震特徵與腳本隨機數破解
+        # 惡意腳本會用 random.randint(-1, 2) 產生極端規律的抖動
         y_variance = max(y_values) - min(y_values)
         if y_variance == 0:
             return False, "Y 軸缺乏人類微小手抖特徵 (判定為自動化腳本強制直行)。"
+        if y_variance > 15:
+            return False, "Y 軸抖動幅度超越物理極限，判定為腳本亂數生成。"
             
-        # 驗證 6：加速度變異分析 (必須有加速與減速的階段，不能是完美的等速運動)
+        # 驗證 6：加速度變異與軌跡線性度分析 (阻殺所有等速與微小亂數腳本)
         velocities = []
+        x_deltas = []
         for i in range(1, len(tracks)):
             dx = tracks[i]["x"] - tracks[i-1]["x"]
             dt = tracks[i]["t"] - tracks[i-1]["t"]
+            x_deltas.append(dx)
             if dt <= 0: continue
             velocities.append(dx / dt)
             
         if len(velocities) > 2:
             avg_v = sum(velocities) / len(velocities)
             variance_v = sum((v - avg_v)**2 for v in velocities) / len(velocities)
-            if variance_v < 0.0005:
+            
+            # 人類拉動必定會有加速起步與減速對準的過程，腳本通常呈現超低變異數
+            if variance_v < 0.001:
                 return False, f"滑動呈現超自然完美等速運動 (變異數: {variance_v:.5f})，直接攔截。"
+            
+            # 檢查是否過度規律 (腳本每次都移動固定步長 ±2，人類步長變化極大)
+            unique_dx = len(set(x_deltas))
+            if unique_dx <= 4 and len(tracks) > 15:
+                return False, "位移步長過度規律缺乏自然變化，判定為腳本生成的線性軌跡。"
 
     except Exception as track_err:
         import sys, traceback
