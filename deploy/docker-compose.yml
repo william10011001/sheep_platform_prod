@@ -73,32 +73,7 @@ services:
     #       cpus: '1.5'          # 限制最多只能使用 1.5 個 CPU 核心
     #       memory: 2G           # 限制最多只能使用 2GB 記憶體
 
-  # [UI 網頁服務] 執行 Streamlit 介面，監聽 8501 埠號
-  ui:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile.ui
-    environment:
-      SHEEP_DB_URL: "${DO_PG_URL}"
-      SHEEP_DB_PATH: ""
-      SHEEP_GIT_SHA: "${SHEEP_GIT_SHA:-unknown}"
-      # [極致同步] 引用 API 相同的管理員憑證環境變數名
-      SHEEP_COMPUTE_USER: "${SHEEP_BOOTSTRAP_ADMIN_USER}"
-      SHEEP_COMPUTE_PASS: "${SHEEP_BOOTSTRAP_ADMIN_PASS}"
-      PYTHONUNBUFFERED: "1"
-    depends_on:
-      api:
-        condition: service_healthy
-    volumes:
-      - ${SHEEP_HOST_DATA_DIR:-../app/data}:/app/data
-    restart: always
-    healthcheck:
-      # 放寬 timeout 並加入 start_period，給予 Pandas 與 Numba 充分的啟動/編譯緩衝時間
-      test: ["CMD-SHELL", "curl -fsS --max-time 15 http://127.0.0.1:8501/app/_stcore/health || curl -fsS --max-time 15 http://127.0.0.1:8501/_stcore/health || curl -fsS --max-time 15 http://127.0.0.1:8501/healthz || exit 1"]
-      interval: 15s
-      timeout: 20s
-      retries: 10
-      start_period: 40s
+  
 
   # [Worker 後台服務] 專職負責任務分配，使用較輕量的 api 鏡像
   worker:
@@ -155,10 +130,8 @@ services:
       - certbot_www:/var/www/certbot
       - certbot_conf:/etc/letsencrypt
     depends_on:
-      # 確保 API 與 UI 皆健康後 Nginx 才開始轉發，防止啟動瞬間的 502
+      # 確保 API 健康後 Nginx 才開始轉發，防止啟動瞬間的 502
       api:
-        condition: service_healthy
-      ui:
         condition: service_healthy
     restart: always
 
