@@ -1417,11 +1417,13 @@ def finish_task(
                     mismatch = False
 
                 if mismatch:
-                    # Hard stop: likely forged submission.
-                    db.set_user_disabled(user_id, True)
+                    # [專家級防護與除錯] 移除嚴格的永久封鎖機制 (db.set_user_disabled)
+                    # 根因分析：伺服器與客戶端在不同時間點拉取 K 線，極易因交易所 API 的細微差異(如最後一根 K 線收盤價變動)
+                    # 導致回測結果產生小幅誤差，進而觸發誤判並大規模永久封鎖無辜礦工。
+                    # 新邏輯：僅退回任務並記錄警告，將任務重新釋放回池中，給予重新驗證的機會，同時將錯誤回傳前端最大化顯示。
                     db.write_audit_log(
                         actor_user_id=int(user_id),
-                        action="cheat_detected",
+                        action="data_mismatch_warning",
                         detail={
                             "task_id": int(task_id),
                             "worker_id": worker_id,
@@ -1434,7 +1436,8 @@ def finish_task(
                     )
                     try:
                         prog = dict(body.final_progress or {})
-                        prog["last_error"] = "cheat_detected"
+                        # 最大化顯示錯誤訊息，讓前端能明確看到伺服器與客戶端的數值落差
+                        prog["last_error"] = f"資料校驗不符 (請檢查K線版本)，伺服器Sharpe: {server_metrics.get('sharpe', 0):.2f}, 客戶端: {rep_sh:.2f}"
                         prog["updated_at"] = _utc_iso()
                         db.release_task_with_lease(
                             task_id=int(task_id),
@@ -1445,7 +1448,8 @@ def finish_task(
                         )
                     except Exception:
                         pass
-                    raise HTTPException(status_code=403, detail="cheat_detected")
+                    # 改拋出 409 狀態碼，避免觸發前端的重大異常斷線
+                    raise HTTPException(status_code=409, detail="data_hash_mismatch")
 
             passed = _passes_thresholds(server_metrics, min_trades, min_ret, max_dd, min_sh)
             if passed:
