@@ -307,12 +307,9 @@ class _DBConn:
     def __del__(self):
         try:
             if not getattr(self, "_closed", True):
-                import sys
-                print("[WARN DB] 發現未主動呼叫 close() 的懸空連線，由 GC 強制回收！", file=sys.stderr, flush=True)
                 self.close()
-        except Exception as e:
-            import sys
-            print(f"[FATAL DB ERROR] GC 回收連線時發生異常: {e}", file=sys.stderr, flush=True)
+        except Exception:
+            pass
 
 
 _PG_POOL = None
