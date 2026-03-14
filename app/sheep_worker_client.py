@@ -205,7 +205,8 @@ class ApiClient:
                 r = self._session.request(method, url, headers=self._headers(), json=json_body, timeout=timeout_s)
             except requests.exceptions.RequestException as e:
                 # 網路異常或超時，攔截錯誤並進行重試
-                last_error_msg = str(e)
+                last_error_msg = f"{type(e).__name__}: {str(e)}"
+                print(f"\n⚠️ [API 連線異常] {method} {path} | 嘗試 {attempt+1}/6 失敗 | 原因: {last_error_msg}", flush=True)
                 wait_s = 2.0 + attempt * 2.0
                 time.sleep(wait_s)
                 continue
@@ -217,6 +218,7 @@ class ApiClient:
                     wait_s = float(ra) if ra else (1.0 + attempt * 1.0)
                 except Exception:
                     wait_s = 1.0 + attempt * 1.0
+                print(f"⏳ [API 流量管制] 狀態碼 {r.status_code} | 將於 {wait_s:.1f} 秒後重試...", flush=True)
                 time.sleep(min(15.0, max(0.5, wait_s)))
                 continue
             if r.status_code == 426:
@@ -226,10 +228,18 @@ class ApiClient:
                     detail = r.text
                 raise RuntimeError(f"upgrade_required: {detail}")
             if r.status_code >= 400:
+                err_text = r.text[:500]
+                print(f"🚨 [API 伺服器拒絕] {method} {path} | 狀態碼: {r.status_code} | 回應: {err_text}", flush=True)
                 raise RuntimeError(f"api_error {r.status_code}: {r.text}")
             if not r.content:
                 return None
-            return r.json()
+            
+            try:
+                return r.json()
+            except Exception as e:
+                print(f"🚨 [API 解析失敗] 伺服器回傳了非 JSON 格式資料: {r.text[:200]}...", flush=True)
+                return None
+
         raise RuntimeError(f"api_unavailable: Failed after 6 attempts. Last network error: {last_error_msg}")
 
     def manifest(self) -> Dict[str, Any]:
