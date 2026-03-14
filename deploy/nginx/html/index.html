@@ -749,6 +749,16 @@
                         showToast('驗證成功，正在載入資料...', 'success', 2000);
                         await checkAuth(); // 這裡如果報錯也會被下面的 catch 抓到
                         
+                        // [專家級修復] 登入或註冊成功後，自動發送 /tasks/start 請求，確保新帳號自動解鎖派發權限
+                        try {
+                            await fetchApi('/tasks/start', { method: 'POST' });
+                            await loadTasks(); // 重新拉取任務狀態，確保 UI 變更為「授權中」
+                            showToast('已自動解鎖挖礦權限，等待伺服器派發中', 'success', 3000);
+                        } catch (startErr) {
+                            console.error('[自動解鎖權限失敗]', startErr);
+                            showToast(`自動解鎖權限失敗: ${startErr.message}，請手動點擊開始`, 'error', 4000);
+                        }
+                        
                     } catch (e) { 
                         console.error('[handleAuth Error]', e);
                         errorMsg.value = e.message; 
@@ -762,10 +772,22 @@
                 };
 
                 const startMining = async () => {
-                    try { await fetchApi('/tasks/start', { method: 'POST' }); await loadTasks(); } catch(e) { alert(e.message); }
+                    try { 
+                        await fetchApi('/tasks/start', { method: 'POST' }); 
+                        await loadTasks(); 
+                        showToast('成功解鎖派發權限，等待伺服器指派新任務...', 'success', 3000);
+                    } catch(e) { 
+                        showToast(`啟動挖礦失敗: ${e.message}`, 'error', 5000); 
+                    }
                 };
                 const stopMining = async () => {
-                    try { await fetchApi('/tasks/stop', { method: 'POST' }); await loadTasks(); } catch(e) { alert(e.message); }
+                    try { 
+                        await fetchApi('/tasks/stop', { method: 'POST' }); 
+                        await loadTasks(); 
+                        showToast('已成功關閉派發授權，將不再接收新任務', 'info', 3000);
+                    } catch(e) { 
+                        showToast(`停止挖礦失敗: ${e.message}`, 'error', 5000); 
+                    }
                 };
 
                 const logout = () => { 
