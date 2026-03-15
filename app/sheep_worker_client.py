@@ -67,6 +67,16 @@ def _process_eval_chunk(args):
         
         results = []
         import backtest_panel2 as bt
+        import math
+        
+        # 【數值清洗防護盾】攔截所有導致 JSON 崩潰的 NaN 與 Infinity
+        def _clean_f(val):
+            try:
+                f = float(val)
+                return 0.0 if math.isnan(f) or math.isinf(f) else f
+            except Exception:
+                return 0.0
+
         for is_fast, f_params, e_sig, risk_grid_chunk in task_list:
             for tp, sl, mh in risk_grid_chunk:
                 if is_fast:
@@ -75,15 +85,19 @@ def _process_eval_chunk(args):
                     res = bt.run_backtest(df, family, dict(f_params), float(tp), float(sl), int(mh), fee_side=fee_side, slippage=slippage, worst_case=worst_case, reverse_mode=reverse_mode)
                 
                 metrics = {
-                    "total_return_pct": float(res.get("total_return_pct", 0.0)),
-                    "max_drawdown_pct": float(res.get("max_drawdown_pct", 0.0)),
-                    "sharpe": float(res.get("sharpe", 0.0)),
-                    "trades": int(res.get("trades", 0)),
-                    "win_rate_pct": float(res.get("win_rate_pct", 0.0)),
-                    "profit_factor": float(res.get("profit_factor", 0.0)),
-                    "cagr_pct": float(res.get("cagr_pct", 0.0)),
+                    "total_return_pct": _clean_f(res.get("total_return_pct", 0.0)),
+                    "max_drawdown_pct": _clean_f(res.get("max_drawdown_pct", 0.0)),
+                    "sharpe": _clean_f(res.get("sharpe", 0.0)),
+                    "trades": int(res.get("trades", 0) or 0),
+                    "win_rate_pct": _clean_f(res.get("win_rate_pct", 0.0)),
+                    "profit_factor": _clean_f(res.get("profit_factor", 0.0)),
+                    "cagr_pct": _clean_f(res.get("cagr_pct", 0.0)),
                 }
-                score = float(metrics["total_return_pct"]) + 5.0 * float(metrics["sharpe"]) - 0.6 * float(metrics["max_drawdown_pct"])
+                
+                # 同樣對最終 score 進行防護，徹底斷絕 Nan 污染
+                raw_score = metrics["total_return_pct"] + 5.0 * metrics["sharpe"] - 0.6 * metrics["max_drawdown_pct"]
+                score = _clean_f(raw_score)
+                
                 params = {"family": family, "family_params": dict(f_params), "tp": float(tp), "sl": float(sl), "max_hold": int(mh)}
                 results.append((score, params, metrics))
                 
