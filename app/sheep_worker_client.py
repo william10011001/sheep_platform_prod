@@ -11,6 +11,13 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
+import logging
+
+# 【專家級優化】徹底屏蔽 Streamlit 在非 Web 環境下運作時產生的洗版警告
+# 避免因無限輸出警告導致終端機 IO 阻塞或 GUI 介面假死崩潰
+logging.getLogger("streamlit").setLevel(logging.ERROR)
+logging.getLogger("streamlit.runtime.caching.cache_data_api").setLevel(logging.ERROR)
+logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").setLevel(logging.ERROR)
 
 import backtest_panel2 as bt
 
@@ -25,6 +32,14 @@ def _init_worker(df_in):
     try:
         GLOBAL_DF = df_in
         import os
+        import logging
+        
+        # 【核心防護】確保由 ProcessPoolExecutor 衍生出的每個子進程內，
+        # 也絕對不會噴出 Streamlit 警告，徹底阻絕多核 IO 併發洗版
+        logging.getLogger("streamlit").setLevel(logging.ERROR)
+        logging.getLogger("streamlit.runtime.caching.cache_data_api").setLevel(logging.ERROR)
+        logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").setLevel(logging.ERROR)
+        
         print(f"[進程 {os.getpid()}] 🚀 記憶體預載成功！K 線資料 ({len(df_in)} 筆) 已寫入全域空間。", flush=True)
     except Exception as e:
         import os, traceback
