@@ -641,47 +641,35 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
         done = min(resume_done, combos_total)
         last_commit = done
         last_commit_ts = time.time()
-        
-        # 【即時算力核心】追蹤最新區塊的時間與完成數，作為瞬時算力依據
-        last_gui_done = done
-        last_gui_ts = time.time()
-        
         t0 = time.time()
 
         def _commit(force: bool = False) -> None:
-            nonlocal last_commit, last_commit_ts, last_gui_done, last_gui_ts
+            nonlocal last_commit, last_commit_ts
             
             now_ts = time.time()
             elapsed = float(max(0.001, now_ts - t0))
-            avg_speed = float(done / elapsed) if elapsed > 0 else 0.0
             
-            # 【即時算力計算】只計算距離上次更新的真實區間速度
-            inst_elapsed = float(max(0.001, now_ts - last_gui_ts))
-            inst_speed = float((done - last_gui_done) / inst_elapsed) if inst_elapsed > 0 else 0.0
+            # 【專家級平滑算力】使用任務啟動至今的總平均算力，避免因單一小區塊瞬間完成導致的數值暴衝與除以零錯誤
+            current_speed = float(done / elapsed) if elapsed > 0 else 0.0
             
             if globals().get("GUI_QUEUE"):
                 globals()["GUI_QUEUE"].put({
                     "type": "progress",
                     "done": done,
                     "total": combos_total,
-                    "speed": inst_speed
+                    "speed": current_speed
                 })
-            
-            if done > last_gui_done:
-                last_gui_done = done
-                last_gui_ts = now_ts
 
             if not force and (done - last_commit) < commit_every and (now_ts - last_commit_ts) < 10.0:
                 return
                 
             last_commit = done
             last_commit_ts = now_ts
-            eta = float((combos_total - done) / avg_speed) if avg_speed > 0 and combos_total > done else None
+            eta = float((combos_total - done) / current_speed) if current_speed > 0 and combos_total > done else None
             
             progress["combos_done"] = int(done)
             progress["elapsed_s"] = round(elapsed, 3)
-            # 修正：將原本殘留的 current_speed 改為 avg_speed 傳送給伺服器
-            progress["speed_cps"] = round(avg_speed, 6)
+            progress["speed_cps"] = round(current_speed, 6)
             progress["eta_s"] = round(eta, 3) if eta is not None else None
             progress["best_any_score"] = float(best_any_score) if best_any_score is not None else None
             progress["best_any_metrics"] = dict(best_any_metrics) if best_any_metrics is not None else None
@@ -750,10 +738,13 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
         current_task_list = []
         t_chunk_start = time.time()
         
-        # 動態計算每個超級區塊應包含的任務數 (確保恰好分配給所有核心運算，每個核心拿一大包)
-        # 【即時算力優化】加入硬上限，避免區塊過大導致進度條假死，確保能高頻回報最新算力
-        optimal_chunk_size = max(1, len(part[start_i:]) // (max_workers * 2))
-        optimal_chunk_size = min(optimal_chunk_size, 2500)
+        # 【即時算力核心優化】針對慢速策略(如 TEMA_RSI)與快速策略，實作極端動態區塊切割。
+        # 確保每 0.1~0.3 秒必定有一個子區塊運算完成並回報進度，從根本上消滅 0.0 H/s 與假死。
+        base_chunk = max(1, len(part[start_i:]) // (max_workers * 8))
+        if use_fast_path:
+            optimal_chunk_size = min(base_chunk, 500)  # 快速模式最高 500
+        else:
+            optimal_chunk_size = min(base_chunk, 20)   # 慢速模式最高 20，強制高頻觸發 _commit
         
         for i in range(start_i, len(part)):
             f_params = part[i]
