@@ -3516,11 +3516,13 @@ def claim_next_oos_task(user_id: int, worker_id: str, allow_cross_user: bool = F
         conn.close()
 
 def finish_oos_task(task_id: int, user_id: int, worker_id: str, passed: bool, metrics: dict, allow_cross_user: bool = False) -> bool:
-    """接收 Worker 的真實 OOS 回測結果，若通過則自動創建上線策略"""
+    """接收 Worker 的真實 OOS 回測結果，若通過則自動創建上線策略 (具備方言自適應與專家級錯誤捕捉)"""
     conn = _conn()
     try:
         row = conn.execute("SELECT id, progress_json, user_id, pool_id FROM mining_tasks WHERE id = ?", (task_id,)).fetchone()
-        if not row: return False
+        if not row:
+            log_sys_event("OOS_FINISH_WARN", user_id, f"OOS 回報失敗：找不到任務 ID {task_id}", {})
+            return False
         
         prog = json.loads(row["progress_json"] or "{}")
         
@@ -3531,17 +3533,53 @@ def finish_oos_task(task_id: int, user_id: int, worker_id: str, passed: bool, me
         conn.execute("UPDATE mining_tasks SET progress_json = ?, updated_at = ? WHERE id = ?", (json.dumps(prog, ensure_ascii=False), _now_iso(), task_id))
         
         if passed:
-            cand = conn.execute("SELECT id, params_json FROM candidates WHERE task_id = ? ORDER BY score DESC LIMIT 1", (task_id,)).fetchone()
-            if cand:
-                cid = cand["id"]
-                sub = conn.execute("SELECT id FROM submissions WHERE candidate_id = ?", (cid,)).fetchone()
-                if not sub:
-                    cur = conn.execute("INSERT INTO submissions (candidate_id, user_id, pool_id, status, audit_json, submitted_at) VALUES (?, ?, ?, 'approved', '{}', ?)", (cid, row["user_id"], row["pool_id"], _now_iso()))
-                    sub_id = cur.lastrowid
-                    conn.execute("UPDATE candidates SET is_submitted = 1 WHERE id = ?", (cid,))
-                    conn.execute("INSERT INTO strategies (submission_id, user_id, pool_id, params_json, status, allocation_pct, note, created_at, expires_at) VALUES (?, ?, ?, ?, 'active', 1.0, 'OOS Passed Auto-Deploy', ?, ?)", (sub_id, row["user_id"], row["pool_id"], cand["params_json"], _now_iso(), "2099-12-31T23:59:59Z"))
+            try:
+                cand = conn.execute("SELECT id, params_json FROM candidates WHERE task_id = ? ORDER BY score DESC LIMIT 1", (task_id,)).fetchone()
+                if cand:
+                    cid = cand["id"]
+                    sub = conn.execute("SELECT id FROM submissions WHERE candidate_id = ?", (cid,)).fetchone()
+                    if not sub:
+                        # [專家級修復] 嚴格區分 PostgreSQL 與 SQLite 的 ID 獲取方式
+                        if getattr(conn, "kind", "sqlite") == "postgres":
+                            row_sub = conn.execute(
+                                "INSERT INTO submissions (candidate_id, user_id, pool_id, status, audit_json, submitted_at) VALUES (?, ?, ?, 'approved', '{}', ?) RETURNING id", 
+                                (cid, row["user_id"], row["pool_id"], _now_iso())
+                            ).fetchone()
+                            sub_id = int((row_sub or {}).get("id") or 0)
+                        else:
+                            cur = conn.execute(
+                                "INSERT INTO submissions (candidate_id, user_id, pool_id, status, audit_json, submitted_at) VALUES (?, ?, ?, 'approved', '{}', ?)", 
+                                (cid, row["user_id"], row["pool_id"], _now_iso())
+                            )
+                            sub_id = int(cur.lastrowid)
+
+                        conn.execute("UPDATE candidates SET is_submitted = 1 WHERE id = ?", (cid,))
+                        
+                        if getattr(conn, "kind", "sqlite") == "postgres":
+                            conn.execute(
+                                "INSERT INTO strategies (submission_id, user_id, pool_id, params_json, status, allocation_pct, note, created_at, expires_at) VALUES (?, ?, ?, ?, 'active', 1.0, 'OOS Passed Auto-Deploy', ?, ?) RETURNING id", 
+                                (sub_id, row["user_id"], row["pool_id"], cand["params_json"], _now_iso(), "2099-12-31T23:59:59Z")
+                            )
+                        else:
+                            conn.execute(
+                                "INSERT INTO strategies (submission_id, user_id, pool_id, params_json, status, allocation_pct, note, created_at, expires_at) VALUES (?, ?, ?, ?, 'active', 1.0, 'OOS Passed Auto-Deploy', ?, ?)", 
+                                (sub_id, row["user_id"], row["pool_id"], cand["params_json"], _now_iso(), "2099-12-31T23:59:59Z")
+                            )
+                        
+                        log_sys_event("OOS_DEPLOY_SUCCESS", row["user_id"], f"任務 {task_id} OOS 通過，已成功部署為上線策略！", {"task_id": task_id, "sub_id": sub_id})
+                else:
+                    log_sys_event("OOS_DEPLOY_WARN", row["user_id"], f"任務 {task_id} 雖通過 OOS，但在資料庫找不到最佳 candidate 關聯", {"task_id": task_id})
+            except Exception as deploy_err:
+                import traceback
+                conn.rollback()
+                log_sys_event("OOS_DEPLOY_FATAL", row["user_id"], f"創建策略時發生資料庫崩潰: {deploy_err}", {"task_id": task_id, "trace": traceback.format_exc()})
+                raise deploy_err
 
         conn.commit()
         return True
+    except Exception as e:
+        import traceback
+        log_sys_event("OOS_FINISH_FATAL", user_id, f"處理 OOS 結果時發生未知崩潰: {e}", {"trace": traceback.format_exc()})
+        return False
     finally:
         conn.close()

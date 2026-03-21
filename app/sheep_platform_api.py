@@ -916,11 +916,20 @@ def api_finish_oos(
     ctx = _auth_ctx(request, authorization)
     w = _require_worker(request, ctx, x_worker_id, x_worker_version, x_worker_protocol)
     
-    # [極致修復] 允許跨用戶回報 OOS 結果
-    ok = db.finish_oos_task(task_id, int(ctx["user"]["id"]), w["worker_id"], body.passed, body.metrics, allow_cross_user=True)
-    if not ok:
-        raise HTTPException(status_code=400, detail="oos_finish_failed")
-    return {"ok": True}
+    try:
+        # [極致修復] 允許跨用戶回報 OOS 結果，並確保拋出明確的紀錄檔以供除錯
+        ok = db.finish_oos_task(task_id, int(ctx["user"]["id"]), w["worker_id"], body.passed, body.metrics, allow_cross_user=True)
+        if not ok:
+            db.log_sys_event("OOS_API_REJECT", int(ctx["user"]["id"]), f"API 拒絕了任務 {task_id} 的 OOS 回報 (可能任務不存在或無效)", {})
+            raise HTTPException(status_code=400, detail="oos_finish_failed")
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as api_err:
+        import traceback
+        err_str = traceback.format_exc()
+        db.log_sys_event("OOS_API_CRASH", int(ctx["user"]["id"]), f"處理 OOS 回報 API 時發生系統級崩潰: {api_err}", {"trace": err_str})
+        raise HTTPException(status_code=500, detail="Internal Server Error: OOS processing crashed")
 @app.post("/tasks/{task_id}/submit_oos")
 def web_submit_oos(task_id: int, request: Request, authorization: Optional[str] = Header(None)):
     ctx = _auth_ctx(request, authorization)
