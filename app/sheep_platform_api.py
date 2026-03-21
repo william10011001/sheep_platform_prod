@@ -476,12 +476,49 @@ def compute_stats(request: Request, authorization: Optional[str] = Header(None))
         return {"ts": _utc_iso(), "stats": db.get_worker_stats_snapshot(window_seconds=int(win_s))}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"compute_stats_failed: {e}")
+class AdminSettingsUpdate(BaseModel):
+    min_trades: int
+    min_total_return_pct: float
+    max_drawdown_pct: float
+    min_sharpe: float
+    candidate_keep_top_n: int
+
+@app.post("/admin/settings")
+def update_admin_settings(req: Request, body: AdminSettingsUpdate, authorization: Optional[str] = Header(None)):
+    ctx = _auth_ctx(req, authorization)
+    if str(ctx["user"].get("role")) != "admin":
+        raise HTTPException(status_code=403, detail="權限不足：僅限系統管理員")
+    
+    conn = db._conn()
+    try:
+        db.set_setting(conn, "min_trades", body.min_trades)
+        db.set_setting(conn, "min_total_return_pct", body.min_total_return_pct)
+        db.set_setting(conn, "max_drawdown_pct", body.max_drawdown_pct)
+        db.set_setting(conn, "min_sharpe", body.min_sharpe)
+        db.set_setting(conn, "candidate_keep_top_n", body.candidate_keep_top_n)
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+    return {"ok": True, "msg": "達標門檻設定已成功更新並立即生效！"}
+
+@app.get("/admin/strategies")
+def get_admin_strategies(req: Request, authorization: Optional[str] = Header(None)):
+    ctx = _auth_ctx(req, authorization)
+    if str(ctx["user"].get("role")) != "admin":
+        raise HTTPException(status_code=403, detail="權限不足：僅限系統管理員")
+    
+    data = db.get_admin_active_strategies()
+    return {"ok": True, "strategies": data, "total": len(data)}
+
 @app.get("/", response_class=HTMLResponse)
 def landing() -> HTMLResponse:
-    """Lightweight landing HTML used for link previews (LINE/IG).
-
-    Open Graph crawlers do not execute JavaScript on Streamlit pages. This endpoint serves
-    OG meta tags server-side.
+    """
+    [專家級修改] 將管理員面板無縫整合至系統根目錄 (Root Path)。
+    一般訪客 (如 LINE/IG 爬蟲) 仍會讀取到正確的 OG Meta Tags，畫面上會提供按鈕前往 Streamlit 平台。
+    若在畫面上的特權表單輸入最高權限密碼 (sheep / @@Wm105020)，即會原地解鎖並展開全中文管理員控制面板。
     """
     conn = db._conn()
     try:
@@ -499,30 +536,281 @@ def landing() -> HTMLResponse:
     esc_img = html.escape(img)
     esc_redirect = html.escape(redirect_url)
 
-    refresh_meta = ""
-    jump_block = ""
-    if redirect_url:
-        refresh_meta = f'<meta http-equiv="refresh" content="0;url={esc_redirect}">'
-        jump_block = f'<p><a href="{esc_redirect}">開啟平台</a></p>'
+    # 移除自動 Refresh 否則管理員無法停留此頁登入，改為顯示跳轉按鈕供一般使用者
+    jump_block = f'<div class="text-center mt-8"><a href="{esc_redirect}" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg transition inline-block">👉 點擊此處開啟羊肉爐平台 👈</a></div>' if redirect_url else ''
 
     html_doc = f"""<!doctype html>
-<html lang=\"zh-Hant\">
+<html lang="zh-Hant">
   <head>
-    <meta charset=\"utf-8\">
-    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
-    <title>{esc_title}</title>
-    <meta property=\"og:title\" content=\"{esc_title}\">
-    <meta property=\"og:description\" content=\"{esc_desc}\">
-    <meta property=\"og:site_name\" content=\"{esc_site}\">
-    <meta property=\"og:type\" content=\"website\">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{esc_title} - 系統入口</title>
+    <meta property="og:title" content="{esc_title}">
+    <meta property="og:description" content="{esc_desc}">
+    <meta property="og:site_name" content="{esc_site}">
+    <meta property="og:type" content="website">
     {f'<meta property="og:image" content="{esc_img}">' if img else ''}
-    {refresh_meta}
-    <meta name=\"twitter:card\" content=\"summary_large_image\">
+    <meta name="twitter:card" content="summary_large_image">
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body {{ background-color: #0b0f14; color: #cbd5e1; }}
+        .panel {{ background-color: #0f1824; border-color: #1f2937; }}
+        .input-bg {{ background-color: #0e1420; border: 1px solid #1f2937; color: #e2e8f0; }}
+        .input-bg:focus {{ border-color: #3b82f6; outline: none; }}
+        [v-cloak] {{ display: none; }}
+    </style>
   </head>
   <body>
-    <h1>{esc_title}</h1>
-    <p>{esc_desc}</p>
-    {jump_block}
+    <div id="app" v-cloak class="min-h-screen p-6 flex flex-col items-center justify-center">
+        <div v-if="!token" class="w-full max-w-md panel p-8 rounded-xl shadow-lg border">
+            <div class="text-center mb-6">
+                <h1 class="text-3xl font-bold text-white mb-2">{esc_title}</h1>
+                <p class="text-gray-400">{esc_desc}</p>
+            </div>
+            {jump_block}
+            
+            <div class="mt-12 border-t border-gray-700 pt-8">
+                <h2 class="text-xl font-bold text-gray-400 mb-6 text-center"><i class="fas fa-lock mr-2"></i>系統管理員登入</h2>
+                <form @submit.prevent="login">
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium mb-2">帳號</label>
+                        <input v-model="username" type="text" class="w-full p-3 rounded-lg input-bg" required>
+                    </div>
+                    <div class="mb-6">
+                        <label class="block text-sm font-medium mb-2">密碼</label>
+                        <input v-model="password" type="password" class="w-full p-3 rounded-lg input-bg" required>
+                    </div>
+                    <button type="submit" class="w-full bg-gray-700 hover:bg-gray-600 text-white font-bold py-3 rounded-lg transition" :disabled="loading">
+                        <span v-if="loading"><i class="fas fa-spinner fa-spin"></i> 驗證中...</span>
+                        <span v-else>登入後台</span>
+                    </button>
+                </form>
+                <div v-if="error" class="mt-4 p-3 bg-red-900/50 border border-red-500 text-red-200 rounded text-center">
+                    {{{{ error }}}}
+                </div>
+            </div>
+        </div>
+
+        <div v-else class="w-full max-w-6xl mt-4">
+            <div class="flex justify-between items-center mb-8">
+                <h1 class="text-3xl font-bold text-white"><i class="fas fa-shield-alt mr-2 text-blue-500"></i>管理員控制面板</h1>
+                <button @click="logout" class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg transition shadow">
+                    <i class="fas fa-sign-out-alt mr-1"></i>登出
+                </button>
+            </div>
+
+            <div v-if="message" class="mb-6 p-4 bg-green-900/50 border border-green-500 text-green-200 rounded-lg flex justify-between shadow">
+                <span><i class="fas fa-check-circle mr-2"></i>{{{{ message }}}}</span>
+                <button @click="message=''" class="text-green-200 hover:text-white"><i class="fas fa-times"></i></button>
+            </div>
+            <div v-if="error" class="mb-6 p-4 bg-red-900/50 border border-red-500 text-red-200 rounded-lg flex justify-between shadow">
+                <span><i class="fas fa-exclamation-triangle mr-2"></i>{{{{ error }}}}</span>
+                <button @click="error=''" class="text-red-200 hover:text-white"><i class="fas fa-times"></i></button>
+            </div>
+
+            <div class="grid grid-cols-1 xl:grid-cols-3 gap-6 items-start">
+                <div class="panel p-6 rounded-xl shadow-lg border col-span-1">
+                    <h2 class="text-xl font-bold text-white mb-4 border-b border-gray-700 pb-2">
+                        <i class="fas fa-sliders-h mr-2 text-blue-400"></i>達標門檻動態設定
+                    </h2>
+                    <form @submit.prevent="updateSettings">
+                        <div class="mb-4">
+                            <label class="block text-sm font-medium mb-1 text-gray-300" title="至少需要交易的筆數">最少交易筆數 (Min Trades)</label>
+                            <input v-model.number="settings.min_trades" type="number" class="w-full p-2 rounded input-bg" required>
+                        </div>
+                        <div class="mb-4">
+                            <label class="block text-sm font-medium mb-1 text-gray-300">最低總報酬率 % (Min Return %)</label>
+                            <input v-model.number="settings.min_total_return_pct" type="number" step="0.1" class="w-full p-2 rounded input-bg" required>
+                        </div>
+                        <div class="mb-4">
+                            <label class="block text-sm font-medium mb-1 text-gray-300">最大回撤容忍 % (Max Drawdown %)</label>
+                            <input v-model.number="settings.max_drawdown_pct" type="number" step="0.1" class="w-full p-2 rounded input-bg" required>
+                        </div>
+                        <div class="mb-4">
+                            <label class="block text-sm font-medium mb-1 text-gray-300">最低夏普值 (Min Sharpe)</label>
+                            <input v-model.number="settings.min_sharpe" type="number" step="0.01" class="w-full p-2 rounded input-bg" required>
+                        </div>
+                        <div class="mb-6">
+                            <label class="block text-sm font-medium mb-1 text-gray-300">保存前 N 名參數 (Keep Top N)</label>
+                            <input v-model.number="settings.candidate_keep_top_n" type="number" class="w-full p-2 rounded input-bg" required>
+                        </div>
+                        <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition" :disabled="loading">
+                            <i class="fas fa-save mr-1"></i>儲存設定並立即生效
+                        </button>
+                    </form>
+                </div>
+
+                <div class="panel p-6 rounded-xl shadow-lg border col-span-1 xl:col-span-2">
+                    <div class="flex justify-between items-center mb-4 border-b border-gray-700 pb-2">
+                        <h2 class="text-xl font-bold text-white">
+                            <i class="fas fa-layer-group mr-2 text-green-400"></i>已過審策略池總覽 (實盤因子庫)
+                        </h2>
+                        <span class="bg-blue-900/50 text-blue-300 text-sm py-1 px-3 rounded-full border border-blue-700 font-bold">
+                            過審總數: {{{{ strategies.length }}}} 個
+                        </span>
+                    </div>
+                    
+                    <div class="overflow-x-auto rounded-lg border border-gray-700">
+                        <table class="w-full text-sm text-left">
+                            <thead class="text-xs uppercase bg-gray-800 text-gray-300 border-b border-gray-700">
+                                <tr>
+                                    <th class="px-4 py-3">策略ID</th>
+                                    <th class="px-4 py-3">提供者(礦工)</th>
+                                    <th class="px-4 py-3">交易對 / 週期</th>
+                                    <th class="px-4 py-3">綜合夏普值</th>
+                                    <th class="px-4 py-3">IS 報酬</th>
+                                    <th class="px-4 py-3">狀態</th>
+                                    <th class="px-4 py-3">過審時間</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="st in strategies" :key="st.strategy_id" class="border-b border-gray-800 hover:bg-gray-750 transition duration-150">
+                                    <td class="px-4 py-3 font-mono text-gray-400">#{{{{ st.strategy_id }}}}</td>
+                                    <td class="px-4 py-3 font-medium text-blue-400">{{{{ st.username }}}}</td>
+                                    <td class="px-4 py-3"><span class="bg-gray-700 px-2 py-1 rounded text-xs">{{{{ st.symbol }}}} ({{{{ st.timeframe_min }}}}m)</span></td>
+                                    <td class="px-4 py-3 font-bold text-green-400">
+                                        {{{{ (st.progress?.oos_metrics?.sharpe || st.metrics?.sharpe || 0).toFixed(2) }}}}
+                                    </td>
+                                    <td class="px-4 py-3 text-yellow-400">{{{{ (st.metrics?.total_return_pct || 0).toFixed(2) }}}}%</td>
+                                    <td class="px-4 py-3">
+                                        <span class="px-2 py-1 bg-green-900/50 text-green-400 rounded text-xs border border-green-800">
+                                            {{{{ st.status }}}}
+                                        </span>
+                                    </td>
+                                    <td class="px-4 py-3 text-gray-400 text-xs">{{{{ new Date(st.created_at).toLocaleString('zh-TW') }}}}</td>
+                                </tr>
+                                <tr v-if="strategies.length === 0">
+                                    <td colspan="7" class="px-4 py-12 text-center text-gray-500">
+                                        <i class="fas fa-folder-open text-3xl mb-2"></i><br>目前尚無通過審核的策略
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const {{ createApp, ref, onMounted }} = Vue;
+
+        createApp({{
+            setup() {{
+                const token = ref(localStorage.getItem('admin_token') || '');
+                const username = ref('');
+                const password = ref('');
+                const loading = ref(false);
+                const error = ref('');
+                const message = ref('');
+                const settings = ref({{
+                    min_trades: 30,
+                    min_total_return_pct: 3.0,
+                    max_drawdown_pct: 25.0,
+                    min_sharpe: 0.6,
+                    candidate_keep_top_n: 30
+                }});
+                const strategies = ref([]);
+
+                const req = async (url, options = {{}}) => {{
+                    if(!options.headers) options.headers = {{}};
+                    options.headers['Content-Type'] = 'application/json';
+                    if(token.value) options.headers['Authorization'] = 'Bearer ' + token.value;
+                    
+                    const res = await fetch(url, options);
+                    const data = await res.json();
+                    if(!res.ok) throw new Error(data.detail || data.msg || '連線錯誤');
+                    return data;
+                }};
+
+                const login = async () => {{
+                    loading.value = true;
+                    error.value = '';
+                    try {{
+                        const data = await req('/token', {{
+                            method: 'POST',
+                            body: JSON.stringify({{ username: username.value, password: password.value, name: 'compute' }})
+                        }});
+                        if (data.role !== 'admin') {{
+                            throw new Error('權限拒絕：必須具備管理員權限');
+                        }}
+                        token.value = data.token;
+                        localStorage.setItem('admin_token', data.token);
+                        await fetchData();
+                        message.value = '身分驗證成功，歡迎來到系統管理員後台。';
+                    }} catch (e) {{
+                        error.value = e.message;
+                        token.value = '';
+                        localStorage.removeItem('admin_token');
+                    }} finally {{
+                        loading.value = false;
+                    }}
+                }};
+
+                const logout = () => {{
+                    token.value = '';
+                    localStorage.removeItem('admin_token');
+                    username.value = '';
+                    password.value = '';
+                    strategies.value = [];
+                    message.value = '已安全登出。';
+                }};
+
+                const fetchData = async () => {{
+                    loading.value = true;
+                    try {{
+                        // 讀取設定
+                        const sData = await req('/settings/snapshot');
+                        if(sData.thresholds) {{
+                            settings.value = sData.thresholds;
+                        }}
+                        // 讀取策略總覽
+                        const stData = await req('/admin/strategies');
+                        strategies.value = stData.strategies || [];
+                    }} catch (e) {{
+                        error.value = '讀取管理員資料失敗：' + e.message;
+                        if(e.message.includes('expired') || e.message.includes('missing') || e.message.includes('不足')) {{
+                            logout();
+                        }}
+                    }} finally {{
+                        loading.value = false;
+                    }}
+                }};
+
+                const updateSettings = async () => {{
+                    loading.value = true;
+                    error.value = '';
+                    message.value = '';
+                    try {{
+                        const res = await req('/admin/settings', {{
+                            method: 'POST',
+                            body: JSON.stringify(settings.value)
+                        }});
+                        message.value = res.msg || '設定已成功儲存並立即生效！';
+                        await fetchData(); // 重新整理
+                    }} catch (e) {{
+                        error.value = '儲存設定失敗：' + e.message;
+                    }} finally {{
+                        loading.value = false;
+                    }}
+                }};
+
+                onMounted(() => {{
+                    if (token.value) {{
+                        fetchData();
+                    }}
+                }});
+
+                return {{
+                    token, username, password, loading, error, message,
+                    settings, strategies, login, logout, updateSettings
+                }};
+            }}
+        }}).mount('#app');
+    </script>
   </body>
 </html>"""
 

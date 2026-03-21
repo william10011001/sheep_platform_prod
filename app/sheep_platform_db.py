@@ -3513,3 +3513,39 @@ def get_all_candidates_detailed(limit: int = 1000) -> list:
     finally:
         conn.close()
 
+def get_admin_active_strategies() -> list:
+    """專家級：供管理員面板讀取所有已過審且活躍的策略總覽"""
+    conn = _conn()
+    try:
+        query = """
+        SELECT st.id as strategy_id, st.status, st.allocation_pct, st.created_at,
+               u.username, u.nickname,
+               p.name as pool_name, p.symbol, p.timeframe_min,
+               c.metrics_json, c.score,
+               t.progress_json
+        FROM strategies st
+        LEFT JOIN users u ON st.user_id = u.id
+        LEFT JOIN factor_pools p ON st.pool_id = p.id
+        LEFT JOIN submissions su ON st.submission_id = su.id
+        LEFT JOIN candidates c ON su.candidate_id = c.id
+        LEFT JOIN mining_tasks t ON c.task_id = t.id
+        WHERE st.status = 'active'
+        ORDER BY st.id DESC
+        """
+        rows = conn.execute(query).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            try: d["metrics"] = json.loads(d.get("metrics_json") or "{}")
+            except Exception: d["metrics"] = {}
+            try: d["progress"] = json.loads(d.get("progress_json") or "{}")
+            except Exception: d["progress"] = {}
+            out.append(d)
+        return out
+    except Exception as e:
+        import traceback
+        print(f"[DB ERROR] get_admin_active_strategies failed: {e}\n{traceback.format_exc()}")
+        return []
+    finally:
+        conn.close()
+
