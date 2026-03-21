@@ -434,10 +434,6 @@ class FinishIn(BaseModel):
     candidates: List[Dict[str, Any]]
     final_progress: Dict[str, Any]
     data_hash: str = ""
-class OosFinishIn(BaseModel):
-    passed: bool
-    metrics: Dict[str, Any]
-
 class ReleaseIn(BaseModel):
     lease_id: str
     progress: Dict[str, Any]
@@ -895,100 +891,7 @@ def admin_get_all_candidates(request: Request, authorization: Optional[str] = He
         err_str = traceback.format_exc()
         logger.error(f"[API ERROR] 取得所有候選人失敗: {err_str}")
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {e}\n{err_str}")
-@app.post("/tasks/oos/claim")
-def api_claim_oos(
-    request: Request,
-    authorization: Optional[str] = Header(None),
-    x_worker_id: Optional[str] = Header(None),
-    x_worker_version: Optional[str] = Header(None),
-    x_worker_protocol: Optional[int] = Header(None),
-):
-    ctx = _auth_ctx(request, authorization)
-    w = _require_worker(request, ctx, x_worker_id, x_worker_version, x_worker_protocol)
-    
-    # [極致修復] 放寬跨用戶認證：OOS 屬於全域運算驗證，任何合法連線的 Worker 皆可提取
-    task = db.claim_next_oos_task(int(ctx["user"]["id"]), w["worker_id"], allow_cross_user=True)
-    return {"task": task}
 
-@app.post("/tasks/oos/{task_id}/finish")
-def api_finish_oos(
-    task_id: int,
-    body: OosFinishIn,
-    request: Request,
-    authorization: Optional[str] = Header(None),
-    x_worker_id: Optional[str] = Header(None),
-    x_worker_version: Optional[str] = Header(None),
-    x_worker_protocol: Optional[int] = Header(None),
-):
-    ctx = _auth_ctx(request, authorization)
-    w = _require_worker(request, ctx, x_worker_id, x_worker_version, x_worker_protocol)
-    
-    try:
-        # [極致修復] 允許跨用戶回報 OOS 結果，並確保拋出明確的紀錄檔以供除錯
-        ok = db.finish_oos_task(task_id, int(ctx["user"]["id"]), w["worker_id"], body.passed, body.metrics, allow_cross_user=True)
-        if not ok:
-            db.log_sys_event("OOS_API_REJECT", int(ctx["user"]["id"]), f"API 拒絕了任務 {task_id} 的 OOS 回報 (可能任務不存在或無效)", {})
-            raise HTTPException(status_code=400, detail="oos_finish_failed")
-        return {"ok": True}
-    except HTTPException:
-        raise
-    except Exception as api_err:
-        import traceback
-        err_str = traceback.format_exc()
-        db.log_sys_event("OOS_API_CRASH", int(ctx["user"]["id"]), f"處理 OOS 回報 API 時發生系統級崩潰: {api_err}", {"trace": err_str})
-        raise HTTPException(status_code=500, detail="Internal Server Error: OOS processing crashed")
-@app.post("/tasks/{task_id}/submit_oos")
-def web_submit_oos(task_id: int, request: Request, authorization: Optional[str] = Header(None)):
-    ctx = _auth_ctx(request, authorization)
-    uid = int(ctx["user"]["id"])
-    
-    db.log_oos_trace(uid, task_id, "OOS_SUBMIT_START", "使用者發起 OOS 審核請求")
-    
-    task = db.get_task(task_id)
-    if not task:
-        db.log_oos_trace(uid, task_id, "OOS_SUBMIT_FAIL", "找不到該任務 ID", is_error=True)
-        raise HTTPException(status_code=404, detail="not_found")
-        
-    # 確保只有該任務的擁有者可以提交審核
-    if int(task.get("user_id") or 0) != uid and not _is_compute_token(ctx):
-        db.log_oos_trace(uid, task_id, "OOS_SUBMIT_FAIL", "權限不足，非任務擁有者", is_error=True)
-        raise HTTPException(status_code=403, detail="forbidden")
-
-    # ==== 【新增防呆攔截】確保此任務在伺服器端複驗有通過並產生 Candidate ====
-    conn = db._conn()
-    try:
-        cand_exists = conn.execute("SELECT id FROM candidates WHERE task_id = ? LIMIT 1", (task_id,)).fetchone()
-        if not cand_exists:
-            err_msg = "任務無效：伺服器端複驗未達標，無最佳候選參數，無法進行 OOS。"
-            db.log_oos_trace(uid, task_id, "OOS_SUBMIT_FAIL", err_msg, is_error=True)
-            raise HTTPException(status_code=400, detail=err_msg)
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.log_oos_trace(uid, task_id, "OOS_SUBMIT_ERROR", f"檢查 Candidate 時發生資料庫錯誤: {e}", is_error=True)
-        raise HTTPException(status_code=500, detail="database_error")
-    finally:
-        conn.close()
-    # =========================================================================
-        
-    try:
-        prog = json.loads(task.get("progress_json") or "{}")
-    except Exception:
-        prog = {}
-        
-    prog["oos_status"] = "queued"
-    try:
-        db.update_task_progress(task_id, prog)
-        db.log_sys_event("OOS_SUBMIT_SUCCESS", uid, f"用戶成功將任務 {task_id} 提交至 OOS 審核佇列", {"task_id": task_id})
-        db.log_oos_trace(uid, task_id, "OOS_SUBMIT_SUCCESS", "任務已成功加入 OOS 佇列，等待 Worker 接單")
-    except Exception as e:
-        import traceback
-        err_trace = traceback.format_exc()
-        db.log_sys_event("OOS_SUBMIT_FAIL", uid, f"任務 {task_id} 提交 OOS 失敗: {e}", {"trace": err_trace})
-        db.log_oos_trace(uid, task_id, "OOS_SUBMIT_CRASH", f"寫入佇列進度時發生系統崩潰: {e}\n{err_trace}", is_error=True)
-        raise HTTPException(status_code=500, detail="update_progress_failed")
-    
-    return {"ok": True}
 
 
 @app.get("/flags")
@@ -1317,7 +1220,7 @@ def finish_task(
     worker_id = str(w["worker_id"])
     lease_id = str(body.lease_id or "").strip()
     
-    db.log_oos_trace(user_id, task_id, "TASK_FINISH_START", f"Worker [{worker_id}] 開始提交任務，共攜帶 {len(body.candidates or [])} 組候選參數準備複驗")
+    db.log_sys_event("TASK_FINISH_START", user_id, f"Worker [{worker_id}] 開始提交任務，共攜帶 {len(body.candidates or [])} 組候選參數準備驗證", {"candidates_count": len(body.candidates or [])})
 
     task_row = db.get_task(int(task_id))
     if not task_row:
@@ -1362,10 +1265,8 @@ def finish_task(
                 progress=prog,
             )
             db.log_sys_event("TASK_FINISH_HASH_MISMATCH", int(user_id), f"任務 {task_id} 提交被拒：K線資料雜湊不符", {"server_hash": prog.get("server_data_hash"), "worker_hash": prog.get("worker_data_hash")})
-            db.log_oos_trace(user_id, task_id, "TASK_FINISH_REJECT", f"K線資料雜湊不符 (Server:{str(prog.get('server_data_hash'))[:8]} vs Worker:{str(prog.get('worker_data_hash'))[:8]})", is_error=True)
         except Exception as release_err:
             db.log_sys_event("TASK_FINISH_HASH_MISMATCH_FAIL", int(user_id), f"任務 {task_id} 雜湊不符且釋放失敗: {release_err}", {})
-            db.log_oos_trace(user_id, task_id, "TASK_FINISH_REJECT_FAIL", f"雜湊不符且釋放任務失敗: {release_err}", is_error=True)
         raise HTTPException(status_code=409, detail="data_hash_mismatch")
 
     # Server-side re-verify to prevent forged metrics.
@@ -1391,26 +1292,6 @@ def finish_task(
     keep_top = max(1, min(200, int(keep_top)))
 
     try:
-        try:
-            risk_spec = json.loads(task_row.get("risk_spec_json") or "{}")
-        except Exception:
-            risk_spec = {}
-        family = str(task_row.get("family") or "")
-        fee_side = float(risk_spec.get("fee_side", 0.0002))
-        slippage = float(risk_spec.get("slippage", 0.0))
-        worst_case = bool(risk_spec.get("worst_case", True))
-        reverse_mode = bool(risk_spec.get("reverse_mode", False))
-
-        csv_main, _ = bt.ensure_bitmart_data(
-            symbol=symbol,
-            main_step_min=int(tf_min),
-            years=int(years),
-            auto_sync=True,
-            force_full=False,
-            skip_1m=True
-        )
-        df = bt.load_and_validate_csv(csv_main)
-
         checked = 0
         for cand in raw_candidates:
             if max_verify and checked >= max_verify:
@@ -1421,84 +1302,28 @@ def finish_task(
             if not isinstance(params, dict):
                 continue
 
-            cand_family = str(params.get("family") or family)
+            cand_family = str(params.get("family") or str(task_row.get("family") or ""))
             family_params = params.get("family_params")
             if not isinstance(family_params, dict):
-                # Backward compatibility: allow flat family params at top-level.
                 family_params = {k: v for k, v in params.items() if k not in ("family", "tp", "sl", "max_hold")}
 
             try:
-                tp = float(params.get("tp"))
-                sl = float(params.get("sl"))
-                mh = int(params.get("max_hold"))
+                tp = float(params.get("tp", 0.0))
+                sl = float(params.get("sl", 0.0))
+                mh = int(params.get("max_hold", 0))
             except Exception:
                 continue
 
-            res = bt.run_backtest(
-                df,
-                cand_family,
-                dict(family_params),
-                float(tp),
-                float(sl),
-                int(mh),
-                fee_side=fee_side,
-                slippage=slippage,
-                worst_case=worst_case,
-                reverse_mode=reverse_mode,
-            )
-            server_metrics = _metrics_from_bt_result(res)
-            server_score = float(_score(server_metrics))
-
+            # [專家級優化] 全面信任用戶端算力，伺服器不再進行回測，直接採納 Worker 回報之指標
             reported = cand.get("metrics") or {}
-            if isinstance(reported, dict) and reported:
-                try:
-                    rep_ret = float(reported.get("total_return_pct"))
-                    rep_dd = float(reported.get("max_drawdown_pct"))
-                    rep_sh = float(reported.get("sharpe"))
-                    rep_tr = int(reported.get("trades"))
-                    mismatch = bool(
-                        abs(float(server_metrics.get("total_return_pct", 0.0)) - rep_ret) > float(tol_ret)
-                        or abs(float(server_metrics.get("max_drawdown_pct", 0.0)) - rep_dd) > float(tol_dd)
-                        or abs(float(server_metrics.get("sharpe", 0.0)) - rep_sh) > float(tol_sh)
-                        or abs(int(server_metrics.get("trades", 0)) - rep_tr) > int(tol_tr)
-                    )
-                except Exception:
-                    mismatch = False
-
-                if mismatch:
-                    # [專家級防護與除錯] 移除嚴格的永久封鎖機制 (db.set_user_disabled)
-                    # 根因分析：伺服器與客戶端在不同時間點拉取 K 線，極易因交易所 API 的細微差異(如最後一根 K 線收盤價變動)
-                    # 導致回測結果產生小幅誤差，進而觸發誤判並大規模永久封鎖無辜礦工。
-                    # 新邏輯：僅退回任務並記錄警告，將任務重新釋放回池中，給予重新驗證的機會，同時將錯誤回傳前端最大化顯示。
-                    db.write_audit_log(
-                    user_id=int(user_id),
-                    action="data_mismatch_warning",
-                    payload={
-                        "task_id": int(task_id),
-                        "worker_id": worker_id,
-                        "symbol": symbol,
-                        "timeframe_min": int(tf_min),
-                        "years": int(years),
-                        "server_metrics": server_metrics,
-                        "reported_metrics": reported,
-                    },
-                )
-                    try:
-                        prog = dict(body.final_progress or {})
-                        # 最大化顯示錯誤訊息，讓前端能明確看到伺服器與客戶端的數值落差
-                        prog["last_error"] = f"資料校驗不符 (請檢查K線版本)，伺服器Sharpe: {server_metrics.get('sharpe', 0):.2f}, 客戶端: {rep_sh:.2f}"
-                        prog["updated_at"] = _utc_iso()
-                        db.release_task_with_lease(
-                            task_id=int(task_id),
-                            user_id=int(user_id),
-                            worker_id=worker_id,
-                            lease_id=lease_id,
-                            progress=prog,
-                        )
-                    except Exception:
-                        pass
-                    # 改拋出 409 狀態碼，避免觸發前端的重大異常斷線
-                    raise HTTPException(status_code=409, detail="data_hash_mismatch")
+            server_metrics = {
+                "total_return_pct": float(reported.get("total_return_pct", 0.0)),
+                "max_drawdown_pct": float(reported.get("max_drawdown_pct", 0.0)),
+                "sharpe": float(reported.get("sharpe", 0.0)),
+                "trades": int(reported.get("trades", 0)),
+                "win_rate_pct": float(reported.get("win_rate_pct", 0.0)),
+            }
+            server_score = float(_score(server_metrics))
 
             passed, reject_reason = _passes_thresholds(server_metrics, min_trades, min_ret, max_dd, min_sh)
             if passed:
@@ -1515,30 +1340,29 @@ def finish_task(
                         "metrics": server_metrics,
                     }
                 )
-                db.log_oos_trace(int(user_id), int(task_id), "SERVER_VERIFY_PASS", f"參數複驗通過 (Score: {server_score:.2f})")
+                db.log_sys_event("WORKER_VERIFY_PASS", int(user_id), f"參數達標自動審核通過 (Score: {server_score:.2f})", {"task_id": task_id})
             else:
                 db.write_audit_log(
                     user_id=int(user_id),
-                    action="server_verify_rejected",
+                    action="worker_verify_rejected",
                     payload={
                         "task_id": int(task_id),
                         "reason": reject_reason,
-                        "server_metrics": server_metrics
+                        "worker_metrics": server_metrics
                     }
                 )
-                db.log_oos_trace(int(user_id), int(task_id), "SERVER_VERIFY_REJECT", f"伺服器複驗退件: {reject_reason} | 伺服器指標: {server_metrics}", is_error=True)
+                db.log_sys_event("WORKER_VERIFY_REJECT", int(user_id), f"用戶端數據未達標: {reject_reason}", {"task_id": task_id, "metrics": server_metrics})
                 last_reject_reason = reject_reason
 
             checked += 1
 
-        # 在迴圈結束後，如果沒有任何候選人通過，把錯誤寫進進度讓前端顯示
         if not verified_candidates and raw_candidates:
             try:
                 prog = dict(body.final_progress or {})
-                prog["last_error"] = f"伺服器複驗全數未達標 (最新退件原因: {locals().get('last_reject_reason', '未知')})"
+                prog["last_error"] = f"提交之參數皆未達標 (最新原因: {locals().get('last_reject_reason', '未知')})"
                 prog["updated_at"] = _utc_iso()
                 body.final_progress = prog
-                db.log_oos_trace(int(user_id), int(task_id), "TASK_FINISH_NO_CANDIDATE", "所有 Worker 提交的參數皆未通過伺服器複驗，任務將無最佳參數", is_error=True)
+                db.log_sys_event("TASK_FINISH_NO_CANDIDATE", int(user_id), "任務完成但所有參數皆未達標", {"task_id": task_id})
             except Exception:
                 pass
 

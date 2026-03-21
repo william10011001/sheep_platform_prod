@@ -307,27 +307,7 @@ class ApiClient:
         # 避免伺服器端正在同步歷史 K 線資料時，客戶端因為預設的 20 秒超時而斷開連線，
         # 導致任務在伺服器變成「幽靈執行中(Zombie)」卡死，而客戶端卻顯示「無可用任務」。
         return self._request("POST", "/tasks/claim", timeout_s=600.0)
-    def claim_oos_task(self, worker_id: str, version: str, protocol: int) -> Optional[dict]:
-        headers = self._headers(worker_id, version, protocol)
-        try:
-            r = requests.post(f"{self.base_url}/tasks/oos/claim", headers=headers, timeout=10)
-            if r.status_code == 200:
-                return r.json().get("task")
-        except Exception:
-            pass
-        return None
 
-    def finish_oos_task(self, task_id: int, worker_id: str, version: str, protocol: int, passed: bool, metrics: dict) -> bool:
-        headers = self._headers(worker_id, version, protocol)
-        try:
-            r = requests.post(
-                f"{self.base_url}/tasks/oos/{task_id}/finish", 
-                json={"passed": passed, "metrics": metrics}, 
-                headers=headers, timeout=10
-            )
-            return r.status_code == 200
-        except Exception:
-            return False
     def progress(self, task_id: int, lease_id: str, progress: Dict[str, Any]) -> None:
         self._request("POST", f"/tasks/{int(task_id)}/progress", json_body={"lease_id": str(lease_id), "progress": progress}, timeout_s=20)
 

@@ -1584,36 +1584,7 @@ def log_sys_event(event_type: str, user_id: Optional[int], message: str, detail:
     # 第二道防線：丟進背景執行緒，主程式不需等待寫入完成，徹底消滅日誌引發的連環卡死
     t = threading.Thread(target=_bg_write, daemon=True)
     t.start()
-def log_oos_trace(user_id: Optional[int], task_id: Optional[int], action: str, details: str, is_error: bool = False) -> None:
-    """專門用於追蹤 OOS 全生命週期的獨立日誌，方便按 username grep 排錯"""
-    import os
-    import sys
-    import traceback
-    try:
-        uname = "SYSTEM"
-        if user_id:
-            # 避免遞迴呼叫卡死，直接簡單查
-            u = get_user_by_id(user_id)
-            if u: uname = str(u.get("username", "SYSTEM"))
-        
-        ts = _now_iso()
-        level = "ERROR" if is_error else "INFO "
-        tid_str = str(task_id) if task_id else "N/A"
-        
-        log_line = f"[{ts}] [{level}] [USER:{uname}] [TASK:{tid_str}] [{action}] {details}\n"
-        
-        # 輸出到 console 供 docker logs 備用查看
-        print(log_line.strip(), file=sys.stderr, flush=True)
-        
-        # 寫入獨立的 OOS 追蹤檔案
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        log_path = os.path.join(base_dir, "data", "oos_trace.log")
-        os.makedirs(os.path.dirname(log_path), exist_ok=True)
-        
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(log_line)
-    except Exception as e:
-        print(f"[OOS_TRACE_FAIL] 寫入 OOS 追蹤日誌失敗: {e}", file=sys.stderr, flush=True)
+
 def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, max_tasks: int = 6, preferred_family: str = "") -> None:
     import time, random
     for attempt in range(5):
@@ -3440,18 +3411,52 @@ def finish_task_with_lease(task_id: int, user_id: int, worker_id: str, lease_id:
             sc = float(c.get("score") or 0.0)
             pr = c.get("params") or c.get("params_json") or {}
             me = c.get("metrics") or {}
-            row = conn.execute(
-                "INSERT INTO candidates (task_id, user_id, pool_id, params_json, metrics_json, score, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id"
-                if getattr(conn, "kind", "sqlite") == "postgres"
-                else "INSERT INTO candidates (task_id, user_id, pool_id, params_json, metrics_json, score, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (tid, owner_id, pool_id, json.dumps(pr, ensure_ascii=False), json.dumps(me, ensure_ascii=False), sc, now),
-            )
-            if best_candidate_id is None:
-                if getattr(conn, "kind", "sqlite") == "postgres":
-                    rid = (row.fetchone() or {}).get("id")
-                    best_candidate_id = int(rid or 0) if rid else None
-                else:
-                    best_candidate_id = int(getattr(row, "lastrowid", 0) or 0)
+            
+            if getattr(conn, "kind", "sqlite") == "postgres":
+                row = conn.execute(
+                    "INSERT INTO candidates (task_id, user_id, pool_id, params_json, metrics_json, score, created_at, is_submitted) VALUES (?, ?, ?, ?, ?, ?, ?, 1) RETURNING id",
+                    (tid, owner_id, pool_id, json.dumps(pr, ensure_ascii=False), json.dumps(me, ensure_ascii=False), sc, now),
+                )
+                rid = (row.fetchone() or {}).get("id")
+                cid = int(rid or 0) if rid else None
+            else:
+                row = conn.execute(
+                    "INSERT INTO candidates (task_id, user_id, pool_id, params_json, metrics_json, score, created_at, is_submitted) VALUES (?, ?, ?, ?, ?, ?, ?, 1)",
+                    (tid, owner_id, pool_id, json.dumps(pr, ensure_ascii=False), json.dumps(me, ensure_ascii=False), sc, now),
+                )
+                cid = int(getattr(row, "lastrowid", 0) or 0)
+
+            if cid:
+                if best_candidate_id is None:
+                    best_candidate_id = cid
+                
+                # 全自動佈署：建立 Submission 與 Strategy 上線
+                try:
+                    if getattr(conn, "kind", "sqlite") == "postgres":
+                        row_sub = conn.execute(
+                            "INSERT INTO submissions (candidate_id, user_id, pool_id, status, audit_json, submitted_at) VALUES (?, ?, ?, 'approved', '{}', ?) RETURNING id", 
+                            (cid, owner_id, pool_id, now)
+                        ).fetchone()
+                        sub_id = int((row_sub or {}).get("id") or 0)
+                        if sub_id > 0:
+                            conn.execute(
+                                "INSERT INTO strategies (submission_id, user_id, pool_id, params_json, status, allocation_pct, note, created_at, expires_at) VALUES (?, ?, ?, ?, 'active', 1.0, 'Auto-Deploy', ?, ?)", 
+                                (sub_id, owner_id, pool_id, json.dumps(pr, ensure_ascii=False), now, "2099-12-31T23:59:59Z")
+                            )
+                    else:
+                        cur_sub = conn.execute(
+                            "INSERT INTO submissions (candidate_id, user_id, pool_id, status, audit_json, submitted_at) VALUES (?, ?, ?, 'approved', '{}', ?)", 
+                            (cid, owner_id, pool_id, now)
+                        )
+                        sub_id = int(cur_sub.lastrowid)
+                        if sub_id > 0:
+                            conn.execute(
+                                "INSERT INTO strategies (submission_id, user_id, pool_id, params_json, status, allocation_pct, note, created_at, expires_at) VALUES (?, ?, ?, ?, 'active', 1.0, 'Auto-Deploy', ?, ?)", 
+                                (sub_id, owner_id, pool_id, json.dumps(pr, ensure_ascii=False), now, "2099-12-31T23:59:59Z")
+                            )
+                    log_sys_event("AUTO_DEPLOY_SUCCESS", owner_id, f"任務 {tid} 達標，已自動佈署策略上因子池", {"candidate_id": cid, "score": sc})
+                except Exception as auto_deploy_err:
+                    log_sys_event("AUTO_DEPLOY_FAIL", owner_id, f"任務 {tid} 自動佈署失敗: {auto_deploy_err}", {"candidate_id": cid})
 
         conn.commit()
         return best_candidate_id
@@ -3493,10 +3498,11 @@ def get_all_candidates_detailed(limit: int = 1000) -> list:
             except Exception: d["metrics"] = {}
             try:
                 tprog = json.loads(d.get("task_progress") or "{}")
-                d["oos_status"] = tprog.get("oos_status", "")
+                # 強制顯示已上因子池，因未達標的不會被記錄在 candidates 中
+                d["oos_status"] = "已上因子池"
                 d["oos_metrics"] = tprog.get("oos_metrics", {})
             except Exception:
-                d["oos_status"] = ""
+                d["oos_status"] = "已上因子池"
                 d["oos_metrics"] = {}
             out.append(d)
         return out
@@ -3507,128 +3513,3 @@ def get_all_candidates_detailed(limit: int = 1000) -> list:
     finally:
         conn.close()
 
-def claim_next_oos_task(user_id: int, worker_id: str, allow_cross_user: bool = False) -> Optional[dict]:
-    """讓節點 (Worker) 領取正在排隊等待 OOS 審核的任務"""
-    conn = _conn()
-    try:
-        now = _now_iso()
-        # [極致修復] 改用安全 LIKE，對抗 JSON 的空格差異
-        query = "SELECT id, progress_json, user_id FROM mining_tasks WHERE status = 'completed' AND progress_json LIKE '%\"oos_status\"%queued%'"
-        
-        rows = conn.execute(query).fetchall()
-        for row in rows:
-            try:
-                prog = json.loads(row["progress_json"] or "{}")
-                if prog.get("oos_status") == "queued":
-                    tid = row["id"]
-                    owner_uid = row["user_id"]
-                    prog["oos_status"] = "running"
-                    prog["oos_worker"] = worker_id
-                    prog["oos_start_ts"] = now
-                    
-                    # [極致修復] 移除 AND progress_json = ?，直接霸道覆寫，防止併發鎖死
-                    cur = conn.execute(
-                        "UPDATE mining_tasks SET progress_json = ?, updated_at = ? WHERE id = ?", 
-                        (json.dumps(prog, ensure_ascii=False), now, tid)
-                    )
-                    
-                    if cur.rowcount > 0:
-                        conn.commit()
-                        log_oos_trace(owner_uid, tid, "OOS_CLAIMED", f"Worker [{worker_id}] 已成功接取此 OOS 任務並開始執行驗證")
-                        t = get_task(tid)
-                        if not t: continue
-                        
-                        cand = conn.execute("SELECT * FROM candidates WHERE task_id = ? ORDER BY score DESC LIMIT 1", (tid,)).fetchone()
-                        if cand:
-                            t["candidate"] = dict(cand)
-                            pj = t["candidate"].get("params_json")
-                            if isinstance(pj, str):
-                                t["candidate"]["params_json"] = json.loads(pj)
-                        else:
-                            log_oos_trace(owner_uid, tid, "OOS_CLAIM_WARN", "接取任務時發現資料庫中竟無對應的 Candidate 資料！", is_error=True)
-                        return t
-            except Exception as e:
-                print(f"[DB WARN] 解析 OOS 任務失敗 ID {row['id']}: {e}")
-                log_oos_trace(row['user_id'], row['id'], "OOS_CLAIM_ERROR", f"分配任務解析失敗: {e}", is_error=True)
-        return None
-    finally:
-        conn.close()
-
-def finish_oos_task(task_id: int, user_id: int, worker_id: str, passed: bool, metrics: dict, allow_cross_user: bool = False) -> bool:
-    """接收 Worker 的真實 OOS 回測結果，若通過則自動創建上線策略 (具備方言自適應與專家級錯誤捕捉)"""
-    conn = _conn()
-    try:
-        row = conn.execute("SELECT id, progress_json, user_id, pool_id FROM mining_tasks WHERE id = ?", (task_id,)).fetchone()
-        if not row:
-            log_sys_event("OOS_FINISH_WARN", user_id, f"OOS 回報失敗：找不到任務 ID {task_id}", {})
-            log_oos_trace(user_id, task_id, "OOS_FINISH_FAIL", "Worker 嘗試回報結果，但在資料庫找不到該任務", is_error=True)
-            return False
-        
-        owner_uid = row["user_id"]
-        log_oos_trace(owner_uid, task_id, "OOS_FINISH_REPORT", f"Worker [{worker_id}] 回報驗證結果: passed={passed} | 指標: {json.dumps(metrics, ensure_ascii=False)}")
-        
-        prog = json.loads(row["progress_json"] or "{}")
-        
-        prog["oos_status"] = "passed" if passed else "failed"
-        prog["oos_metrics"] = metrics
-        prog["oos_finish_ts"] = _now_iso()
-        
-        conn.execute("UPDATE mining_tasks SET progress_json = ?, updated_at = ? WHERE id = ?", (json.dumps(prog, ensure_ascii=False), _now_iso(), task_id))
-        
-        if passed:
-            try:
-                cand = conn.execute("SELECT id, params_json FROM candidates WHERE task_id = ? ORDER BY score DESC LIMIT 1", (task_id,)).fetchone()
-                if cand:
-                    cid = cand["id"]
-                    sub = conn.execute("SELECT id FROM submissions WHERE candidate_id = ?", (cid,)).fetchone()
-                    if not sub:
-                        # [專家級修復] 嚴格區分 PostgreSQL 與 SQLite 的 ID 獲取方式
-                        if getattr(conn, "kind", "sqlite") == "postgres":
-                            row_sub = conn.execute(
-                                "INSERT INTO submissions (candidate_id, user_id, pool_id, status, audit_json, submitted_at) VALUES (?, ?, ?, 'approved', '{}', ?) RETURNING id", 
-                                (cid, owner_uid, row["pool_id"], _now_iso())
-                            ).fetchone()
-                            sub_id = int((row_sub or {}).get("id") or 0)
-                        else:
-                            cur = conn.execute(
-                                "INSERT INTO submissions (candidate_id, user_id, pool_id, status, audit_json, submitted_at) VALUES (?, ?, ?, 'approved', '{}', ?)", 
-                                (cid, owner_uid, row["pool_id"], _now_iso())
-                            )
-                            sub_id = int(cur.lastrowid)
-
-                        conn.execute("UPDATE candidates SET is_submitted = 1 WHERE id = ?", (cid,))
-                        
-                        if getattr(conn, "kind", "sqlite") == "postgres":
-                            conn.execute(
-                                "INSERT INTO strategies (submission_id, user_id, pool_id, params_json, status, allocation_pct, note, created_at, expires_at) VALUES (?, ?, ?, ?, 'active', 1.0, 'OOS Passed Auto-Deploy', ?, ?) RETURNING id", 
-                                (sub_id, owner_uid, row["pool_id"], cand["params_json"], _now_iso(), "2099-12-31T23:59:59Z")
-                            )
-                        else:
-                            conn.execute(
-                                "INSERT INTO strategies (submission_id, user_id, pool_id, params_json, status, allocation_pct, note, created_at, expires_at) VALUES (?, ?, ?, ?, 'active', 1.0, 'OOS Passed Auto-Deploy', ?, ?)", 
-                                (sub_id, owner_uid, row["pool_id"], cand["params_json"], _now_iso(), "2099-12-31T23:59:59Z")
-                            )
-                        
-                        log_sys_event("OOS_DEPLOY_SUCCESS", owner_uid, f"任務 {task_id} OOS 通過，已成功部署為上線策略！", {"task_id": task_id, "sub_id": sub_id})
-                        log_oos_trace(owner_uid, task_id, "OOS_DEPLOY_SUCCESS", f"策略已全自動發布上線！(Submission ID: {sub_id})")
-                else:
-                    log_sys_event("OOS_DEPLOY_WARN", owner_uid, f"任務 {task_id} 雖通過 OOS，但在資料庫找不到最佳 candidate 關聯", {"task_id": task_id})
-                    log_oos_trace(owner_uid, task_id, "OOS_DEPLOY_FAIL", "任務雖通過 OOS，但資料庫缺失 Candidate 資料，導致無法佈署", is_error=True)
-            except Exception as deploy_err:
-                import traceback
-                conn.rollback()
-                err_trace = traceback.format_exc()
-                log_sys_event("OOS_DEPLOY_FATAL", owner_uid, f"創建策略時發生資料庫崩潰: {deploy_err}", {"task_id": task_id, "trace": err_trace})
-                log_oos_trace(owner_uid, task_id, "OOS_DEPLOY_CRASH", f"將策略寫入資料庫時發生嚴重崩潰: {deploy_err}\n{err_trace}", is_error=True)
-                raise deploy_err
-
-        conn.commit()
-        return True
-    except Exception as e:
-        import traceback
-        err_trace = traceback.format_exc()
-        log_sys_event("OOS_FINISH_FATAL", user_id, f"處理 OOS 結果時發生未知崩潰: {e}", {"trace": err_trace})
-        log_oos_trace(user_id, task_id, "OOS_FINISH_CRASH", f"處理 Worker 回報結果時發生伺服器崩潰: {e}\n{err_trace}", is_error=True)
-        return False
-    finally:
-        conn.close()
