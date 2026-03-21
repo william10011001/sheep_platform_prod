@@ -1192,7 +1192,8 @@ def flags(
     x_current_task_id: Optional[int] = Header(None),
 ):
     ctx = _auth_ctx(request, authorization)
-    _require_worker(request, ctx, x_worker_id, x_worker_version, x_worker_protocol)
+    if x_worker_id:
+        _require_worker(request, ctx, x_worker_id, x_worker_version, x_worker_protocol)
 
     # compute token：依「當前任務 owner」決定是否停
     if _is_compute_token(ctx):
@@ -1218,7 +1219,8 @@ def thresholds(
     x_worker_protocol: Optional[int] = Header(None),
 ):
     ctx = _auth_ctx(request, authorization)
-    _require_worker(request, ctx, x_worker_id, x_worker_version, x_worker_protocol)
+    if x_worker_id:
+        _require_worker(request, ctx, x_worker_id, x_worker_version, x_worker_protocol)
 
     conn = db._conn()
     try:
@@ -1242,7 +1244,8 @@ def settings_snapshot(
     x_worker_protocol: Optional[int] = Header(None),
 ):
     ctx = _auth_ctx(request, authorization)
-    _require_worker(request, ctx, x_worker_id, x_worker_version, x_worker_protocol)
+    if x_worker_id:
+        _require_worker(request, ctx, x_worker_id, x_worker_version, x_worker_protocol)
     conn = db._conn()
     try:
         thresholds = {
