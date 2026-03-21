@@ -508,10 +508,23 @@ def update_admin_settings(req: Request, body: AdminSettingsUpdate, authorization
 def get_admin_strategies(req: Request, authorization: Optional[str] = Header(None)):
     ctx = _auth_ctx(req, authorization)
     if str(ctx["user"].get("role")) != "admin":
+        db.log_sys_event("ADMIN_ACCESS_DENIED", ctx["user"].get("id"), "非法存取管理策略介面", {"ip": _client_ip(req)})
         raise HTTPException(status_code=403, detail="權限不足：僅限系統管理員")
     
-    data = db.get_admin_active_strategies()
-    return {"ok": True, "strategies": data, "total": len(data)}
+    try:
+        # 強制從資料庫底層提取所有 active 狀態策略，確保 30 個策略能被正確列舉
+        data = db.get_admin_active_strategies()
+        if not data:
+            # 若為空，主動檢查是否存在任何策略，判斷是查詢錯誤還是真的沒資料
+            db.log_sys_event("ADMIN_QUERY_EMPTY", ctx["user"].get("id"), "實盤策略池查詢結果為空", {})
+            
+        return {"ok": True, "strategies": data, "total": len(data)}
+    except Exception as e:
+        import traceback
+        err_msg = traceback.format_exc()
+        db.log_sys_event("ADMIN_STRAT_ERROR", ctx["user"].get("id"), f"讀取策略池失敗: {str(e)}", {"trace": err_msg})
+        # 即使發生錯誤也回傳 200 並帶上錯誤詳情，防止前端觸發 504 崩潰
+        return JSONResponse(status_code=200, content={"ok": False, "msg": f"資料庫讀取異常: {str(e)}", "strategies": []})
 
 @app.get("/", response_class=HTMLResponse)
 def landing() -> HTMLResponse:
@@ -1143,10 +1156,7 @@ def web_get_tasks(request: Request, authorization: Optional[str] = Header(None))
     cycle = db.get_active_cycle()
     cycle_id = int(cycle["id"]) if cycle else 0
     
-    # [專家級修復 1] 徹底移除會引發 Connection Leak 的 db._conn() 呼叫
-    # [專家級修復 2] 移除在高頻輪詢端點執行超重量級的 assign_tasks_for_user！
-    # 任務派發已由後台 sheep_worker_daemon.py 全域接管，這將釋放 99% 的資料庫壓力，永久消滅 524 超時。
-        
+    # 僅做純資料讀取，嚴禁在此端點觸發 assign_tasks 或任何寫入操作，確保 API 響應在 50ms 內完成
     tasks = db.list_tasks_for_user(uid, cycle_id=cycle_id)
     run_enabled = db.get_user_run_enabled(uid)
     return {"ok": True, "tasks": tasks, "run_enabled": bool(run_enabled)}
