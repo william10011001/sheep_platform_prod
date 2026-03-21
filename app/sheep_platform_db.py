@@ -1548,13 +1548,14 @@ def list_factor_pools(cycle_id: int) -> list:
     raise RuntimeError(f"資料庫高併發鎖定，無法讀取策略池列表。請稍後再試。({last_err})")
 
 def log_sys_event(event_type: str, user_id: Optional[int], message: str, detail: dict = None) -> None:
-    """終極監視：非同步背景獨立執行緒，保證絕對不被主程式的死鎖拖累"""
+    """終極監視：非同步背景獨立執行緒，保證絕對不被主程式的死鎖拖累 (專家級強化：消除靜默失敗)"""
     if event_type == "TASK_ASSIGN_SKIP":
         return
 
     import sys
     import json
     import threading
+    import traceback
 
     try:
         payload_str = json.dumps(detail or {}, ensure_ascii=False)
@@ -1575,8 +1576,10 @@ def log_sys_event(event_type: str, user_id: Optional[int], message: str, detail:
                 conn.commit()
             finally:
                 conn.close()
-        except Exception:
-            pass
+        except Exception as e:
+            # [專家級修復] 絕對禁止吞噬錯誤！若寫入資料庫失敗，必須在 Console 噴出致命錯誤，才能抓出 DBeaver 沒資料的原因
+            err_str = traceback.format_exc()
+            print(f"[FATAL DB WRITE ERROR] log_sys_event 寫入資料庫失敗! Event: {event_type}\nReason: {e}\n{err_str}", file=sys.stderr, flush=True)
 
     # 第二道防線：丟進背景執行緒，主程式不需等待寫入完成，徹底消滅日誌引發的連環卡死
     t = threading.Thread(target=_bg_write, daemon=True)
