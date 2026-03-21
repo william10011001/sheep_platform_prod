@@ -1584,7 +1584,36 @@ def log_sys_event(event_type: str, user_id: Optional[int], message: str, detail:
     # 第二道防線：丟進背景執行緒，主程式不需等待寫入完成，徹底消滅日誌引發的連環卡死
     t = threading.Thread(target=_bg_write, daemon=True)
     t.start()
-
+def log_oos_trace(user_id: Optional[int], task_id: Optional[int], action: str, details: str, is_error: bool = False) -> None:
+    """專門用於追蹤 OOS 全生命週期的獨立日誌，方便按 username grep 排錯"""
+    import os
+    import sys
+    import traceback
+    try:
+        uname = "SYSTEM"
+        if user_id:
+            # 避免遞迴呼叫卡死，直接簡單查
+            u = get_user_by_id(user_id)
+            if u: uname = str(u.get("username", "SYSTEM"))
+        
+        ts = _now_iso()
+        level = "ERROR" if is_error else "INFO "
+        tid_str = str(task_id) if task_id else "N/A"
+        
+        log_line = f"[{ts}] [{level}] [USER:{uname}] [TASK:{tid_str}] [{action}] {details}\n"
+        
+        # 輸出到 console 供 docker logs 備用查看
+        print(log_line.strip(), file=sys.stderr, flush=True)
+        
+        # 寫入獨立的 OOS 追蹤檔案
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        log_path = os.path.join(base_dir, "data", "oos_trace.log")
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(log_line)
+    except Exception as e:
+        print(f"[OOS_TRACE_FAIL] 寫入 OOS 追蹤日誌失敗: {e}", file=sys.stderr, flush=True)
 def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, max_tasks: int = 6, preferred_family: str = "") -> None:
     import time, random
     for attempt in range(5):
@@ -3484,7 +3513,7 @@ def claim_next_oos_task(user_id: int, worker_id: str, allow_cross_user: bool = F
     try:
         now = _now_iso()
         # [極致修復] 改用安全 LIKE，對抗 JSON 的空格差異
-        query = "SELECT id, progress_json FROM mining_tasks WHERE status = 'completed' AND progress_json LIKE '%\"oos_status\"%queued%'"
+        query = "SELECT id, progress_json, user_id FROM mining_tasks WHERE status = 'completed' AND progress_json LIKE '%\"oos_status\"%queued%'"
         
         rows = conn.execute(query).fetchall()
         for row in rows:
@@ -3492,6 +3521,7 @@ def claim_next_oos_task(user_id: int, worker_id: str, allow_cross_user: bool = F
                 prog = json.loads(row["progress_json"] or "{}")
                 if prog.get("oos_status") == "queued":
                     tid = row["id"]
+                    owner_uid = row["user_id"]
                     prog["oos_status"] = "running"
                     prog["oos_worker"] = worker_id
                     prog["oos_start_ts"] = now
@@ -3504,6 +3534,7 @@ def claim_next_oos_task(user_id: int, worker_id: str, allow_cross_user: bool = F
                     
                     if cur.rowcount > 0:
                         conn.commit()
+                        log_oos_trace(owner_uid, tid, "OOS_CLAIMED", f"Worker [{worker_id}] 已成功接取此 OOS 任務並開始執行驗證")
                         t = get_task(tid)
                         if not t: continue
                         
@@ -3513,9 +3544,12 @@ def claim_next_oos_task(user_id: int, worker_id: str, allow_cross_user: bool = F
                             pj = t["candidate"].get("params_json")
                             if isinstance(pj, str):
                                 t["candidate"]["params_json"] = json.loads(pj)
+                        else:
+                            log_oos_trace(owner_uid, tid, "OOS_CLAIM_WARN", "接取任務時發現資料庫中竟無對應的 Candidate 資料！", is_error=True)
                         return t
             except Exception as e:
                 print(f"[DB WARN] 解析 OOS 任務失敗 ID {row['id']}: {e}")
+                log_oos_trace(row['user_id'], row['id'], "OOS_CLAIM_ERROR", f"分配任務解析失敗: {e}", is_error=True)
         return None
     finally:
         conn.close()
@@ -3527,7 +3561,11 @@ def finish_oos_task(task_id: int, user_id: int, worker_id: str, passed: bool, me
         row = conn.execute("SELECT id, progress_json, user_id, pool_id FROM mining_tasks WHERE id = ?", (task_id,)).fetchone()
         if not row:
             log_sys_event("OOS_FINISH_WARN", user_id, f"OOS 回報失敗：找不到任務 ID {task_id}", {})
+            log_oos_trace(user_id, task_id, "OOS_FINISH_FAIL", "Worker 嘗試回報結果，但在資料庫找不到該任務", is_error=True)
             return False
+        
+        owner_uid = row["user_id"]
+        log_oos_trace(owner_uid, task_id, "OOS_FINISH_REPORT", f"Worker [{worker_id}] 回報驗證結果: passed={passed} | 指標: {json.dumps(metrics, ensure_ascii=False)}")
         
         prog = json.loads(row["progress_json"] or "{}")
         
@@ -3548,13 +3586,13 @@ def finish_oos_task(task_id: int, user_id: int, worker_id: str, passed: bool, me
                         if getattr(conn, "kind", "sqlite") == "postgres":
                             row_sub = conn.execute(
                                 "INSERT INTO submissions (candidate_id, user_id, pool_id, status, audit_json, submitted_at) VALUES (?, ?, ?, 'approved', '{}', ?) RETURNING id", 
-                                (cid, row["user_id"], row["pool_id"], _now_iso())
+                                (cid, owner_uid, row["pool_id"], _now_iso())
                             ).fetchone()
                             sub_id = int((row_sub or {}).get("id") or 0)
                         else:
                             cur = conn.execute(
                                 "INSERT INTO submissions (candidate_id, user_id, pool_id, status, audit_json, submitted_at) VALUES (?, ?, ?, 'approved', '{}', ?)", 
-                                (cid, row["user_id"], row["pool_id"], _now_iso())
+                                (cid, owner_uid, row["pool_id"], _now_iso())
                             )
                             sub_id = int(cur.lastrowid)
 
@@ -3563,28 +3601,34 @@ def finish_oos_task(task_id: int, user_id: int, worker_id: str, passed: bool, me
                         if getattr(conn, "kind", "sqlite") == "postgres":
                             conn.execute(
                                 "INSERT INTO strategies (submission_id, user_id, pool_id, params_json, status, allocation_pct, note, created_at, expires_at) VALUES (?, ?, ?, ?, 'active', 1.0, 'OOS Passed Auto-Deploy', ?, ?) RETURNING id", 
-                                (sub_id, row["user_id"], row["pool_id"], cand["params_json"], _now_iso(), "2099-12-31T23:59:59Z")
+                                (sub_id, owner_uid, row["pool_id"], cand["params_json"], _now_iso(), "2099-12-31T23:59:59Z")
                             )
                         else:
                             conn.execute(
                                 "INSERT INTO strategies (submission_id, user_id, pool_id, params_json, status, allocation_pct, note, created_at, expires_at) VALUES (?, ?, ?, ?, 'active', 1.0, 'OOS Passed Auto-Deploy', ?, ?)", 
-                                (sub_id, row["user_id"], row["pool_id"], cand["params_json"], _now_iso(), "2099-12-31T23:59:59Z")
+                                (sub_id, owner_uid, row["pool_id"], cand["params_json"], _now_iso(), "2099-12-31T23:59:59Z")
                             )
                         
-                        log_sys_event("OOS_DEPLOY_SUCCESS", row["user_id"], f"任務 {task_id} OOS 通過，已成功部署為上線策略！", {"task_id": task_id, "sub_id": sub_id})
+                        log_sys_event("OOS_DEPLOY_SUCCESS", owner_uid, f"任務 {task_id} OOS 通過，已成功部署為上線策略！", {"task_id": task_id, "sub_id": sub_id})
+                        log_oos_trace(owner_uid, task_id, "OOS_DEPLOY_SUCCESS", f"策略已全自動發布上線！(Submission ID: {sub_id})")
                 else:
-                    log_sys_event("OOS_DEPLOY_WARN", row["user_id"], f"任務 {task_id} 雖通過 OOS，但在資料庫找不到最佳 candidate 關聯", {"task_id": task_id})
+                    log_sys_event("OOS_DEPLOY_WARN", owner_uid, f"任務 {task_id} 雖通過 OOS，但在資料庫找不到最佳 candidate 關聯", {"task_id": task_id})
+                    log_oos_trace(owner_uid, task_id, "OOS_DEPLOY_FAIL", "任務雖通過 OOS，但資料庫缺失 Candidate 資料，導致無法佈署", is_error=True)
             except Exception as deploy_err:
                 import traceback
                 conn.rollback()
-                log_sys_event("OOS_DEPLOY_FATAL", row["user_id"], f"創建策略時發生資料庫崩潰: {deploy_err}", {"task_id": task_id, "trace": traceback.format_exc()})
+                err_trace = traceback.format_exc()
+                log_sys_event("OOS_DEPLOY_FATAL", owner_uid, f"創建策略時發生資料庫崩潰: {deploy_err}", {"task_id": task_id, "trace": err_trace})
+                log_oos_trace(owner_uid, task_id, "OOS_DEPLOY_CRASH", f"將策略寫入資料庫時發生嚴重崩潰: {deploy_err}\n{err_trace}", is_error=True)
                 raise deploy_err
 
         conn.commit()
         return True
     except Exception as e:
         import traceback
-        log_sys_event("OOS_FINISH_FATAL", user_id, f"處理 OOS 結果時發生未知崩潰: {e}", {"trace": traceback.format_exc()})
+        err_trace = traceback.format_exc()
+        log_sys_event("OOS_FINISH_FATAL", user_id, f"處理 OOS 結果時發生未知崩潰: {e}", {"trace": err_trace})
+        log_oos_trace(user_id, task_id, "OOS_FINISH_CRASH", f"處理 Worker 回報結果時發生伺服器崩潰: {e}\n{err_trace}", is_error=True)
         return False
     finally:
         conn.close()

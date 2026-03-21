@@ -935,16 +935,35 @@ def web_submit_oos(task_id: int, request: Request, authorization: Optional[str] 
     ctx = _auth_ctx(request, authorization)
     uid = int(ctx["user"]["id"])
     
+    db.log_oos_trace(uid, task_id, "OOS_SUBMIT_START", "使用者發起 OOS 審核請求")
+    
     task = db.get_task(task_id)
     if not task:
+        db.log_oos_trace(uid, task_id, "OOS_SUBMIT_FAIL", "找不到該任務 ID", is_error=True)
         raise HTTPException(status_code=404, detail="not_found")
         
     # 確保只有該任務的擁有者可以提交審核
     if int(task.get("user_id") or 0) != uid and not _is_compute_token(ctx):
+        db.log_oos_trace(uid, task_id, "OOS_SUBMIT_FAIL", "權限不足，非任務擁有者", is_error=True)
         raise HTTPException(status_code=403, detail="forbidden")
+
+    # ==== 【新增防呆攔截】確保此任務在伺服器端複驗有通過並產生 Candidate ====
+    conn = db._conn()
+    try:
+        cand_exists = conn.execute("SELECT id FROM candidates WHERE task_id = ? LIMIT 1", (task_id,)).fetchone()
+        if not cand_exists:
+            err_msg = "任務無效：伺服器端複驗未達標，無最佳候選參數，無法進行 OOS。"
+            db.log_oos_trace(uid, task_id, "OOS_SUBMIT_FAIL", err_msg, is_error=True)
+            raise HTTPException(status_code=400, detail=err_msg)
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.log_oos_trace(uid, task_id, "OOS_SUBMIT_ERROR", f"檢查 Candidate 時發生資料庫錯誤: {e}", is_error=True)
+        raise HTTPException(status_code=500, detail="database_error")
+    finally:
+        conn.close()
+    # =========================================================================
         
-    # 真實寫入資料庫：將任務進度中的 OOS 狀態標記為排隊中
-    # 伺服器不佔用 CPU，而是讓用戶端 Worker 抓取並執行
     try:
         prog = json.loads(task.get("progress_json") or "{}")
     except Exception:
@@ -954,9 +973,12 @@ def web_submit_oos(task_id: int, request: Request, authorization: Optional[str] 
     try:
         db.update_task_progress(task_id, prog)
         db.log_sys_event("OOS_SUBMIT_SUCCESS", uid, f"用戶成功將任務 {task_id} 提交至 OOS 審核佇列", {"task_id": task_id})
+        db.log_oos_trace(uid, task_id, "OOS_SUBMIT_SUCCESS", "任務已成功加入 OOS 佇列，等待 Worker 接單")
     except Exception as e:
         import traceback
-        db.log_sys_event("OOS_SUBMIT_FAIL", uid, f"任務 {task_id} 提交 OOS 失敗: {e}", {"trace": traceback.format_exc()})
+        err_trace = traceback.format_exc()
+        db.log_sys_event("OOS_SUBMIT_FAIL", uid, f"任務 {task_id} 提交 OOS 失敗: {e}", {"trace": err_trace})
+        db.log_oos_trace(uid, task_id, "OOS_SUBMIT_CRASH", f"寫入佇列進度時發生系統崩潰: {e}\n{err_trace}", is_error=True)
         raise HTTPException(status_code=500, detail="update_progress_failed")
     
     return {"ok": True}
