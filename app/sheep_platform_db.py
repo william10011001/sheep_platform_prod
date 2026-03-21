@@ -2909,9 +2909,11 @@ def clean_zombie_tasks(timeout_minutes: int = 15) -> int:
         if updates_completed:
             for p in updates_completed:
                 conn.execute("UPDATE mining_tasks SET status = 'completed', attempt = ?, updated_at = ?, progress_json = ? WHERE id = ?", p)
+                log_sys_event("ZOMBIE_TASK_KILLED", None, f"系統強制終止崩潰死鎖任務 ID: {p[3]} (重試次數達標)", {"task_id": p[3], "attempt": p[0]})
         if updates_assigned:
             for p in updates_assigned:
                 conn.execute("UPDATE mining_tasks SET status = 'assigned', attempt = ?, updated_at = ?, progress_json = ? WHERE id = ?", p)
+                log_sys_event("ZOMBIE_TASK_RECYCLED", None, f"系統回收逾時未心跳任務 ID: {p[3]} (釋放回佇列)", {"task_id": p[3], "attempt": p[0]})
             
         if count > 0:
             conn.commit()

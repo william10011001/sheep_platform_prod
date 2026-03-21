@@ -951,7 +951,13 @@ def web_submit_oos(task_id: int, request: Request, authorization: Optional[str] 
         prog = {}
         
     prog["oos_status"] = "queued"
-    db.update_task_progress(task_id, prog)
+    try:
+        db.update_task_progress(task_id, prog)
+        db.log_sys_event("OOS_SUBMIT_SUCCESS", uid, f"用戶成功將任務 {task_id} 提交至 OOS 審核佇列", {"task_id": task_id})
+    except Exception as e:
+        import traceback
+        db.log_sys_event("OOS_SUBMIT_FAIL", uid, f"任務 {task_id} 提交 OOS 失敗: {e}", {"trace": traceback.format_exc()})
+        raise HTTPException(status_code=500, detail="update_progress_failed")
     
     return {"ok": True}
 
@@ -1324,8 +1330,9 @@ def finish_task(
                 lease_id=lease_id,
                 progress=prog,
             )
-        except Exception:
-            pass
+            db.log_sys_event("TASK_FINISH_HASH_MISMATCH", int(user_id), f"任務 {task_id} 提交被拒：K線資料雜湊不符", {"server_hash": prog["server_data_hash"], "worker_hash": prog["worker_data_hash"]})
+        except Exception as release_err:
+            db.log_sys_event("TASK_FINISH_HASH_MISMATCH_FAIL", int(user_id), f"任務 {task_id} 雜湊不符且釋放失敗: {release_err}", {})
         raise HTTPException(status_code=409, detail="data_hash_mismatch")
 
     # Server-side re-verify to prevent forged metrics.
@@ -1481,6 +1488,8 @@ def finish_task(
         raise
     except Exception as e:
         # Verification unavailable: finish the task but drop unverified candidates.
+        import traceback
+        db.log_sys_event("TASK_VERIFY_CRASH", int(user_id), f"任務 {task_id} 伺服器端驗證發生崩潰: {e}", {"trace": traceback.format_exc()})
         verified_candidates = []
         try:
             prog = dict(body.final_progress or {})
