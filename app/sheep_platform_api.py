@@ -315,13 +315,20 @@ def _score(metrics: Dict[str, Any]) -> float:
     return float(ret + 5.0 * sh - 0.6 * dd)
 
 
-def _passes_thresholds(metrics: Dict[str, Any], min_trades: int, min_ret: float, max_dd: float, min_sh: float) -> bool:
-    return bool(
-        int(metrics.get("trades", 0)) >= int(min_trades)
-        and float(metrics.get("total_return_pct", 0.0)) >= float(min_ret)
-        and float(metrics.get("max_drawdown_pct", 0.0)) <= float(max_dd)
-        and float(metrics.get("sharpe", 0.0)) >= float(min_sh)
-    )
+def _passes_thresholds(metrics: Dict[str, Any], min_trades: int, min_ret: float, max_dd: float, min_sh: float) -> Tuple[bool, str]:
+    try:
+        t = int(metrics.get("trades", 0))
+        r = float(metrics.get("total_return_pct", 0.0))
+        d = float(metrics.get("max_drawdown_pct", 0.0))
+        s = float(metrics.get("sharpe", 0.0))
+        
+        if t < min_trades: return False, f"交易筆數不足 (實際:{t} < 門檻:{min_trades})"
+        if r < min_ret: return False, f"總報酬不足 (實際:{r:.2f}% < 門檻:{min_ret}%)"
+        if d > max_dd: return False, f"回撤過大 (實際:{d:.2f}% > 門檻:{max_dd}%)"
+        if s < min_sh: return False, f"夏普過低 (實際:{s:.2f} < 門檻:{min_sh})"
+        return True, "OK"
+    except Exception as e:
+        return False, f"指標解析錯誤: {e}"
 
 
 @app.middleware("http")
@@ -1309,6 +1316,8 @@ def finish_task(
     user_id = int(ctx["user"]["id"])
     worker_id = str(w["worker_id"])
     lease_id = str(body.lease_id or "").strip()
+    
+    db.log_oos_trace(user_id, task_id, "TASK_FINISH_START", f"Worker [{worker_id}] 開始提交任務，共攜帶 {len(body.candidates or [])} 組候選參數準備複驗")
 
     task_row = db.get_task(int(task_id))
     if not task_row:
@@ -1352,9 +1361,11 @@ def finish_task(
                 lease_id=lease_id,
                 progress=prog,
             )
-            db.log_sys_event("TASK_FINISH_HASH_MISMATCH", int(user_id), f"任務 {task_id} 提交被拒：K線資料雜湊不符", {"server_hash": prog["server_data_hash"], "worker_hash": prog["worker_data_hash"]})
+            db.log_sys_event("TASK_FINISH_HASH_MISMATCH", int(user_id), f"任務 {task_id} 提交被拒：K線資料雜湊不符", {"server_hash": prog.get("server_data_hash"), "worker_hash": prog.get("worker_data_hash")})
+            db.log_oos_trace(user_id, task_id, "TASK_FINISH_REJECT", f"K線資料雜湊不符 (Server:{str(prog.get('server_data_hash'))[:8]} vs Worker:{str(prog.get('worker_data_hash'))[:8]})", is_error=True)
         except Exception as release_err:
             db.log_sys_event("TASK_FINISH_HASH_MISMATCH_FAIL", int(user_id), f"任務 {task_id} 雜湊不符且釋放失敗: {release_err}", {})
+            db.log_oos_trace(user_id, task_id, "TASK_FINISH_REJECT_FAIL", f"雜湊不符且釋放任務失敗: {release_err}", is_error=True)
         raise HTTPException(status_code=409, detail="data_hash_mismatch")
 
     # Server-side re-verify to prevent forged metrics.
@@ -1460,18 +1471,18 @@ def finish_task(
                     # 導致回測結果產生小幅誤差，進而觸發誤判並大規模永久封鎖無辜礦工。
                     # 新邏輯：僅退回任務並記錄警告，將任務重新釋放回池中，給予重新驗證的機會，同時將錯誤回傳前端最大化顯示。
                     db.write_audit_log(
-                        actor_user_id=int(user_id),
-                        action="data_mismatch_warning",
-                        detail={
-                            "task_id": int(task_id),
-                            "worker_id": worker_id,
-                            "symbol": symbol,
-                            "timeframe_min": int(tf_min),
-                            "years": int(years),
-                            "server_metrics": server_metrics,
-                            "reported_metrics": reported,
-                        },
-                    )
+                    user_id=int(user_id),
+                    action="data_mismatch_warning",
+                    payload={
+                        "task_id": int(task_id),
+                        "worker_id": worker_id,
+                        "symbol": symbol,
+                        "timeframe_min": int(tf_min),
+                        "years": int(years),
+                        "server_metrics": server_metrics,
+                        "reported_metrics": reported,
+                    },
+                )
                     try:
                         prog = dict(body.final_progress or {})
                         # 最大化顯示錯誤訊息，讓前端能明確看到伺服器與客戶端的數值落差
@@ -1489,7 +1500,7 @@ def finish_task(
                     # 改拋出 409 狀態碼，避免觸發前端的重大異常斷線
                     raise HTTPException(status_code=409, detail="data_hash_mismatch")
 
-            passed = _passes_thresholds(server_metrics, min_trades, min_ret, max_dd, min_sh)
+            passed, reject_reason = _passes_thresholds(server_metrics, min_trades, min_ret, max_dd, min_sh)
             if passed:
                 verified_candidates.append(
                     {
@@ -1504,7 +1515,32 @@ def finish_task(
                         "metrics": server_metrics,
                     }
                 )
+                db.log_oos_trace(int(user_id), int(task_id), "SERVER_VERIFY_PASS", f"參數複驗通過 (Score: {server_score:.2f})")
+            else:
+                db.write_audit_log(
+                    user_id=int(user_id),
+                    action="server_verify_rejected",
+                    payload={
+                        "task_id": int(task_id),
+                        "reason": reject_reason,
+                        "server_metrics": server_metrics
+                    }
+                )
+                db.log_oos_trace(int(user_id), int(task_id), "SERVER_VERIFY_REJECT", f"伺服器複驗退件: {reject_reason} | 伺服器指標: {server_metrics}", is_error=True)
+                last_reject_reason = reject_reason
+
             checked += 1
+
+        # 在迴圈結束後，如果沒有任何候選人通過，把錯誤寫進進度讓前端顯示
+        if not verified_candidates and raw_candidates:
+            try:
+                prog = dict(body.final_progress or {})
+                prog["last_error"] = f"伺服器複驗全數未達標 (最新退件原因: {locals().get('last_reject_reason', '未知')})"
+                prog["updated_at"] = _utc_iso()
+                body.final_progress = prog
+                db.log_oos_trace(int(user_id), int(task_id), "TASK_FINISH_NO_CANDIDATE", "所有 Worker 提交的參數皆未通過伺服器複驗，任務將無最佳參數", is_error=True)
+            except Exception:
+                pass
 
     except HTTPException:
         raise
