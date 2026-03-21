@@ -8,7 +8,7 @@ if [ "$#" -gt 0 ]; then
   exec "$@"
 fi
 
-: "${SHEEP_API_ROOT_PATH:=/api}"
+: "${SHEEP_API_ROOT_PATH:=/sheep123}"
 : "${SHEEP_BIND:=0.0.0.0}"
 : "${SHEEP_PORT:=8000}"
 

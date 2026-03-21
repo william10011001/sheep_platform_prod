@@ -46,7 +46,7 @@ services:
     environment:
       SHEEP_DB_URL: "${DO_PG_URL}"
       SHEEP_DB_PATH: ""
-      SHEEP_API_ROOT_PATH: /api
+      SHEEP_API_ROOT_PATH: /sheep123
       SHEEP_GIT_SHA: ${SHEEP_GIT_SHA}
       SHEEP_RUN_SCHEDULER: "0"
       # 確保 FastAPI 穩定綁定全域介面
