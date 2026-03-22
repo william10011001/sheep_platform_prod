@@ -1482,6 +1482,41 @@ def revoke_api_token(token_id: int) -> None:
     finally:
         conn.close()
 
+def revoke_api_tokens_for_user(user_id: int, name: str = "", exclude_token_id: int = 0) -> int:
+    conn = _conn()
+    try:
+        params: List[Any] = [int(user_id)]
+        if str(name or "").strip():
+            query = "DELETE FROM api_tokens WHERE user_id = ? AND name = ?"
+            params.append(str(name))
+        else:
+            query = "DELETE FROM api_tokens WHERE user_id = ?"
+        if int(exclude_token_id or 0) > 0:
+            query += " AND id <> ?"
+            params.append(int(exclude_token_id))
+        cur = conn.execute(query, params)
+        conn.commit()
+        return int(cur.rowcount or 0)
+    finally:
+        conn.close()
+
+def list_api_tokens_for_user(user_id: int, name: str = "") -> list:
+    conn = _conn()
+    try:
+        if str(name or "").strip():
+            cur = conn.execute(
+                "SELECT * FROM api_tokens WHERE user_id = ? AND name = ? ORDER BY id DESC",
+                (int(user_id), str(name)),
+            )
+        else:
+            cur = conn.execute(
+                "SELECT * FROM api_tokens WHERE user_id = ? ORDER BY id DESC",
+                (int(user_id),),
+            )
+        return [dict(row) for row in cur.fetchall()]
+    finally:
+        conn.close()
+
 def verify_api_token(token: str) -> Optional[dict]:
     conn = _conn()
     try:
@@ -2061,6 +2096,24 @@ def list_tasks_for_user(user_id: int, cycle_id: int = 0) -> list:
     # [專家級防護] 絕對禁止回傳空陣列，否則 UI 會誤判任務歸零。拋出明確異常讓前端捕捉並顯示忙碌。
     raise RuntimeError(f"資料庫高併發鎖定，無法讀取任務列表，請稍後再試。 ({last_err})")
 
+def count_tasks_for_user(user_id: int, cycle_id: int = 0, statuses: Optional[List[str]] = None) -> int:
+    conn = _conn()
+    try:
+        query = "SELECT COUNT(*) AS c FROM mining_tasks WHERE user_id = ?"
+        params: List[Any] = [int(user_id)]
+        if int(cycle_id or 0) > 0:
+            query += " AND cycle_id = ?"
+            params.append(int(cycle_id))
+        norm_statuses = [str(s).strip() for s in (statuses or []) if str(s).strip()]
+        if norm_statuses:
+            placeholders = ",".join("?" for _ in norm_statuses)
+            query += f" AND status IN ({placeholders})"
+            params.extend(norm_statuses)
+        row = conn.execute(query, params).fetchone()
+        return int((row or {}).get("c") or 0)
+    finally:
+        conn.close()
+
 def list_submissions(user_id: int = 0, status: str = "", limit: int = 300) -> list:
     import time
     for attempt in range(5):
@@ -2125,6 +2178,22 @@ def list_strategies(user_id: int = 0, status: str = "", limit: int = 200) -> lis
                 return []
             time.sleep(0.1 * (2 ** attempt))
     return []
+
+def count_strategies(user_id: int = 0, status: str = "") -> int:
+    conn = _conn()
+    try:
+        query = "SELECT COUNT(*) AS c FROM strategies WHERE 1=1"
+        params: List[Any] = []
+        if int(user_id or 0) > 0:
+            query += " AND user_id = ?"
+            params.append(int(user_id))
+        if str(status or "").strip():
+            query += " AND status = ?"
+            params.append(str(status))
+        row = conn.execute(query, params).fetchone()
+        return int((row or {}).get("c") or 0)
+    finally:
+        conn.close()
 
 def list_payouts(user_id: int = 0, status: str = "", limit: int = 200) -> list:
     conn = _conn()

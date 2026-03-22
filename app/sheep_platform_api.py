@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 import sheep_platform_db as db
 import backtest_panel2 as bt
+from sheep_review import count_review_pipeline_tasks, enrich_task_row, evaluate_thresholds, normalize_review_fields
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("api")
@@ -312,6 +313,51 @@ def _is_compute_token(ctx: Dict[str, Any]) -> bool:
         return (role == "admin") and (name == "compute")
     except Exception:
         return False
+
+
+_worker_token_telemetry_cache: Dict[str, float] = {}
+
+
+def _token_kind(ctx: Dict[str, Any]) -> str:
+    try:
+        if _is_compute_token(ctx):
+            return "compute"
+        token = ctx.get("token") or {}
+        name = str(token.get("name") or "").strip().lower()
+        if name == "worker":
+            return "worker"
+        if name == "web_session":
+            return "web_session"
+        return name or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def _log_legacy_worker_token_use(req: Request, ctx: Dict[str, Any], endpoint: str) -> None:
+    if _token_kind(ctx) != "web_session":
+        return
+    token = ctx.get("token") or {}
+    token_id = int(token.get("id") or 0)
+    cache_key = f"{token_id}:{endpoint}"
+    now = time.time()
+    last = float(_worker_token_telemetry_cache.get(cache_key, 0.0))
+    if now - last < 300.0:
+        return
+    _worker_token_telemetry_cache[cache_key] = now
+    db.log_sys_event(
+        "LEGACY_WORKER_TOKEN_USED",
+        (ctx.get("user") or {}).get("id"),
+        f"Legacy web session token used on worker endpoint: {endpoint}",
+        {
+            "path": endpoint,
+            "token_id": token_id,
+            "token_kind": _token_kind(ctx),
+            "ip": _client_ip(req),
+            "user_agent": req.headers.get("user-agent", ""),
+        },
+    )
+
+
 def _require_worker(
     req: Request,
     ctx: Dict[str, Any],
@@ -328,6 +374,12 @@ def _require_worker(
 
     if not wid:
         raise HTTPException(status_code=400, detail="missing_x_worker_id")
+
+    token_kind = _token_kind(ctx)
+    if token_kind not in {"worker", "compute", "web_session"}:
+        raise HTTPException(status_code=403, detail="worker_token_required")
+    if token_kind == "web_session":
+        _log_legacy_worker_token_use(req, ctx, req.url.path)
 
     conn = db._conn()
     try:
@@ -346,21 +398,17 @@ def _require_worker(
     req.state.worker_id = wid
 
     try:
-        kind = "worker"
-        try:
-            u = ctx.get("user") or {}
-            t = ctx.get("token") or {}
-            if str(u.get("role") or "") == "admin" and str(t.get("name") or "") == "compute":
-                kind = "compute"
-        except Exception:
-            kind = "worker"
-
         db.upsert_worker(
             worker_id=wid,
             user_id=int(ctx["user"]["id"]),
             version=wv,
             protocol=wp,
-            meta={"ua": req.headers.get("user-agent"), "ip": _client_ip(req), "kind": kind},
+            meta={
+                "ua": req.headers.get("user-agent"),
+                "ip": _client_ip(req),
+                "kind": token_kind,
+                "token_kind": token_kind,
+            },
         )
     except Exception as e:
         logger.error(f"Error in upsert_worker: {e}")
@@ -390,18 +438,53 @@ def _score(metrics: Dict[str, Any]) -> float:
 
 def _passes_thresholds(metrics: Dict[str, Any], min_trades: int, min_ret: float, max_dd: float, min_sh: float) -> Tuple[bool, str]:
     try:
-        t = int(metrics.get("trades", 0))
-        r = float(metrics.get("total_return_pct", 0.0))
-        d = float(metrics.get("max_drawdown_pct", 0.0))
-        s = float(metrics.get("sharpe", 0.0))
-        
-        if t < min_trades: return False, f"交易筆數不足 (實際:{t} < 門檻:{min_trades})"
-        if r < min_ret: return False, f"總報酬不足 (實際:{r:.2f}% < 門檻:{min_ret}%)"
-        if d > max_dd: return False, f"回撤過大 (實際:{d:.2f}% > 門檻:{max_dd}%)"
-        if s < min_sh: return False, f"夏普過低 (實際:{s:.2f} < 門檻:{min_sh})"
-        return True, "OK"
+        result = evaluate_thresholds(
+            metrics=metrics,
+            min_trades=min_trades,
+            min_total_return_pct=min_ret,
+            max_drawdown_pct=max_dd,
+            min_sharpe=min_sh,
+        )
+        return bool(result["passed"]), str(result["reason"])
     except Exception as e:
         return False, f"指標解析錯誤: {e}"
+
+
+def _get_active_cycle_id() -> int:
+    cycle = db.get_active_cycle()
+    return int(cycle["id"]) if cycle else 0
+
+
+def _get_user_pending_assignment_count(user_id: int, cycle_id: int) -> int:
+    try:
+        return int(db.count_tasks_for_user(user_id, cycle_id=cycle_id, statuses=["assigned"]))
+    except Exception:
+        return 0
+
+
+def _prime_user_task_queue(user_id: int, cycle_id: int) -> Dict[str, int]:
+    if int(cycle_id or 0) <= 0:
+        return {"assigned_count": 0, "task_count": 0, "pending_task_count": 0, "active_cycle_id": 0}
+
+    before_pending = _get_user_pending_assignment_count(user_id, cycle_id)
+    before_task_count = int(db.count_tasks_for_user(user_id, cycle_id=cycle_id, statuses=["assigned", "queued", "running"]))
+
+    conn = db._conn()
+    try:
+        min_tasks = int(db.get_setting(conn, "min_tasks_per_user", 2))
+    finally:
+        conn.close()
+
+    db.assign_tasks_for_user(user_id, cycle_id=cycle_id, min_tasks=min_tasks)
+
+    after_pending = _get_user_pending_assignment_count(user_id, cycle_id)
+    after_task_count = int(db.count_tasks_for_user(user_id, cycle_id=cycle_id, statuses=["assigned", "queued", "running"]))
+    return {
+        "assigned_count": max(0, after_pending - before_pending),
+        "task_count": after_task_count,
+        "pending_task_count": after_pending,
+        "active_cycle_id": int(cycle_id),
+    }
 
 
 @app.middleware("http")
@@ -451,7 +534,7 @@ class TokenRequest(BaseModel):
     username: str
     password: str
     ttl_seconds: int = 86400
-    name: str = "worker"
+    name: str = "web_session"
     captcha_token: str = ""
     captcha_offset: float = 0.0
     captcha_tracks: List[Dict[str, Any]] = []
@@ -464,6 +547,11 @@ class TokenResponse(BaseModel):
     role: str
     issued_at: str
     expires_at: str
+
+
+class WorkerTokenIssueIn(BaseModel):
+    ttl_seconds: int = 86400 * 30
+    rotate_existing: bool = True
 
 class WebRegisterIn(BaseModel):
     username: str
@@ -1351,11 +1439,14 @@ async def ws_chat(ws: WebSocket):
 @app.post("/token", response_model=TokenResponse)
 def issue_token(req: Request, body: TokenRequest):
     ip = _client_ip(req) or "ip"
+    requested_name = str(body.name or "web_session").strip().lower() or "web_session"
+    if requested_name not in {"compute", "worker", "web_session"}:
+        requested_name = "web_session"
     try:
         allowed, retry_after = _token_issue_limiter.check(ip, cost=1.0)
         
         # [專家級防護] 滑動驗證碼嚴格校驗 (針對網頁端請求)
-        if body.name != "compute":
+        if requested_name != "compute":
             from sheep_platform_security import verify_slider_captcha
             is_valid, err_msg = verify_slider_captcha(body.captcha_token, body.captcha_offset, body.captcha_tracks, ip)
             if not is_valid:
@@ -1366,7 +1457,7 @@ def issue_token(req: Request, body: TokenRequest):
             headers = {"Retry-After": str(int(max(1, retry_after or 1.0)))}
             raise HTTPException(status_code=429, detail="rate_limited", headers=headers)
 
-        if body.name == "compute":
+        if requested_name == "compute":
             env_user = os.environ.get("SHEEP_COMPUTE_USER", "sheep").strip()
             env_pass = os.environ.get("SHEEP_COMPUTE_PASS", "").strip()
             if env_user and env_pass and body.username == env_user and body.password == env_pass:
@@ -1417,7 +1508,7 @@ def issue_token(req: Request, body: TokenRequest):
             db.log_sys_event("LOGIN_FAIL", user["id"], f"帳號已被停用: '{uname_norm}'", {"ip": ip})
             raise HTTPException(status_code=403, detail="user_disabled")
 
-        token = db.create_api_token(int(user["id"]), ttl_seconds=int(body.ttl_seconds), name=str(body.name or "worker"))
+        token = db.create_api_token(int(user["id"]), ttl_seconds=int(body.ttl_seconds), name=requested_name)
         db.log_sys_event("LOGIN_SUCCESS", user["id"], f"登入成功: '{uname_norm}'", {"ip": ip})
         
         return TokenResponse(
@@ -1435,6 +1526,42 @@ def issue_token(req: Request, body: TokenRequest):
         err_str = traceback.format_exc()
         db.log_sys_event("LOGIN_CRASH", None, f"登入系統崩潰: {fatal_e}", {"trace": err_str, "ip": ip, "username": body.username})
         raise HTTPException(status_code=500, detail="Internal Server Error")
+
+
+@app.post("/workers/token")
+def issue_worker_token(request: Request, body: WorkerTokenIssueIn, authorization: Optional[str] = Header(None)):
+    ctx = _auth_ctx(request, authorization)
+    user_id = int(ctx["user"]["id"])
+    current_token = ctx.get("token") or {}
+    current_token_id = int(current_token.get("id") or 0)
+    current_token_name = str(current_token.get("name") or "").strip().lower()
+    rotated_count = 0
+    if bool(body.rotate_existing):
+        exclude_token_id = current_token_id if current_token_name == "worker" else 0
+        rotated_count = int(db.revoke_api_tokens_for_user(user_id, name="worker", exclude_token_id=exclude_token_id))
+
+    token = db.create_api_token(user_id, ttl_seconds=int(body.ttl_seconds), name="worker")
+    db.log_sys_event(
+        "WORKER_TOKEN_ISSUED",
+        user_id,
+        "Issued dedicated personal worker token",
+        {
+            "rotated_count": rotated_count,
+            "token_kind": _token_kind(ctx),
+            "ip": _client_ip(request),
+        },
+    )
+    return {
+        "ok": True,
+        "token": str(token["token"]),
+        "token_id": int(token["token_id"]),
+        "user_id": user_id,
+        "name": "worker",
+        "token_kind": "worker",
+        "rotated_count": rotated_count,
+        "issued_at": str(token.get("issued_at")),
+        "expires_at": str(token.get("expires_at")),
+    }
 @app.post("/auth/register")
 def web_register(req: Request, body: WebRegisterIn):
     ip = _client_ip(req) or "unknown_ip"
@@ -1518,7 +1645,9 @@ def web_get_me(request: Request, authorization: Optional[str] = Header(None)):
         "wallet_address": fresh_user.get("wallet_address", ""),
         "wallet_chain": fresh_user.get("wallet_chain", "TRC20"),
         "disabled": fresh_user.get("disabled", 0),
-        "run_enabled": fresh_user.get("run_enabled", 0)
+        "run_enabled": fresh_user.get("run_enabled", 0),
+        "token_kind": _token_kind(ctx),
+        "token_name": str((ctx.get("token") or {}).get("name") or ""),
     }
 
 @app.get("/leaderboard")
@@ -1534,24 +1663,34 @@ def web_leaderboard(period_hours: int = 9999999):
 def web_dashboard(request: Request, authorization: Optional[str] = Header(None)):
     ctx = _auth_ctx(request, authorization)
     uid = int(ctx["user"]["id"])
-    cycle = db.get_active_cycle()
-    cycle_id = int(cycle["id"]) if cycle else 0
-    
-    tasks = db.list_tasks_for_user(uid, cycle_id=cycle_id)
+    cycle_id = _get_active_cycle_id()
+
+    all_tasks = db.list_tasks_for_user(uid, cycle_id=0)
+    tasks = [enrich_task_row(t) for t in all_tasks if int(t.get("cycle_id") or 0) == int(cycle_id)]
     strategies = db.list_strategies(user_id=uid, limit=200)
     payouts = db.list_payouts(user_id=uid, limit=200)
-    
+
     conn = db._conn()
     try:
         min_sharpe = float(db.get_setting(conn, "min_sharpe", 0.6))
     finally:
         conn.close()
-    
+
+    completed_tasks = [t for t in all_tasks if str(t.get("status") or "") == "completed"]
+    personal_live_strategies_active = int(db.count_strategies(user_id=uid, status="active"))
+    global_strategies_active = int(db.count_strategies(status="active"))
+    personal_review_pipeline_count = count_review_pipeline_tasks(
+        [t for t in tasks if str(t.get("status") or "") == "completed"]
+    )
+
     return {
         "ok": True,
         "cycle_id": cycle_id,
-        "tasks_count": len(tasks),
-        "strategies_active": len([s for s in strategies if s["status"] == "active"]),
+        "tasks_count": len(completed_tasks),
+        "strategies_active": personal_live_strategies_active,
+        "personal_live_strategies_active": personal_live_strategies_active,
+        "personal_review_pipeline_count": int(personal_review_pipeline_count),
+        "global_strategies_active": global_strategies_active,
         "payouts_unpaid": len([p for p in payouts if p["status"] == "unpaid"]),
         "recent_tasks": tasks[:10],
         "strategies": strategies,
@@ -1563,20 +1702,34 @@ def web_dashboard(request: Request, authorization: Optional[str] = Header(None))
 def web_get_tasks(request: Request, authorization: Optional[str] = Header(None)):
     ctx = _auth_ctx(request, authorization)
     uid = int(ctx["user"]["id"])
-    cycle = db.get_active_cycle()
-    cycle_id = int(cycle["id"]) if cycle else 0
-    
+    cycle_id = _get_active_cycle_id()
+
     # 僅做純資料讀取，嚴禁在此端點觸發 assign_tasks 或任何寫入操作，確保 API 響應在 50ms 內完成
-    tasks = db.list_tasks_for_user(uid, cycle_id=cycle_id)
+    tasks = [enrich_task_row(t) for t in db.list_tasks_for_user(uid, cycle_id=cycle_id)]
     run_enabled = db.get_user_run_enabled(uid)
-    return {"ok": True, "tasks": tasks, "run_enabled": bool(run_enabled)}
+    pending_task_count = _get_user_pending_assignment_count(uid, cycle_id)
+    return {
+        "ok": True,
+        "tasks": tasks,
+        "run_enabled": bool(run_enabled),
+        "active_cycle_id": cycle_id,
+        "pending_task_count": pending_task_count,
+    }
 
 @app.post("/tasks/start")
 def web_start_tasks(request: Request, authorization: Optional[str] = Header(None)):
     ctx = _auth_ctx(request, authorization)
     uid = int(ctx["user"]["id"])
     db.set_user_run_enabled(uid, True)
-    return {"ok": True}
+    cycle_id = _get_active_cycle_id()
+    primed = _prime_user_task_queue(uid, cycle_id)
+    db.log_sys_event(
+        "USER_RUN_ENABLED",
+        uid,
+        "User requested task start via API",
+        {"ip": _client_ip(request), **primed},
+    )
+    return {"ok": True, "run_enabled": True, **primed}
 
 
 @app.post("/tasks/stop")
@@ -1585,7 +1738,14 @@ def web_stop_tasks(request: Request, authorization: Optional[str] = Header(None)
     uid = int(ctx["user"]["id"])
     db.set_user_run_enabled(uid, False)
     db.log_sys_event("USER_RUN_DISABLED", uid, "User requested task stop via API", {"ip": _client_ip(request)})
-    return {"ok": True}
+    return {
+        "ok": True,
+        "run_enabled": False,
+        "assigned_count": 0,
+        "task_count": int(db.count_tasks_for_user(uid, cycle_id=_get_active_cycle_id(), statuses=["assigned", "queued", "running"])),
+        "pending_task_count": int(db.count_tasks_for_user(uid, cycle_id=_get_active_cycle_id(), statuses=["assigned"])),
+        "active_cycle_id": _get_active_cycle_id(),
+    }
 
 
 @app.post("/tasks/{task_id}/submit_oos")
@@ -1607,13 +1767,16 @@ def legacy_submit_oos(task_id: int, request: Request, authorization: Optional[st
     except Exception:
         progress = {}
 
-    oos_status = str(progress.get("oos_status") or "auto_managed")
+    review = normalize_review_fields(progress, str(task.get("status") or ""))
     return {
         "ok": True,
         "deprecated": True,
         "auto_managed": True,
         "task_id": int(task_id),
-        "oos_status": oos_status,
+        "oos_status": str(review.get("oos_status") or "auto_managed"),
+        "review_status": str(review.get("review_status") or "auto_managed"),
+        "review_reason": str(review.get("review_reason") or ""),
+        "review_failures": list(review.get("review_failures") or []),
         "msg": "OOS review is fully automatic; manual submit is deprecated.",
     }
 
@@ -1654,6 +1817,9 @@ def flags(
     if x_worker_id:
         _require_worker(request, ctx, x_worker_id, x_worker_version, x_worker_protocol)
 
+    token_kind = _token_kind(ctx)
+    cycle_id = _get_active_cycle_id()
+
     # compute token：依「當前任務 owner」決定是否停
     if _is_compute_token(ctx):
         tid = int(x_current_task_id or 0)
@@ -1661,12 +1827,48 @@ def flags(
             t = db.get_task(int(tid)) or {}
             owner_id = int(t.get("user_id") or 0)
             if owner_id > 0:
-                return {"run_enabled": bool(db.get_user_run_enabled(owner_id))}
-        return {"run_enabled": True}
+                run_enabled = bool(db.get_user_run_enabled(owner_id))
+                return {
+                    "run_enabled": run_enabled,
+                    "token_kind": token_kind,
+                    "assignment_mode": "global_compute",
+                    "reason": "owner_run_enabled" if run_enabled else "owner_run_disabled",
+                    "pending_task_count": int(db.count_tasks_for_user(owner_id, cycle_id=cycle_id, statuses=["assigned"])),
+                    "active_cycle_id": cycle_id,
+                }
+        return {
+            "run_enabled": True,
+            "token_kind": token_kind,
+            "assignment_mode": "global_compute",
+            "reason": "compute_token_ready",
+            "pending_task_count": 0,
+            "active_cycle_id": cycle_id,
+        }
 
     # normal token：只看自己
     user_id = int(ctx["user"]["id"])
-    return {"run_enabled": bool(db.get_user_run_enabled(user_id))}
+    run_enabled = bool(db.get_user_run_enabled(user_id))
+    pending_task_count = _get_user_pending_assignment_count(user_id, cycle_id)
+
+    if token_kind == "web_session":
+        reason = "legacy_web_session_token"
+    elif not run_enabled:
+        reason = "run_disabled"
+    elif cycle_id <= 0:
+        reason = "no_active_cycle"
+    elif pending_task_count > 0:
+        reason = "task_available"
+    else:
+        reason = "no_pending_tasks"
+
+    return {
+        "run_enabled": run_enabled,
+        "token_kind": token_kind,
+        "assignment_mode": "personal_worker",
+        "reason": reason,
+        "pending_task_count": pending_task_count,
+        "active_cycle_id": cycle_id,
+    }
 
 
 @app.get("/settings/thresholds")
@@ -1742,18 +1944,9 @@ def claim_task(
         # 【專家級同步優化】若目前緩存無任務，主動觸發分配邏輯，消除 Daemon 的 5 分鐘週期延遲
         if not task:
             try:
-                cycle = db.get_active_cycle()
-                if cycle:
-                    conn = db._conn()
-                    try:
-                        # 讀取系統設定的最小派發數量
-                        min_tasks = int(db.get_setting(conn, "min_tasks_per_user", 2))
-                    finally:
-                        conn.close()
-                        
-                    # 強制執行一次任務派發動作
-                    db.assign_tasks_for_user(user_id, cycle_id=int(cycle["id"]), min_tasks=min_tasks)
-                    # 派發完畢後立即再次領取，實現「連線即開工」
+                cycle_id = _get_active_cycle_id()
+                if cycle_id > 0:
+                    _prime_user_task_queue(user_id, cycle_id)
                     task = db.claim_next_task(user_id, w["worker_id"])
             except Exception as assign_err:
                 logger.error(f"Instant assignment failed for user {user_id}: {assign_err}")
@@ -1984,6 +2177,10 @@ def finish_task(
         try:
             prog = dict(final_prog)
             prog["last_error"] = "資料校驗不符，已拒絕提交"
+            prog["review_status"] = "error"
+            prog["review_reason"] = "資料校驗不符，已拒絕提交"
+            prog["review_failures"] = []
+            prog["oos_status"] = "error"
             prog["server_data_hash"] = str(server_dh.get("data_hash") or "")
             prog["worker_data_hash"] = str(worker_dh)
             prog["updated_at"] = _utc_iso()
@@ -2021,6 +2218,8 @@ def finish_task(
     max_verify = max(0, min(50, int(max_verify)))
     keep_top = max(1, min(200, int(keep_top)))
 
+    best_rejected: Optional[Dict[str, Any]] = None
+
     try:
         checked = 0
         for cand in raw_candidates:
@@ -2054,9 +2253,14 @@ def finish_task(
                 "win_rate_pct": float(reported.get("win_rate_pct", 0.0)),
             }
             server_score = float(_score(server_metrics))
-
-            passed, reject_reason = _passes_thresholds(server_metrics, min_trades, min_ret, max_dd, min_sh)
-            if passed:
+            threshold_eval = evaluate_thresholds(
+                metrics=server_metrics,
+                min_trades=min_trades,
+                min_total_return_pct=min_ret,
+                max_drawdown_pct=max_dd,
+                min_sharpe=min_sh,
+            )
+            if bool(threshold_eval["passed"]):
                 verified_candidates.append(
                     {
                         "score": float(server_score),
@@ -2072,27 +2276,61 @@ def finish_task(
                 )
                 db.log_sys_event("WORKER_VERIFY_PASS", int(user_id), f"參數達標自動審核通過 (Score: {server_score:.2f})", {"task_id": task_id})
             else:
+                reject_reason = str(threshold_eval.get("reason") or "未通過門檻")
+                reject_failures = list(threshold_eval.get("failures") or [])
                 db.write_audit_log(
                     user_id=int(user_id),
                     action="worker_verify_rejected",
                     payload={
                         "task_id": int(task_id),
                         "reason": reject_reason,
-                        "worker_metrics": server_metrics
+                        "worker_metrics": server_metrics,
+                        "review_failures": reject_failures,
                     }
                 )
-                db.log_sys_event("WORKER_VERIFY_REJECT", int(user_id), f"用戶端數據未達標: {reject_reason}", {"task_id": task_id, "metrics": server_metrics})
-                last_reject_reason = reject_reason
+                db.log_sys_event(
+                    "WORKER_VERIFY_REJECT",
+                    int(user_id),
+                    f"用戶端數據未達標: {reject_reason}",
+                    {"task_id": task_id, "metrics": server_metrics, "review_failures": reject_failures},
+                )
+                if best_rejected is None or float(server_score) > float(best_rejected.get("score") or -1e18):
+                    best_rejected = {
+                        "score": float(server_score),
+                        "reason": reject_reason,
+                        "failures": reject_failures,
+                        "metrics": dict(server_metrics),
+                    }
 
             checked += 1
 
         if not verified_candidates and raw_candidates:
             try:
                 prog = dict(body.final_progress or {})
-                prog["last_error"] = f"提交之參數皆未達標 (最新原因: {locals().get('last_reject_reason', '未知')})"
+                review_reason = str((best_rejected or {}).get("reason") or "提交之參數皆未達標")
+                prog["best_any_passed"] = False
+                prog["review_status"] = "rejected"
+                prog["review_reason"] = review_reason
+                prog["review_failures"] = list((best_rejected or {}).get("failures") or [])
+                prog["oos_status"] = "rejected"
+                prog["last_reject_reason"] = review_reason
+                prog["last_error"] = f"提交之參數皆未達標 ({review_reason})"
                 prog["updated_at"] = _utc_iso()
                 body.final_progress = prog
                 db.log_sys_event("TASK_FINISH_NO_CANDIDATE", int(user_id), "任務完成但所有參數皆未達標", {"task_id": task_id})
+            except Exception:
+                pass
+        elif verified_candidates:
+            try:
+                prog = dict(body.final_progress or {})
+                prog["best_any_passed"] = True
+                prog["review_status"] = str(prog.get("review_status") or prog.get("oos_status") or "auto_managed")
+                prog["review_reason"] = str(prog.get("review_reason") or "已達標，後續流程由系統自動管理中")
+                prog["review_failures"] = list(prog.get("review_failures") or [])
+                if not str(prog.get("oos_status") or "").strip():
+                    prog["oos_status"] = "auto_managed"
+                prog["updated_at"] = _utc_iso()
+                body.final_progress = prog
             except Exception:
                 pass
 
@@ -2107,6 +2345,10 @@ def finish_task(
             prog = dict(body.final_progress or {})
             prog["last_error"] = "server_verify_unavailable"
             prog["verify_error"] = str(e)
+            prog["review_status"] = "error"
+            prog["review_reason"] = str(e)
+            prog["review_failures"] = []
+            prog["oos_status"] = "error"
             prog["updated_at"] = _utc_iso()
             body.final_progress = prog
         except Exception:
@@ -2143,7 +2385,7 @@ def get_task(task_id: int, request: Request, authorization: Optional[str] = Head
     task = db.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="not_found")
-    return dict(task)
+    return enrich_task_row(dict(task))
 
 from fastapi.responses import JSONResponse
 

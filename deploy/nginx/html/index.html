@@ -176,6 +176,7 @@
                                 <div class="flex items-center gap-2">
                                     <input type="text" readonly :value="userToken" class="cyber-input w-full px-2 py-1.5 rounded text-xs text-emerald-400 font-mono bg-black/80 border-white/10" @focus="$event.target.select()">
                                     <button @click="copyToken" class="cyber-btn px-4 py-1.5 rounded font-bold text-xs whitespace-nowrap">一鍵複製</button>
+                                    <button @click="refreshWorkerToken" class="px-4 py-1.5 rounded font-bold text-xs whitespace-nowrap border border-white/15 hover:bg-white/10">重新產生</button>
                                 </div>
                             </div>
                         </div>
@@ -248,7 +249,7 @@
                                     <tr v-if="!activeTasks || activeTasks.length === 0">
                                         <td colspan="5" class="text-center py-12 text-slate-500">
                                             <div class="flex flex-col items-center gap-2">
-                                                <span class="font-sans text-sm">目前尚無執行中的任務，請點擊上方按鈕啟動。</span>
+                                                <span class="font-sans text-sm">{{ activeTaskEmptyStateText }}</span>
                                             </div>
                                         </td>
                                     </tr>
@@ -258,9 +259,10 @@
                     </div>
                 </div>
 
-                <div v-if="currentTab === 'dashboard'" class="grid grid-cols-1 md:grid-cols-4 gap-4 animate-fade-in">
+                <div v-if="currentTab === 'dashboard'" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4 animate-fade-in">
                     <div class="cyber-card p-4 flex flex-col justify-center items-center"><div class="text-xs text-white mb-1">已完成任務</div><div class="text-3xl text-white cyber-num">{{ dashData.tasks_count || 0 }}</div></div>
-                    <div class="cyber-card p-4 flex flex-col justify-center items-center"><div class="text-xs text-white mb-1">個人已過審策略</div><div class="text-3xl text-white cyber-num">{{ dashData.strategies_active || 0 }}</div></div>
+                    <div class="cyber-card p-4 flex flex-col justify-center items-center"><div class="text-xs text-white mb-1">個人已上線策略</div><div class="text-3xl text-white cyber-num">{{ dashData.personal_live_strategies_active || dashData.strategies_active || 0 }}</div></div>
+                    <div class="cyber-card p-4 flex flex-col justify-center items-center"><div class="text-xs text-white mb-1">個人達標 / 自動管理中</div><div class="text-3xl text-white cyber-num">{{ dashData.personal_review_pipeline_count || 0 }}</div></div>
                     <div class="cyber-card p-4 flex flex-col justify-center items-center bg-emerald-900/20 border-emerald-500/30"><div class="text-xs text-emerald-400 font-bold mb-1">全網實盤因子總數</div><div class="text-3xl text-emerald-400 font-bold cyber-num">{{ dashData.global_strategies_active || 0 }}</div></div>
                     <div class="cyber-card p-4 flex flex-col justify-center items-center"><div class="text-xs text-white mb-1">待發放獎勵(USDT)</div><div class="text-3xl text-white cyber-num">{{ dashData.payouts_unpaid || 0 }}</div></div>
                 </div>
@@ -324,16 +326,10 @@
                                             <span class="text-slate-300">{{ Number(dashData.min_sharpe || 0.6).toFixed(6) }}</span>
                                         </td>
                                         <td class="py-4 px-6 text-center">
-                                            <template v-if="getScoreNumber(t) >= 0">
-                                                <span v-if="!getOosStatus(t)" class="text-[13px] text-slate-400">自動管理中</span>
-                                                <span v-else-if="getOosStatus(t) === 'queued'" class="text-[13px] text-slate-400">排隊中</span>
-                                                <span v-else-if="getOosStatus(t) === 'running'" class="text-[13px] text-amber-400">用戶端運算中</span>
-                                                <span v-else-if="getOosStatus(t) === 'passed'" class="text-[13px] text-emerald-400">已通過</span>
-                                                <span v-else class="text-[13px] text-slate-400">{{ getOosStatus(t) }}</span>
-                                            </template>
-                                            <template v-else>
-                                                <span class="text-[13px] text-red-500/50">未達標</span>
-                                            </template>
+                                            <div class="flex flex-col items-center gap-1">
+                                                <span :class="getReviewStatusMeta(t).className" class="text-[13px]">{{ getReviewStatusMeta(t).label }}</span>
+                                                <span v-if="getReviewDetail(t)" class="text-[11px] text-red-300/80 whitespace-normal leading-5 max-w-[18rem]">{{ getReviewDetail(t) }}</span>
+                                            </div>
                                         </td>
                                     </tr>
                                     <tr v-if="!paginatedCompletedTasks || paginatedCompletedTasks.length === 0">
@@ -476,17 +472,50 @@
                 };
                 
                 const authForm = reactive({ username: '', password: '' });
-                const dashData = reactive({ tasks_count: 0, strategies_active: 0, global_strategies_active: 0, payouts_unpaid: 0, strategies: [], payouts: [], min_sharpe: 0.6 });
+                const dashData = reactive({ tasks_count: 0, strategies_active: 0, personal_live_strategies_active: 0, personal_review_pipeline_count: 0, global_strategies_active: 0, payouts_unpaid: 0, strategies: [], payouts: [], min_sharpe: 0.6 });
                 
-                // 節點金鑰 (Token) 狀態管理
-                const userToken = ref(localStorage.getItem('sheep_token') || '');
-                const copyToken = () => {
-                    if (!userToken.value) return;
-                    navigator.clipboard.writeText(userToken.value).then(() => {
-                        showToast(' Token已成功複製！請貼至 OpenNode.exe 啟動', 'success', 4000);
-                    }).catch(err => {
-                        showToast('複製失敗，請點擊輸入框手動全選複製', 'error', 3000);
+                // 專屬 worker Token 狀態管理
+                const workerTokenKey = 'sheep_worker_token';
+                const workerTokenOwnerKey = 'sheep_worker_token_user_id';
+                const userToken = ref(localStorage.getItem(workerTokenKey) || '');
+                const issueWorkerToken = async (force = false, showSuccess = false) => {
+                    if (!user.value) return '';
+                    const storedOwnerId = localStorage.getItem(workerTokenOwnerKey) || '';
+                    const storedToken = localStorage.getItem(workerTokenKey) || '';
+                    if (!force && storedToken && String(storedOwnerId) === String(user.value.id || '')) {
+                        userToken.value = storedToken;
+                        return storedToken;
+                    }
+                    const res = await fetchApi('/workers/token', {
+                        method: 'POST',
+                        body: JSON.stringify({ ttl_seconds: 86400 * 30, rotate_existing: true })
                     });
+                    localStorage.setItem(workerTokenKey, res.token || '');
+                    localStorage.setItem(workerTokenOwnerKey, String(res.user_id || user.value.id || ''));
+                    userToken.value = res.token || '';
+                    if (showSuccess) {
+                        showToast('專屬節點 Token 已更新，舊 Token 已自動失效', 'success', 4000);
+                    }
+                    return userToken.value;
+                };
+                const refreshWorkerToken = async () => {
+                    try {
+                        await issueWorkerToken(true, true);
+                    } catch (e) {
+                        showToast(`重新產生專屬節點 Token 失敗: ${e.message}`, 'error', 4000);
+                    }
+                };
+                const copyToken = async () => {
+                    try {
+                        if (!userToken.value) {
+                            await issueWorkerToken(false, false);
+                        }
+                        if (!userToken.value) return;
+                        await navigator.clipboard.writeText(userToken.value);
+                        showToast('專屬節點 Token 已成功複製，請貼至 OpenNode.exe 啟動', 'success', 4000);
+                    } catch (err) {
+                        showToast('複製失敗，請點擊輸入框手動全選複製', 'error', 3000);
+                    }
                 };
 
                 // 驗證碼狀態管理
@@ -577,7 +606,7 @@
                         }, 500);
                     }
                 };
-                const tasksData = reactive({ tasks: [], run_enabled: false });
+                const tasksData = reactive({ tasks: [], run_enabled: false, pending_task_count: 0, active_cycle_id: 0 });
                 const leaderboard = reactive({ combos: [] });
 
                 // 管理員專屬狀態
@@ -676,10 +705,42 @@
                 const ratingCurrentPage = ref(1);
                 const ratingPageSize = 10;
 
-                // 解析資料庫中的真實 OOS 狀態
-                const getOosStatus = (t) => {
-                    try { return JSON.parse(t.progress_json || '{}').oos_status || null; }
-                    catch(e) { return null; }
+                const getReviewStatus = (t) => {
+                    if (t && t.review_status) return String(t.review_status);
+                    try {
+                        const p = JSON.parse(t.progress_json || '{}');
+                        return p.review_status || p.oos_status || (p.best_any_passed ? 'auto_managed' : 'not_eligible');
+                    } catch (e) {
+                        return 'not_eligible';
+                    }
+                };
+                const getReviewReason = (t) => {
+                    if (t && t.review_reason) return String(t.review_reason);
+                    try {
+                        const p = JSON.parse(t.progress_json || '{}');
+                        return p.review_reason || p.last_reject_reason || p.last_error || '';
+                    } catch (e) {
+                        return '';
+                    }
+                };
+                const getReviewStatusMeta = (t) => {
+                    const status = getReviewStatus(t);
+                    const meta = {
+                        auto_managed: { label: '自動管理中', className: 'text-[13px] text-slate-300' },
+                        queued: { label: '排隊中', className: 'text-[13px] text-slate-400' },
+                        running: { label: '用戶端運算中', className: 'text-[13px] text-amber-400' },
+                        passed: { label: '已通過', className: 'text-[13px] text-emerald-400' },
+                        rejected: { label: '未達標', className: 'text-[13px] text-red-400' },
+                        error: { label: '審核異常', className: 'text-[13px] text-red-400' },
+                        not_eligible: { label: '未達標', className: 'text-[13px] text-red-400/70' }
+                    };
+                    return meta[status] || { label: status || '未達標', className: 'text-[13px] text-slate-400' };
+                };
+                const getReviewDetail = (t) => {
+                    const status = getReviewStatus(t);
+                    const reason = getReviewReason(t);
+                    if (!reason) return '';
+                    return ['rejected', 'error', 'not_eligible'].includes(status) ? reason : '';
                 };
 
 
@@ -695,12 +756,17 @@
                     return tasksData.tasks
                         .filter(t => t.status === 'completed')
                         .sort((a, b) => {
-                            let scoreA = -9999;
-                            let scoreB = -9999;
-                            try { scoreA = Number(JSON.parse(a.progress_json||'{}').best_any_score || -9999); } catch(e){}
-                            try { scoreB = Number(JSON.parse(b.progress_json||'{}').best_any_score || -9999); } catch(e){}
+                            let scoreA = Number(a.best_any_score ?? -9999);
+                            let scoreB = Number(b.best_any_score ?? -9999);
+                            if (Number.isNaN(scoreA)) scoreA = -9999;
+                            if (Number.isNaN(scoreB)) scoreB = -9999;
                             return scoreB - scoreA;
                         });
+                });
+                const activeTaskEmptyStateText = computed(() => {
+                    if (!tasksData.run_enabled) return '目前尚未啟動個人派工，請點擊上方按鈕開始。';
+                    if ((completedTasks.value || []).length > 0) return '目前沒有執行中的任務，可前往評分專區查看已完成結果。';
+                    return '已啟動個人派工，但目前沒有可派發任務。';
                 });
 
                 // 計算總頁數
@@ -769,13 +835,15 @@
                     try {
                         const storedToken = localStorage.getItem('sheep_token');
                         if (!storedToken) throw new Error('No token');
-                        userToken.value = storedToken;
                         user.value = await fetchApi('/user/me');
+                        await issueWorkerToken(false, false);
                         await loadAllData();
                     } catch (e) { 
                         user.value = null; 
                         userToken.value = '';
                         localStorage.removeItem('sheep_token');
+                        localStorage.removeItem(workerTokenKey);
+                        localStorage.removeItem(workerTokenOwnerKey);
                         if (e.message !== 'No token') {
                             console.error('[checkAuth 錯誤] /user/me 或後續請求失敗:', e);
                             showToast(`獲取使用者資訊失敗: ${e.message}`, 'error', 5000);
@@ -787,17 +855,39 @@
                 };
 
                 const loadAllData = async () => {
-                    try {
-                        const [dashRes, lbRes, tRes] = await Promise.all([
-                            fetchApi('/dashboard'), fetchApi('/leaderboard?period_hours=720'), fetchApi('/tasks')
-                        ]);
-                        Object.assign(dashData, dashRes);
-                        if (lbRes.data) leaderboard.combos = lbRes.data.combos || [];
-                        tasksData.tasks = tRes.tasks || [];
-                        tasksData.run_enabled = tRes.run_enabled;
-                    } catch (e) { 
-                        console.error('面板資料載入失敗:', e); 
-                        showToast(`載入面板資料失敗: ${e.message}`, 'error', 5000);
+                    const [dashRes, lbRes, tRes] = await Promise.allSettled([
+                        fetchApi('/dashboard'),
+                        fetchApi('/leaderboard?period_hours=720'),
+                        fetchApi('/tasks')
+                    ]);
+                    const errors = [];
+
+                    if (dashRes.status === 'fulfilled') {
+                        Object.assign(dashData, dashRes.value || {});
+                    } else {
+                        console.error('Dashboard 載入失敗:', dashRes.reason);
+                        errors.push(`總覽: ${dashRes.reason?.message || dashRes.reason}`);
+                    }
+
+                    if (lbRes.status === 'fulfilled') {
+                        if (lbRes.value?.data) leaderboard.combos = lbRes.value.data.combos || [];
+                    } else {
+                        console.error('Leaderboard 載入失敗:', lbRes.reason);
+                        errors.push(`排行榜: ${lbRes.reason?.message || lbRes.reason}`);
+                    }
+
+                    if (tRes.status === 'fulfilled') {
+                        tasksData.tasks = tRes.value.tasks || [];
+                        tasksData.run_enabled = !!tRes.value.run_enabled;
+                        tasksData.pending_task_count = Number(tRes.value.pending_task_count || 0);
+                        tasksData.active_cycle_id = Number(tRes.value.active_cycle_id || 0);
+                    } else {
+                        console.error('Tasks 載入失敗:', tRes.reason);
+                        errors.push(`任務: ${tRes.reason?.message || tRes.reason}`);
+                    }
+
+                    if (errors.length) {
+                        showToast(`部分面板資料載入失敗：${errors.join(' | ')}`, 'error', 5000);
                     }
                 };
 
@@ -806,7 +896,9 @@
                     try {
                         const res = await fetchApi('/tasks');
                         tasksData.tasks = res.tasks || [];
-                        tasksData.run_enabled = res.run_enabled;
+                        tasksData.run_enabled = !!res.run_enabled;
+                        tasksData.pending_task_count = Number(res.pending_task_count || 0);
+                        tasksData.active_cycle_id = Number(res.active_cycle_id || 0);
                     } catch(e) {
                         console.error('[loadTasks 錯誤] 輪詢更新任務失敗:', e);
                         // 背景輪詢錯誤不中斷使用者操作，僅記錄於 Console
@@ -827,7 +919,7 @@
                         const endpoint = isLoginMode.value ? '/token' : '/auth/register';
                         const body = isLoginMode.value 
                             ? { 
-                                username: authForm.username, password: authForm.password, ttl_seconds: 86400 * 30, name: "worker",
+                                username: authForm.username, password: authForm.password, ttl_seconds: 86400 * 30, name: "web_session",
                                 captcha_token: captchaState.token, captcha_offset: captchaState.currentX, captcha_tracks: captchaState.tracks
                               }
                             : { 
@@ -877,7 +969,15 @@
                             const lRes = await fetch(`${API_BASE}/token`, { 
                                 method: 'POST', 
                                 headers: { 'Content-Type': 'application/json' }, 
-                                body: JSON.stringify({ username: authForm.username, password: authForm.password, ttl_seconds: 86400 * 30, name: "worker" }) 
+                                body: JSON.stringify({
+                                    username: authForm.username,
+                                    password: authForm.password,
+                                    ttl_seconds: 86400 * 30,
+                                    name: "web_session",
+                                    captcha_token: captchaState.token,
+                                    captcha_offset: captchaState.currentX,
+                                    captcha_tracks: captchaState.tracks
+                                }) 
                             });
                             
                             if (!lRes.ok) {
@@ -896,9 +996,13 @@
                         
                         // [專家級修復] 登入或註冊成功後，自動發送 /tasks/start 請求，確保新帳號自動解鎖派發權限
                         try {
-                            await fetchApi('/tasks/start', { method: 'POST' });
+                            const startRes = await fetchApi('/tasks/start', { method: 'POST' });
                             await loadTasks(); // 重新拉取任務狀態，確保 UI 變更為「授權中」
-                            showToast('已自動解鎖挖礦權限，等待伺服器派發中', 'success', 3000);
+                            if (Number(startRes.assigned_count || 0) > 0) {
+                                showToast(`已自動啟動個人派工，系統已配置 ${startRes.assigned_count} 個任務`, 'success', 3000);
+                            } else {
+                                showToast('已自動啟動個人派工，目前沒有可派發任務', 'info', 3000);
+                            }
                         } catch (startErr) {
                             console.error('[自動解鎖權限失敗]', startErr);
                             showToast(`自動解鎖權限失敗: ${startErr.message}，請手動點擊開始`, 'error', 4000);
@@ -918,9 +1022,13 @@
 
                 const startMining = async () => {
                     try { 
-                        await fetchApi('/tasks/start', { method: 'POST' }); 
+                        const res = await fetchApi('/tasks/start', { method: 'POST' }); 
                         await loadTasks(); 
-                        showToast('成功解鎖派發權限，等待伺服器指派新任務...', 'success', 3000);
+                        if (Number(res.assigned_count || 0) > 0) {
+                            showToast(`成功啟動個人派工，已配置 ${res.assigned_count} 個任務`, 'success', 3000);
+                        } else {
+                            showToast('已啟動個人派工，但目前沒有可派發任務', 'info', 3000);
+                        }
                     } catch(e) { 
                         showToast(`啟動挖礦失敗: ${e.message}`, 'error', 5000); 
                     }
@@ -937,6 +1045,8 @@
 
                 const logout = () => { 
                     localStorage.removeItem('sheep_token'); 
+                    localStorage.removeItem(workerTokenKey);
+                    localStorage.removeItem(workerTokenOwnerKey);
                     userToken.value = ''; 
                     user.value = null; 
                     clearInterval(pollTimer); 
@@ -1105,6 +1215,8 @@
                 };
 
                 const getScoreNumber = (t) => { 
+                    const direct = Number(t?.best_any_score ?? -9999);
+                    if (!Number.isNaN(direct) && direct !== -9999) return direct;
                     try { return Number(JSON.parse(t.progress_json||'{}').best_any_score || -9999); } 
                     catch(e) { return -9999; } 
                 };
@@ -1151,14 +1263,14 @@
                 // 👉 修復：確保 return 內輸出的函數名稱與上面定義的完全一致，不包含多餘殘留變數
                 return { 
                     user, isLoading, isLoginMode, currentTab, authForm, errorMsg, handleAuth, logout, 
-                    userToken, copyToken, // 導出 Token 顯示與複製方法
+                    userToken, copyToken, refreshWorkerToken, // 導出 Token 顯示與複製方法
                     captchaContainer, captchaState, onSliderDown, // 導出驗證碼狀態與事件 
                     toastMsg, toastType, // 導出供 UI 使用
                     dashData, tasksData, leaderboard, pingMs, startMining, stopMining, 
                     getStatusText, getPhaseText, getProgressState, getScore, getScoreNumber,
                     loadTasks, getShortPoolName, getScoreColorClass, formatDate,
-                    activeTasks, paginatedCompletedTasks, ratingCurrentPage, totalRatingPages, changeRatingPage,
-                    getOosStatus,
+                    activeTasks, activeTaskEmptyStateText, paginatedCompletedTasks, ratingCurrentPage, totalRatingPages, changeRatingPage,
+                    getReviewStatus, getReviewStatusMeta, getReviewDetail,
                     adminSubTab, adminThresholds, adminPools, adminStrats, adminError, loadAdminData, saveThresholds, savePool
                 };
             }

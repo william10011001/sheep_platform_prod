@@ -8,6 +8,17 @@ import numpy as np
 import pandas as pd
 
 
+def _audit_failure(code: str, label: str, actual: Any, threshold: Any, comparator: str, message: str) -> Dict[str, Any]:
+    return {
+        "code": str(code or ""),
+        "label": str(label or ""),
+        "actual": actual,
+        "threshold": threshold,
+        "comparator": str(comparator or ""),
+        "message": str(message or ""),
+    }
+
+
 def _safe_float(x: Any, default: float = 0.0) -> float:
     try:
         return float(x)
@@ -144,21 +155,92 @@ def audit_candidate(
 
     # Rules
     reasons: List[str] = []
+    failure_details: List[Dict[str, Any]] = []
 
     if m_oos["trades"] < int(min_trades):
         reasons.append("out_of_sample_trade_count")
+        failure_details.append(
+            _audit_failure(
+                "out_of_sample_trade_count",
+                "OOS 交易筆數",
+                int(m_oos["trades"]),
+                int(min_trades),
+                ">=",
+                f"OOS 交易筆數僅 {int(m_oos['trades'])} 筆，小於門檻 {int(min_trades)} 筆",
+            )
+        )
     if m_oos["total_return_pct"] < float(min_oos_return_pct):
         reasons.append("out_of_sample_return")
+        failure_details.append(
+            _audit_failure(
+                "out_of_sample_return",
+                "OOS 總報酬",
+                round(float(m_oos["total_return_pct"]), 4),
+                float(min_oos_return_pct),
+                ">=",
+                f"OOS 總報酬僅 {float(m_oos['total_return_pct']):.2f}%，小於門檻 {float(min_oos_return_pct):.2f}%",
+            )
+        )
     if m_fw["total_return_pct"] < float(min_forward_return_pct):
         reasons.append("forward_return")
+        failure_details.append(
+            _audit_failure(
+                "forward_return",
+                "Forward 總報酬",
+                round(float(m_fw["total_return_pct"]), 4),
+                float(min_forward_return_pct),
+                ">=",
+                f"Forward 總報酬僅 {float(m_fw['total_return_pct']):.2f}%，小於門檻 {float(min_forward_return_pct):.2f}%",
+            )
+        )
     if m_oos["sharpe"] < float(min_sharpe_oos):
         reasons.append("out_of_sample_sharpe")
+        failure_details.append(
+            _audit_failure(
+                "out_of_sample_sharpe",
+                "OOS 夏普指標",
+                round(float(m_oos["sharpe"]), 6),
+                float(min_sharpe_oos),
+                ">=",
+                f"OOS 夏普指標僅 {float(m_oos['sharpe']):.2f}，小於門檻 {float(min_sharpe_oos):.2f}",
+            )
+        )
     if m_oos["max_drawdown_pct"] > float(max_drawdown_oos):
         reasons.append("out_of_sample_drawdown")
+        failure_details.append(
+            _audit_failure(
+                "out_of_sample_drawdown",
+                "OOS 最大回撤",
+                round(float(m_oos["max_drawdown_pct"]), 4),
+                float(max_drawdown_oos),
+                "<=",
+                f"OOS 最大回撤為 {float(m_oos['max_drawdown_pct']):.2f}%，高於門檻 {float(max_drawdown_oos):.2f}%",
+            )
+        )
     if m_oos_stress["total_return_pct"] < 0.0:
         reasons.append("stress_return")
+        failure_details.append(
+            _audit_failure(
+                "stress_return",
+                "壓力測試報酬",
+                round(float(m_oos_stress["total_return_pct"]), 4),
+                0.0,
+                ">=",
+                f"壓力測試報酬為 {float(m_oos_stress['total_return_pct']):.2f}%，未達 0%",
+            )
+        )
     if mc_prob_pos is not None and mc_prob_pos < float(monte_carlo_min_winrate):
         reasons.append("monte_carlo_probability")
+        failure_details.append(
+            _audit_failure(
+                "monte_carlo_probability",
+                "蒙地卡羅正報酬機率",
+                round(float(mc_prob_pos), 6),
+                float(monte_carlo_min_winrate),
+                ">=",
+                f"蒙地卡羅正報酬機率僅 {float(mc_prob_pos):.2%}，小於門檻 {float(monte_carlo_min_winrate):.0%}",
+            )
+        )
 
     # Robustness score: prioritize OOS and forward
     score = (
@@ -181,4 +263,7 @@ def audit_candidate(
         "stress_oos": {"metrics": m_oos_stress, "fee_mult": float(stress_fee_mult), "slippage_mult": float(stress_slippage_mult)},
         "monte_carlo": {"n": int(monte_carlo_n), "prob_positive": mc_prob_pos, "avg_end_equity": mc_avg_end},
         "reasons": reasons,
+        "reason_messages": [str(item.get("message") or "") for item in failure_details],
+        "failure_details": failure_details,
+        "reason_message": str(failure_details[0].get("message") or "") if failure_details else "",
     }
