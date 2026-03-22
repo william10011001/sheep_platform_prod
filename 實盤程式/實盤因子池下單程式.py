@@ -1796,7 +1796,12 @@ class Trader:
         mode = cfg.get("mode", "single")
         if mode == "multi":
             try:
-                multi_json = json.loads(cfg.get("multi_strategies_json", "{}"))
+                multi_json_raw = cfg.get("multi_strategies_json", "[]")
+                if isinstance(multi_json_raw, (list, dict)):
+                    multi_json = multi_json_raw
+                else:
+                    multi_json_text = str(multi_json_raw or "").strip()
+                    multi_json = [] if not multi_json_text else json.loads(multi_json_text)
                 if isinstance(multi_json, list):
                     for i, strat in enumerate(multi_json):
                         s_id = strat.get('strategy_id', i)
@@ -2681,6 +2686,25 @@ class FactorPoolUpdater:
             self.seen_warnings.add(warning)
             log(warning)
 
+    def _factor_pool_runtime_kwargs(self):
+        def _ui_value(var_name, env_name, default=""):
+            value = ""
+            ui_var = getattr(self.ui, var_name, None)
+            if ui_var is not None:
+                try:
+                    value = str(ui_var.get() or "").strip()
+                except Exception:
+                    value = ""
+            if not value:
+                value = str(os.environ.get(env_name, default)).strip()
+            return value
+
+        return {
+            "factor_pool_url": _ui_value("factor_pool_url_var", "SHEEP_FACTOR_POOL_URL", "https://sheep123.com"),
+            "factor_pool_user": _ui_value("factor_pool_user_var", "SHEEP_FACTOR_POOL_USER"),
+            "factor_pool_pass": _ui_value("factor_pool_pass_var", "SHEEP_FACTOR_POOL_PASS"),
+        }
+
     def start(self):
         if bt is None:
             log(f"【致命錯誤】聖杯引擎停用，無法匯入 backtest runtime: {HOLY_GRAIL_IMPORT_ERROR}")
@@ -2708,12 +2732,26 @@ class FactorPoolUpdater:
             self.running = False
             return
 
-        base_stake = getattr(self.ui, 'global_stake_pct_var', tk.DoubleVar(value=95.0)).get()
+        base_stake_var = getattr(self.ui, "global_stake_pct_var", None)
+        try:
+            base_stake = float(base_stake_var.get()) if base_stake_var is not None else 95.0
+        except Exception:
+            base_stake = 95.0
+        runtime_kwargs = self._factor_pool_runtime_kwargs()
+        if not runtime_kwargs["factor_pool_user"] or not runtime_kwargs["factor_pool_pass"]:
+            warning = "【聖杯引擎】未設定因子池帳密，背景熱更新暫停；沿用目前策略組合。"
+            if warning not in self.seen_warnings:
+                self.seen_warnings.add(warning)
+                log(warning)
+            return
         log("【聖杯引擎】開始拉取實盤因子池進行背景計算...")
         result = run_holy_grail_build(
             bt_module=bt,
             log=log,
             base_stake_pct=float(base_stake),
+            factor_pool_url=runtime_kwargs["factor_pool_url"],
+            factor_pool_user=runtime_kwargs["factor_pool_user"],
+            factor_pool_pass=runtime_kwargs["factor_pool_pass"],
         )
         if not result.ok:
             log(f"【聖杯引擎】本輪更新失敗: {result.message}")
@@ -3171,6 +3209,9 @@ class AnimatedUI(tk.Tk):
         self.daily_limit_usdt_var   = tk.DoubleVar(value=0.0)   # 0 代表忽略
         self.trade_fetch_int_var    = tk.IntVar(value=60)
         self.verbose_var            = tk.BooleanVar(value=True)
+        self.factor_pool_url_var    = tk.StringVar(value=os.environ.get("SHEEP_FACTOR_POOL_URL", "https://sheep123.com").strip())
+        self.factor_pool_user_var   = tk.StringVar(value=os.environ.get("SHEEP_FACTOR_POOL_USER", "").strip())
+        self.factor_pool_pass_var   = tk.StringVar(value=os.environ.get("SHEEP_FACTOR_POOL_PASS", "").strip())
 
         ttk.Checkbutton(self.risk_tab, text="啟用日內停利/停損（本地）", variable=self.enable_daily_guard_var).grid(row=0, column=0, sticky="w", padx=10, pady=6)
         self._grid(self.risk_tab, [
@@ -3185,6 +3226,11 @@ class AnimatedUI(tk.Tk):
         ttk.Button(self.adv_tab, text="重新載入背景", style="Accent.TButton", command=self._reload_bg_async).grid(row=1, column=1, sticky="w", padx=10, pady=6)
         ttk.Button(self.adv_tab, text="選擇本機圖片", command=self._choose_bg_file).grid(row=1, column=2, sticky="w", padx=10, pady=6)
         ttk.Label(self.adv_tab, text="提示：背景載入在後台，不會卡 UI；若失敗會自動改用漸層備援。").grid(row=2, column=0, sticky="w", padx=10, pady=6, columnspan=3)
+        self._grid(self.adv_tab, [
+            ("因子池 Base URL", self.factor_pool_url_var, 48),
+            ("因子池帳號", self.factor_pool_user_var, 24),
+            ("因子池密碼", self.factor_pool_pass_var, 24, True),
+        ], cols=2, start_row=3)
     def _choose_bg_file(self):
         try:
             path = filedialog.askopenfilename(title="選擇背景圖片", filetypes=[("圖片","*.jpg;*.jpeg;*.png;*.bmp;*.gif;*.webp"),("全部檔案","*.*")])
@@ -3270,6 +3316,10 @@ class AnimatedUI(tk.Tk):
             "sleep_padding_sec": clamp(self.sleep_pad_var.get(), 0.0, 10.0),
             "trade_fetch_interval": max(15, int(self.trade_fetch_int_var.get() or 60)),
             "verbose": bool(self.verbose_var.get()),
+            "global_stake_pct": float(self.global_stake_pct_var.get() or 95.0),
+            "factor_pool_url": (self.factor_pool_url_var.get() or "").strip(),
+            "factor_pool_user": (self.factor_pool_user_var.get() or "").strip(),
+            "factor_pool_pass": (self.factor_pool_pass_var.get() or "").strip(),
 
             # 本地日內停利/停損
             "daily_guard": {
@@ -3358,6 +3408,23 @@ class AnimatedUI(tk.Tk):
         self.sleep_pad_var.set(float(g("sleep_padding_sec", self.sleep_pad_var.get())))
         self.trade_fetch_int_var.set(int(g("trade_fetch_interval", self.trade_fetch_int_var.get())))
         self.verbose_var.set(bool(g("verbose", self.verbose_var.get())))
+        self.mode_var.set(g("mode", self.mode_var.get()))
+        self.global_stake_pct_var.set(float(g("global_stake_pct", self.global_stake_pct_var.get())))
+        self.factor_pool_url_var.set(g("factor_pool_url", self.factor_pool_url_var.get()))
+        self.factor_pool_user_var.set(g("factor_pool_user", self.factor_pool_user_var.get()))
+        self.factor_pool_pass_var.set(g("factor_pool_pass", self.factor_pool_pass_var.get()))
+
+        multi_json_raw = g("multi_strategies_json", None)
+        if multi_json_raw is not None:
+            if isinstance(multi_json_raw, (list, dict)):
+                multi_json_text = json.dumps(multi_json_raw, ensure_ascii=False, indent=2)
+            else:
+                multi_json_text = str(multi_json_raw or "").strip()
+            self.multi_json_text.config(state="normal")
+            self.multi_json_text.delete("1.0", tk.END)
+            if multi_json_text:
+                self.multi_json_text.insert("1.0", multi_json_text)
+            self.multi_json_text.config(state="disabled")
 
         dguard = g("daily_guard", {})
         self.enable_daily_guard_var.set(bool(dguard.get("enable", self.enable_daily_guard_var.get())))

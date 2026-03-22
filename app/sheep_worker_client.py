@@ -9,6 +9,7 @@ import uuid
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 import logging
@@ -27,6 +28,26 @@ import backtest_runtime_core as bt
 # 專家級多進程核心：加入終端機詳細調試輸出，揭露假死真相
 # =========================================================
 GLOBAL_DF = None
+
+
+def normalize_api_base_url(base_url: str) -> str:
+    raw = str(base_url or "").strip()
+    if not raw:
+        return ""
+    if "://" not in raw:
+        return raw.rstrip("/")
+
+    parsed = urlsplit(raw)
+    host = str(parsed.netloc or "").lower()
+    path = str(parsed.path or "").rstrip("/")
+
+    if path == "/api":
+        path = "/sheep123"
+    elif path in {"", "/"} and host.endswith("sheep123.com"):
+        path = "/sheep123"
+
+    normalized = parsed._replace(path=path, query="", fragment="")
+    return urlunsplit(normalized).rstrip("/")
 
 def _init_worker(df_in):
     """進程初始化函數：每個子進程誕生時執行一次，綁定巨大資料至全域，消滅 IPC 瓶頸"""
@@ -197,7 +218,7 @@ def _load_or_create_worker_id(path: str) -> str:
 
 class ApiClient:
     def __init__(self, base_url: str, token: str, worker_id: str):
-        self.base_url = str(base_url or "").rstrip("/")
+        self.base_url = normalize_api_base_url(base_url)
         self.token = str(token or "").strip()
         self.worker_id = str(worker_id or "").strip()
 
@@ -835,7 +856,7 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
 
 
 def _issue_token(base_url: str, username: str, password: str, ttl_seconds: int, name: str) -> str:
-    url = str(base_url).rstrip("/") + "/token"
+    url = normalize_api_base_url(base_url).rstrip("/") + "/token"
     body = {"username": username, "password": password, "ttl_seconds": int(ttl_seconds), "name": str(name)}
     r = requests.post(url, json=body, timeout=20)
     if r.status_code >= 400:
@@ -863,7 +884,7 @@ def main():
         with open(args.config, "r", encoding="utf-8") as f:
             cfg = json.load(f) or {}
 
-    base_url = args.server or cfg.get("base_url") or cfg.get("api_url") or "http://127.0.0.1:8000"
+    base_url = normalize_api_base_url(args.server or cfg.get("base_url") or cfg.get("api_url") or "http://127.0.0.1:8000")
 
     worker_id = cfg.get("worker_id") or _load_or_create_worker_id(cfg.get("worker_id_file") or ".sheep_worker_id")
 

@@ -3174,6 +3174,9 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
             "points": []    # 積分 (已獲利)
         }
 
+        db_kind = _db_kind()
+        window_end_iso = _now_iso()
+
         # 1. 總已跑組合數 (Total Combos Done)
         # 解析 progress_json 消耗較大，改用 SQL 內的簡單字串擷取或假設應用層已寫入 (這裡使用近似統計以保效能)
         # 正規做法應在 mining_tasks 增加 done 欄位，這裡使用應用層相容做法：
@@ -3181,7 +3184,7 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
         # 為了效能，我們只統計 status='completed' 或 'running'
         # 注意：SQLite JSON 函數需 json1 extension，大部分環境有。若無則退回計數。
         
-        if _db_kind() == "postgres":
+        if db_kind == "postgres":
             sql_combos = """
                 SELECT u.username, u.nickname, COUNT(t.id) as task_count,
                        SUM(COALESCE((t.progress_json::jsonb->>'combos_done')::bigint, 0)) as total_done
@@ -3205,7 +3208,7 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
             """
         
         try:
-            rows = conn.execute(sql_combos, (cutoff_iso, _now_iso())).fetchall()
+            rows = conn.execute(sql_combos, (cutoff_iso, window_end_iso)).fetchall()
             # [專家修復] 強制轉型，避免 None 導致比較錯誤
             results["combos"] = [dict(r) for r in rows if r["total_done"] is not None and int(r["total_done"]) > 0]
         except Exception as e:
@@ -3229,21 +3232,34 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
             results["score"] = []
 
         # 3. 總挖礦時長 (Mining Time) - 近似值：SUM(elapsed_s)
-        sql_time = """
-            SELECT u.username, u.nickname, 
-                   SUM(CAST(json_extract(t.progress_json, '$.elapsed_s') AS REAL)) as total_seconds
-            FROM mining_tasks t
-            JOIN users u ON t.user_id = u.id
-            WHERE t.updated_at >= ? AND t.status IN ('completed', 'running')
-            GROUP BY u.id
-            ORDER BY total_seconds DESC
-            LIMIT 300
-        """
+        if db_kind == "postgres":
+            sql_time = """
+                SELECT u.username, u.nickname,
+                       SUM(COALESCE(NULLIF((t.progress_json::jsonb->>'elapsed_s'), '')::double precision, 0.0)) as total_seconds
+                FROM mining_tasks t
+                JOIN users u ON t.user_id = u.id
+                WHERE t.updated_at >= ? AND t.status IN ('completed', 'running')
+                GROUP BY u.id, u.username, u.nickname
+                ORDER BY total_seconds DESC
+                LIMIT 300
+            """
+        else:
+            sql_time = """
+                SELECT u.username, u.nickname,
+                       SUM(CAST(json_extract(t.progress_json, '$.elapsed_s') AS REAL)) as total_seconds
+                FROM mining_tasks t
+                JOIN users u ON t.user_id = u.id
+                WHERE t.updated_at >= ? AND t.status IN ('completed', 'running')
+                GROUP BY u.id
+                ORDER BY total_seconds DESC
+                LIMIT 300
+            """
         try:
             rows = conn.execute(sql_time, (cutoff_iso,)).fetchall()
             # [專家修復] 強制轉型 check
             results["time"] = [dict(r) for r in rows if r["total_seconds"] is not None and float(r["total_seconds"]) > 0]
-        except Exception:
+        except Exception as e:
+            print(f"[DB WARN] Leaderboard time query failed: {e}")
             results["time"] = []
 
         # 4. 積分 (Points/USDT) - 從 payouts 表
@@ -3257,8 +3273,37 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
             ORDER BY total_usdt DESC
             LIMIT 300
         """
-        rows = conn.execute(sql_points, (cutoff_iso,)).fetchall()
-        results["points"] = [dict(r) for r in rows if r["total_usdt"] and r["total_usdt"] > 0]
+        try:
+            rows = conn.execute(sql_points, (cutoff_iso,)).fetchall()
+            results["points"] = [dict(r) for r in rows if r["total_usdt"] is not None and float(r["total_usdt"]) > 0]
+        except Exception as e:
+            print(f"[DB WARN] Leaderboard points query failed: {e}")
+            results["points"] = []
+
+        if not results["points"]:
+            capital_usdt = float(get_setting(conn, "capital_usdt", 0.0) or 0.0)
+            payout_rate = float(get_setting(conn, "payout_rate", 0.0) or 0.0)
+            if capital_usdt > 0.0 and payout_rate > 0.0:
+                sql_points_fallback = """
+                    SELECT u.username, u.nickname,
+                           SUM((COALESCE(wc.return_pct, 0.0) / 100.0) * (COALESCE(st.allocation_pct, 0.0) / 100.0) * ? * ?) as total_usdt
+                    FROM weekly_checks wc
+                    JOIN strategies st ON wc.strategy_id = st.id
+                    JOIN users u ON st.user_id = u.id
+                    WHERE wc.checked_at >= ? AND COALESCE(wc.eligible, 0) = 1
+                    GROUP BY u.id, u.username, u.nickname
+                    ORDER BY total_usdt DESC
+                    LIMIT 300
+                """
+                try:
+                    rows = conn.execute(sql_points_fallback, (capital_usdt, payout_rate, cutoff_iso)).fetchall()
+                    results["points"] = [
+                        dict(r)
+                        for r in rows
+                        if r["total_usdt"] is not None and float(r["total_usdt"]) > 0
+                    ]
+                except Exception as e:
+                    print(f"[DB WARN] Leaderboard points fallback query failed: {e}")
 
         return results
     except Exception as e:

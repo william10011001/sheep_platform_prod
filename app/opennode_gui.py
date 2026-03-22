@@ -25,7 +25,9 @@ if sys.stderr is not None:
 import sheep_worker_client
 
 # 設定伺服器位址 (打包前請確認改為正式機網址)
-SERVER_URL = "https://sheep123.com/api"
+SERVER_URL = sheep_worker_client.normalize_api_base_url(
+    os.environ.get("SHEEP_WORKER_BASE_URL", "https://sheep123.com/sheep123")
+)
 CONFIG_FILE = "worker_config.json"
 
 UI_HTML = """

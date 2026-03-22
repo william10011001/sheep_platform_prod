@@ -49,8 +49,12 @@ def test_nginx_conf_exposes_json_health_aliases():
     conf = (ROOT / "deploy" / "nginx" / "conf.d" / "app_https.conf").read_text(encoding="utf-8", errors="replace")
 
     assert "location = /healthz" in conf
+    assert "location = /api {" in conf
+    assert "location = /api/" in conf
     assert "location = /api/healthz" in conf
     assert "location /api/" in conf
+    assert "proxy_pass http://$api_host:8000/manifest;" in conf
+    assert "rewrite ^/api/(.*)$ /$1 break;" in conf
     assert "location = /app/_stcore/health" in conf
     assert '{"ok":true,"service":"spa","ui":"static"}' in conf
 
