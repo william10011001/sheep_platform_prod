@@ -15,7 +15,61 @@ from pydantic import BaseModel
 
 import sheep_platform_db as db
 import backtest_panel2 as bt
-from sheep_review import count_review_pipeline_tasks, enrich_task_row, evaluate_thresholds, normalize_review_fields
+
+# [專家級修復] 補充遺失的 sheep_review 模組核心函數，直接內建於 API 層確保啟動無礙
+def enrich_task_row(task: Dict[str, Any]) -> Dict[str, Any]:
+    t = dict(task)
+    if "progress_json" in t:
+        try: t["progress"] = json.loads(t["progress_json"] or "{}")
+        except Exception: t["progress"] = {}
+    if "grid_spec_json" in t:
+        try: t["grid_spec"] = json.loads(t["grid_spec_json"] or "{}")
+        except Exception: t["grid_spec"] = {}
+    if "risk_spec_json" in t:
+        try: t["risk_spec"] = json.loads(t["risk_spec_json"] or "{}")
+        except Exception: t["risk_spec"] = {}
+    return t
+
+def evaluate_thresholds(metrics: Dict[str, Any], min_trades: int, min_total_return_pct: float, max_drawdown_pct: float, min_sharpe: float) -> Dict[str, Any]:
+    failures = []
+    trades = int(metrics.get("trades", 0))
+    ret = float(metrics.get("total_return_pct", 0.0))
+    dd = float(metrics.get("max_drawdown_pct", 0.0))
+    sh = float(metrics.get("sharpe", 0.0))
+    
+    if trades < min_trades: failures.append(f"交易筆數 {trades} < {min_trades}")
+    if ret < min_total_return_pct: failures.append(f"總報酬 {ret:.2f}% < {min_total_return_pct}%")
+    if dd > max_drawdown_pct: failures.append(f"最大回撤 {dd:.2f}% > {max_drawdown_pct}%")
+    if sh < min_sharpe: failures.append(f"夏普值 {sh:.2f} < {min_sharpe}")
+    
+    passed = len(failures) == 0
+    return {
+        "passed": passed,
+        "reason": "、".join(failures) if not passed else "已達標",
+        "failures": failures
+    }
+
+def normalize_review_fields(progress: Dict[str, Any], status: str) -> Dict[str, Any]:
+    if status != "completed":
+        return {"oos_status": "not_eligible", "review_status": "not_eligible", "review_reason": "", "review_failures": []}
+    return {
+        "oos_status": str(progress.get("oos_status") or progress.get("review_status") or "not_eligible"),
+        "review_status": str(progress.get("review_status") or progress.get("oos_status") or "not_eligible"),
+        "review_reason": str(progress.get("review_reason") or ""),
+        "review_failures": list(progress.get("review_failures") or [])
+    }
+
+def count_review_pipeline_tasks(completed_tasks: List[Dict[str, Any]]) -> int:
+    count = 0
+    for t in completed_tasks:
+        try:
+            p = json.loads(t.get("progress_json") or "{}")
+            status = str(p.get("review_status") or p.get("oos_status") or "")
+            if status in ("auto_managed", "queued", "running", "passed"):
+                count += 1
+        except Exception:
+            pass
+    return count
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("api")
