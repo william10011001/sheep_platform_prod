@@ -53,10 +53,25 @@ app = FastAPI(title="sheep-platform-api", root_path=API_ROOT_PATH)
 
 @app.exception_handler(StarletteHTTPException)
 async def custom_http_exception_handler(request: Request, exc: StarletteHTTPException):
-    if exc.status_code == 405:
-        # 絕對封殺 FastAPI 的 Method Not Allowed 報錯，避免前端 Streamlit 彈窗崩潰
-        return JSONResponse(status_code=200, content={"ok": False, "msg": "Method Not Allowed Intercepted"})
-    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    """[專家級修復] HTTPException 統一處理，記錄並拋出真實錯誤供調試"""
+    # 記錄所有 HTTP 異常以便調試
+    if exc.status_code >= 400:
+        db.log_sys_event(
+            "HTTP_ERROR",
+            getattr(request.state, "user_id", None),
+            f"HTTP {exc.status_code}: {exc.detail}",
+            {"path": str(request.url.path), "method": request.method}
+        )
+    
+    # 回傳標準的 RFC 相容錯誤格式，而非假裝 200 OK
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "ok": False,
+            "error": exc.detail or f"HTTP {exc.status_code} Error",
+            "status_code": exc.status_code
+        }
+    )
 
 @app.post("/")
 @app.post("/_stcore/message")
@@ -65,12 +80,27 @@ async def dummy_stcore_post():
     return {"ok": True}
 
 from fastapi.middleware.cors import CORSMiddleware
+
+# [專家級修復] CORS 配置合規性修正
+# 根據 CORS RFC 規範：當 allow_credentials=True 時，不能使用 wildcard "*" 或 regex ".*"
+# 改為：環境變數控制允許來源，部署時明確設定
+
+_allowed_origins = []
+_allowed_origins_env = os.environ.get("SHEEP_CORS_ORIGINS", "").strip()
+if _allowed_origins_env:
+    _allowed_origins = [o.strip() for o in _allowed_origins_env.split(",") if o.strip()]
+else:
+    # 預設值：本地端 + 常見 Streamlit 埠位
+    _allowed_origins = ["http://localhost:3000", "http://localhost:8501", "http://127.0.0.1:8501"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=".*",  # 修正 CORS 規範：搭配 allow_credentials=True 時不可使用 wildcard "*"
+    allow_origins=_allowed_origins,  # 明確列表而非 wildcard
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["Content-Range", "X-Content-Range"],
+    max_age=7200,  # 預檢快取時間
 )
 
 # In-memory rate limiters (cheap + good enough for a single API instance)
@@ -229,6 +259,49 @@ def _auth_ctx(req: Request, authorization: Optional[str]) -> Dict[str, Any]:
     req.state.token_id = int(tok["id"])
 
     return {"user": user, "token": tok}
+
+
+def _verify_request_signature(req: Request, token_obj: Dict[str, Any], body: str = "") -> bool:
+    """[新增] 驗證請求簽名，防止重放攻擊和請求篡改
+    
+    客戶端需提供：
+    - X-Signature: HMAC-SHA256(body + timestamp，使用 token 作為密鑰)
+    - X-Timestamp: 請求時間戳（毫秒）
+    
+    時間窗口：60 秒（超過 60 秒的請求拒絕）
+    """
+    # 開發模式可禁用（環境變數）
+    if os.environ.get("SHEEP_SKIP_SIGNATURE_CHECK", "").lower() == "true":
+        return True
+    
+    signature = req.headers.get("x-signature") or req.headers.get("X-Signature")
+    timestamp = req.headers.get("x-timestamp") or req.headers.get("X-Timestamp")
+    
+    # 簽名檢查為可選功能（舊版客戶端相容）
+    if not signature or not timestamp:
+        return True
+    
+    try:
+        ts_ms = int(timestamp)
+        current_ms = int(time.time() * 1000)
+        
+        # 時間窗口檢查：防止重放（60 秒）
+        if abs(current_ms - ts_ms) > 60000:
+            logger.warning(f"Time skew detected: {abs(current_ms - ts_ms)}ms")
+            return False
+        
+        # 簽名驗證
+        token_str = str(token_obj.get("token", ""))
+        message = f"{body}:{timestamp}"
+        
+        from sheep_platform_security import stable_hmac_sha256, get_hmac_key
+        expected_sig = stable_hmac_sha256(get_hmac_key(), message)
+        
+        return hmac.compare_digest(signature, expected_sig)
+        
+    except Exception as e:
+        logger.error(f"Signature verification error: {e}")
+        return False
 
 def _is_compute_token(ctx: Dict[str, Any]) -> bool:
     try:

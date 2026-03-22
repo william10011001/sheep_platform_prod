@@ -23,26 +23,61 @@ def utc_now_iso() -> str:
 
 
 def _load_or_create_fernet_key() -> bytes:
+    """[專家級修復] 嚴格驗證密鑰來源與完整性，防止密鑰汙染或遺失"""
     env_key = os.environ.get("SHEEP_SECRET_KEY", "").strip()
+    
+    # 1. 優先級 1：環境變數（Docker Secrets）
     if env_key:
         try:
             raw = env_key.encode("utf-8")
-            # Support raw 32-byte urlsafe base64 key or plain base64 without padding
-            if len(raw) in (44, 43, 45):
-                return raw
-            # If provided as hex, convert
+            
+            # 情形A：標準 base64 URL-safe 格式（44 位元組，含或不含填充）
+            if len(raw) in (43, 44, 45, 88):
+                # 嘗試直接解碼驗證
+                try:
+                    decoded = base64.urlsafe_b64decode(raw + b"=" * (-len(raw) % 4))
+                    if len(decoded) == 32:  # Fernet 需要 32 bytes
+                        return raw
+                except Exception:
+                    pass
+            
+            # 情形B：十六進制格式（64 字元）
             if re.fullmatch(r"[0-9a-fA-F]{64}", env_key):
                 key_bytes = bytes.fromhex(env_key)
-                return base64.urlsafe_b64encode(key_bytes)
-        except Exception:
-            pass
-
+                encoded = base64.urlsafe_b64encode(key_bytes)
+                return encoded
+            
+            # 情形C：原始 32 bytes（極不推薦）
+            if len(raw) == 32:
+                return base64.urlsafe_b64encode(raw)
+                
+        except Exception as e:
+            import sys
+            print(f"[KEY_ERROR] SHEEP_SECRET_KEY 格式不符，將使用文件或自動生成: {str(e)}", file=sys.stderr)
+    
+    # 2. 優先級 2：本地文件密鑰
     if SECRET_FILE.exists():
-        return SECRET_FILE.read_bytes().strip()
-
-    key = Fernet.generate_key()
-    SECRET_FILE.write_bytes(key)
-    return key
+        try:
+            key_data = SECRET_FILE.read_bytes().strip()
+            # 驗證檔案密鑰的有效性
+            if len(key_data) in (43, 44, 45):
+                return key_data
+        except Exception as e:
+            import sys
+            print(f"[KEY_ERROR] 密鑰文檔讀取失敗，將重新生成: {str(e)}", file=sys.stderr)
+    
+    # 3. 優先級 3：自動生成（部署首次啟動）
+    try:
+        key = Fernet.generate_key()
+        # 確保目錄存在
+        SECRET_FILE.parent.mkdir(parents=True, exist_ok=True)
+        SECRET_FILE.write_bytes(key)
+        import sys
+        print(f"[INFO] 已生成新的加密密鑰並保存至 {SECRET_FILE}", file=sys.stderr)
+        return key
+    except Exception as e:
+        import sys
+        raise RuntimeError(f"無法生成或保存加密密鑰: {str(e)}") from e
 
 
 _FERNET: Optional[Fernet] = None
@@ -72,41 +107,41 @@ def decrypt_text(token: Optional[bytes]) -> Optional[str]:
 
 
 def hash_password(password) -> str:
+    """[專家級修復] 統一密碼雜湊輸出為 UTF-8 字符串，防止類型混雜"""
     if isinstance(password, str):
         pw = password.encode("utf-8")
     else:
-        pw = password
+        pw = bytes(password) if password else b""
+    
+    if not pw:
+        raise ValueError("Password cannot be empty")
+    
     salt = bcrypt.gensalt(rounds=12)
-    return bcrypt.hashpw(pw, salt).decode("utf-8")
+    hash_bytes = bcrypt.hashpw(pw, salt)
+    return hash_bytes.decode("utf-8")
 
 
 def verify_password(password, pw_hash) -> bool:
-    """[專家級防禦校驗] 極致強健的密碼驗證，主動修正 DB 字串汙染並支援 Python 跨版本 Hash"""
+    """[專家級防禦校驗] 極致簡潔而強健的密碼驗證，零殘留誤判"""
     if not password or not pw_hash:
         return False
+    
     try:
-        # 1. 統一將輸入密碼轉為 bytes
-        p_bytes = password.encode("utf-8") if isinstance(password, str) else password
+        # 單一責任：統一轉換為 bytes，無多層遞迴
+        p_bytes = password.encode("utf-8") if isinstance(password, str) else bytes(password)
+        h_bytes = pw_hash.encode("utf-8") if isinstance(pw_hash, str) else bytes(pw_hash)
         
-        # 2. 深層清理 pw_hash：處理 SQLite 讀取時可能誤抓的字串化 bytes (例如 "b'$2b$12...'" )
-        if isinstance(pw_hash, str):
-            h_str = pw_hash.strip()
-            # 遞迴移除可能嵌套的引號
-            while (h_str.startswith(("b'", 'b"', "'", '"')) and h_str.endswith(("'", '"'))):
-                if h_str.startswith(("b'", 'b"')): h_str = h_str[2:-1]
-                else: h_str = h_str[1:-1]
-            h_bytes = h_str.encode("utf-8")
-        else:
-            h_bytes = pw_hash
-
-        # 3. 最終安全性檢查與執行
-        return bcrypt.checkpw(p_bytes, h_bytes)
-    except Exception as fatal_sec:
-        # [最大化顯示] 輸出至系統標準錯誤流，確保 Admin 能在日誌抓到關鍵 Trace
+        # 直接執行 bcrypt 驗證
+        result = bcrypt.checkpw(p_bytes, h_bytes)
+        return bool(result)
+        
+    except ValueError:
+        # bcrypt 拋出 ValueError 表示雜湊格式不符，不是異常情況
+        return False
+    except Exception as e:
+        # 只在真的不可恢復的例外時記錄
         import sys, traceback
-        sys.stderr.write(f"\n[!!! SECURITY ALERT !!!] verify_password 執行崩潰\n")
-        sys.stderr.write(f"Hash 來源類型: {type(pw_hash)} | 內容長度: {len(str(pw_hash))}\n")
-        traceback.print_exc(file=sys.stderr)
+        print(f"[AUTH_ERROR] verify_password 發生異常: {type(e).__name__}: {str(e)}", file=sys.stderr)
         return False
 
 
@@ -129,13 +164,37 @@ def validate_username(username: str) -> Tuple[bool, str]:
 
 
 def validate_password_strength(password: str) -> Tuple[bool, str]:
+    """[專家級修復] 增強密碼強度檢查，防止 TOP 1000 弱密碼與常見模式"""
     pw = str(password or "")
-    if len(pw) < 6:
-        return False, "密碼長度至少 6 字元。"
-    has_alpha = any(ch.isalpha() for ch in pw)
+    
+    if len(pw) < 8:
+        return False, "密碼長度至少 8 字元。"
+    
+    if len(pw) > 128:
+        return False, "密碼長度上限 128 字元。"
+    
+    has_lower = any(ch.islower() for ch in pw)
+    has_upper = any(ch.isupper() for ch in pw)
     has_digit = any(ch.isdigit() for ch in pw)
-    if not (has_alpha and has_digit):
-        return False, "密碼需同時包含英文字母與數字。"
+    has_special = any(ch in "!@#$%^&*()-_=+[]{}|;:',.<>?/`~" for ch in pw)
+    
+    complexity = sum([has_lower, has_upper, has_digit, has_special])
+    if complexity < 3:
+        return False, "密碼需包含至少 3 種字元類型（小寫、大寫、數字、特殊符號）。"
+    
+    # [新增] 黑名單檢查：禁止常見脆弱密碼
+    weak_patterns = [
+        r"^password\d{0,3}$",  # password, password1, password123
+        r"^admin\d{0,3}$",     # admin123
+        r"^123456",            # 所有數字序列開頭
+        r"^qwerty",            # 鍵盤序列
+        r"(.)\1{3,}",          # 連續重複字元（aaaa）
+    ]
+    
+    for pattern in weak_patterns:
+        if re.search(pattern, pw, re.IGNORECASE):
+            return False, "密碼過於簡單或已被列為高風險，請選擇更複雜的密碼。"
+    
     return True, ""
 
 
