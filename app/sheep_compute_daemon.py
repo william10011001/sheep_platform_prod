@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 import requests
 
 import sheep_worker_client as wc
+from sheep_runtime_paths import compute_worker_id_path
 
 
 def _env_float(name: str, default: float) -> float:
@@ -29,7 +30,7 @@ def _env_str(name: str, default: str = "") -> str:
     return str(os.environ.get(name, default) or default).strip()
 
 
-def _get_worker_id(path: str = "data/.sheep_compute_worker_id") -> str:
+def _get_worker_id(path: str = str(compute_worker_id_path())) -> str:
     p = path
     try:
         os.makedirs(os.path.dirname(p), exist_ok=True)
@@ -66,15 +67,15 @@ def _issue_compute_token(base_url: str, username: str, password: str, ttl_second
 
 def main() -> None:
     base_url = _env_str("SHEEP_COMPUTE_API_URL", "http://api:8000")
-    user = _env_str("SHEEP_COMPUTE_USER", "sheep")
+    user = _env_str("SHEEP_COMPUTE_USER", "")
     pwd = _env_str("SHEEP_COMPUTE_PASS", "")
     ttl_seconds = _env_int("SHEEP_COMPUTE_TTL_SECONDS", 2592000)
     idle_s = _env_float("SHEEP_COMPUTE_IDLE_S", 0.20)
     commit_every = _env_int("SHEEP_COMPUTE_COMMIT_EVERY", 50)
     flag_poll_s = _env_float("SHEEP_COMPUTE_FLAG_POLL_S", 1.0)
 
-    if not pwd:
-        raise RuntimeError("SHEEP_COMPUTE_PASS is empty")
+    if not user or not pwd:
+        raise RuntimeError("SHEEP_COMPUTE_USER or SHEEP_COMPUTE_PASS is empty")
 
     worker_id = _get_worker_id()
     print(f"[compute] boot worker_id={worker_id} base_url={base_url}", flush=True)

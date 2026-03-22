@@ -11,9 +11,9 @@ from datetime import datetime
 # ==========================================
 # [重要] 若伺服器架設在遠端 (例如 DigitalOcean VM)，請務必將 127.0.0.1 改為該伺服器的真實 IP 或網域
 API_BASE_URL = os.environ.get("SHEEP_API_URL", "https://sheep123.com/api")
-ADMIN_USER = os.environ.get("SHEEP_COMPUTE_USER", "sheep")
+ADMIN_USER = os.environ.get("SHEEP_COMPUTE_USER", "")
 # [重要] 請將 YOUR_ADMIN_PASSWORD_HERE 改為您的管理員真實密碼
-ADMIN_PASS = os.environ.get("SHEEP_COMPUTE_PASS", "@@Wm105020") 
+ADMIN_PASS = os.environ.get("SHEEP_COMPUTE_PASS", "")
 EXCEL_FILE_PATH = "candidates_report.xlsx"
 SYNC_INTERVAL_SECONDS = 30  # 每 30 秒同步一次
 
@@ -24,6 +24,8 @@ class SyncDaemon:
 
     def _get_token(self):
         """[專家級防護] 負責取得並維護 Admin Token，具備自動重試與錯誤顯示"""
+        if not ADMIN_USER or not ADMIN_PASS:
+            raise RuntimeError("Missing SHEEP_COMPUTE_USER or SHEEP_COMPUTE_PASS")
         now = time.time()
         # Token 每 12 小時強制換發一次
         if self.token and (now - self.last_auth_time < 43200):

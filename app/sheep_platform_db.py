@@ -1699,7 +1699,7 @@ def log_sys_event(event_type: str, user_id: Optional[int], message: str, detail:
     # 第一道防線：直接印到 Docker Console，就算資料庫炸了也看得到
     print(f"[SYS_EVENT] {event_type} | UID:{user_id} | MSG:{message} | DETAIL:{payload_str}", file=sys.stderr, flush=True)
 
-    def _bg_write():
+    def _write_event():
         try:
             conn = _conn()
             try:
@@ -1715,8 +1715,12 @@ def log_sys_event(event_type: str, user_id: Optional[int], message: str, detail:
             err_str = traceback.format_exc()
             print(f"[FATAL DB WRITE ERROR] log_sys_event 寫入資料庫失敗! Event: {event_type}\nReason: {e}\n{err_str}", file=sys.stderr, flush=True)
 
+    if event_type in {"UNKNOWN_ROUTE", "DEPRECATED_ALIAS_USED"}:
+        _write_event()
+        return
+
     # 第二道防線：丟進背景執行緒，主程式不需等待寫入完成，徹底消滅日誌引發的連環卡死
-    t = threading.Thread(target=_bg_write, daemon=True)
+    t = threading.Thread(target=_write_event, daemon=True)
     t.start()
 
 def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, max_tasks: int = 6, preferred_family: str = "") -> None:
@@ -1752,7 +1756,14 @@ def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, m
                 
                 # [改進] 使用 COUNT 而非 FETCHALL，減少記憶體開銷
                 cur = conn.execute("SELECT COUNT(*) as c FROM mining_tasks WHERE user_id = ? AND status IN ('assigned', 'running', 'queued') AND cycle_id = ?", (user_id, cycle_id))
-                current_tasks = int((cur.fetchone() or {}).get("c") or 0)
+                row = cur.fetchone()
+                if row is None:
+                    current_tasks = 0
+                else:
+                    try:
+                        current_tasks = int(row["c"] or 0)
+                    except Exception:
+                        current_tasks = int(row[0] or 0)
                 
                 if current_tasks >= min_tasks:
                     # 靜謐無聲返回，避免日誌污染
@@ -2110,7 +2121,14 @@ def count_tasks_for_user(user_id: int, cycle_id: int = 0, statuses: Optional[Lis
             query += f" AND status IN ({placeholders})"
             params.extend(norm_statuses)
         row = conn.execute(query, params).fetchone()
-        return int((row or {}).get("c") or 0)
+        if row is None:
+            return 0
+        if isinstance(row, dict):
+            return int(row.get("c") or 0)
+        try:
+            return int(row["c"] or 0)
+        except Exception:
+            return int(row[0] or 0)
     finally:
         conn.close()
 
@@ -2191,7 +2209,14 @@ def count_strategies(user_id: int = 0, status: str = "") -> int:
             query += " AND status = ?"
             params.append(str(status))
         row = conn.execute(query, params).fetchone()
-        return int((row or {}).get("c") or 0)
+        if row is None:
+            return 0
+        if isinstance(row, dict):
+            return int(row.get("c") or 0)
+        try:
+            return int(row["c"] or 0)
+        except Exception:
+            return int(row[0] or 0)
     finally:
         conn.close()
 
@@ -3706,10 +3731,14 @@ def admin_ssh_direct_exec(sql: str, params: tuple = None) -> int:
     """僅限 admin 使用。透過 SSH 隧道直接執行 psql（與 fetch_pg_dump.py 完全相同基礎設施），支援 INSERT/UPDATE/DELETE"""
     if not sql or not sql.strip().upper().startswith(("INSERT", "UPDATE", "DELETE")):
         raise ValueError("僅允許修改類 SQL，禁止 SELECT 以防資料外洩")
-    SSH_HOST = "35.229.158.100"
-    SSH_USER = "wm105020"
-    SSH_KEY_PATH = r"C:\Users\lineyvi\Desktop\Sheep_Admin\ssh_keys\id_ed25519"
-    REMOTE_WORK_DIR = "/home/wm105020/repo/deploy"
+    SSH_HOST = str(os.environ.get("SHEEP_ADMIN_SSH_HOST", "")).strip()
+    SSH_USER = str(os.environ.get("SHEEP_ADMIN_SSH_USER", "")).strip()
+    SSH_KEY_PATH = str(os.environ.get("SHEEP_ADMIN_SSH_KEY_PATH", "")).strip()
+    REMOTE_WORK_DIR = str(os.environ.get("SHEEP_ADMIN_SSH_REMOTE_WORK_DIR", "/home/wm105020/repo/deploy")).strip()
+    if not SSH_HOST or not SSH_USER or not SSH_KEY_PATH:
+        raise RuntimeError(
+            "Missing admin SSH settings. Set SHEEP_ADMIN_SSH_HOST, SHEEP_ADMIN_SSH_USER, and SHEEP_ADMIN_SSH_KEY_PATH."
+        )
     try:
         import paramiko
         import traceback

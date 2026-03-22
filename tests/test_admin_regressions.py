@@ -1,0 +1,458 @@
+import importlib
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+
+ROOT = Path(__file__).resolve().parents[1]
+APP_DIR = ROOT / "app"
+if str(APP_DIR) not in sys.path:
+    sys.path.insert(0, str(APP_DIR))
+
+
+MODULES_TO_RESET = ("sheep_platform_api", "sheep_platform_db")
+FIXED_SECRET_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+
+
+def _reset_app_modules() -> None:
+    for name in MODULES_TO_RESET:
+        sys.modules.pop(name, None)
+
+
+def _seed_runtime_state(db_module):
+    db_module.ensure_cycle_rollover()
+    cycle = db_module.get_active_cycle()
+    user = db_module.get_user_by_username("sheep")
+    pool_id = db_module.create_factor_pool(
+        cycle_id=int(cycle["id"]),
+        name="Primary Pool",
+        symbol="BTC_USDT",
+        timeframe_min=60,
+        years=2,
+        family="trend",
+        grid_spec={"alpha": [1, 2]},
+        risk_spec={"max_leverage": 2},
+        num_partitions=8,
+        seed=7,
+        active=True,
+    )[0]
+
+    now = db_module._now_iso()
+    conn = db_module._conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO strategies (
+                submission_id, user_id, pool_id, params_json, status,
+                allocation_pct, note, created_at, expires_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (1, int(user["id"]), int(pool_id), json.dumps({"window": 20}), "active", 10.0, "seeded", now, now),
+        )
+        task_cur = conn.execute(
+            """
+            INSERT INTO mining_tasks (
+                user_id, pool_id, cycle_id, partition_idx, num_partitions,
+                status, progress_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(user["id"]),
+                int(pool_id),
+                int(cycle["id"]),
+                0,
+                8,
+                "assigned",
+                json.dumps({"oos_status": "queued"}),
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+        task_id = int(task_cur.lastrowid)
+    finally:
+        conn.close()
+
+    return {
+        "cycle_id": int(cycle["id"]),
+        "user_id": int(user["id"]),
+        "pool_id": int(pool_id),
+        "task_id": task_id,
+    }
+
+
+def _insert_task(db_module, *, user_id: int, pool_id: int, cycle_id: int, status: str, progress: dict) -> int:
+    now = db_module._now_iso()
+    conn = db_module._conn()
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO mining_tasks (
+                user_id, pool_id, cycle_id, partition_idx, num_partitions,
+                status, progress_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(user_id),
+                int(pool_id),
+                int(cycle_id),
+                1,
+                8,
+                str(status),
+                json.dumps(progress),
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+    finally:
+        conn.close()
+
+
+def _query_sys_events(db_module, event_type: str):
+    conn = db_module._conn()
+    try:
+        rows = conn.execute(
+            "SELECT event_type, message, detail_json FROM sys_monitor_events WHERE event_type = ? ORDER BY rowid ASC",
+            (str(event_type),),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()
+
+
+@pytest.fixture()
+def admin_client(tmp_path, monkeypatch):
+    db_path = tmp_path / "admin-regression.sqlite3"
+    monkeypatch.setenv("SHEEP_DB_URL", "")
+    monkeypatch.setenv("SHEEP_DB_PATH", str(db_path))
+    monkeypatch.setenv("SHEEP_COMPUTE_USER", "sheep")
+    monkeypatch.setenv("SHEEP_COMPUTE_PASS", "@@Wm105020")
+    monkeypatch.setenv("SHEEP_SECRET_KEY", FIXED_SECRET_KEY)
+    monkeypatch.setenv("SHEEP_SKIP_SIGNATURE_CHECK", "true")
+
+    _reset_app_modules()
+    api_module = importlib.import_module("sheep_platform_api")
+    db_module = sys.modules["sheep_platform_db"]
+
+    seeded = _seed_runtime_state(db_module)
+    client = TestClient(api_module.app)
+
+    login = client.post(
+        "/token",
+        json={
+            "username": "sheep",
+            "password": "@@Wm105020",
+            "name": "compute",
+            "ttl_seconds": 3600,
+        },
+    )
+    assert login.status_code == 200, login.text
+    token = login.json()["token"]
+
+    seeded.update(
+        {
+            "client": client,
+            "db": db_module,
+            "headers": {"Authorization": f"Bearer {token}"},
+        }
+    )
+    web_token = db_module.create_api_token(seeded["user_id"], ttl_seconds=3600, name="web_session")["token"]
+    seeded["web_headers"] = {"Authorization": f"Bearer {web_token}"}
+
+    try:
+        yield seeded
+    finally:
+        client.close()
+        _reset_app_modules()
+
+
+def test_threshold_alias_round_trip_persists_candidate_keep_top_n(admin_client):
+    client = admin_client["client"]
+    headers = admin_client["headers"]
+    db_module = admin_client["db"]
+
+    initial = client.get("/settings/thresholds", headers=headers)
+    assert initial.status_code == 200
+    initial_body = initial.json()
+    assert initial_body["candidate_keep_top_n"] == 30
+    assert initial_body["keep_top_n"] == 30
+
+    update = client.post(
+        "/admin/settings/thresholds",
+        headers=headers,
+        json={
+            "min_trades": 11,
+            "min_total_return_pct": 2.5,
+            "max_drawdown_pct": 15.0,
+            "min_sharpe": 1.2,
+            "keep_top_n": 5,
+        },
+    )
+    assert update.status_code == 200, update.text
+
+    thresholds = client.get("/settings/thresholds", headers=headers).json()
+    snapshot = client.get("/settings/snapshot", headers=headers).json()["thresholds"]
+    assert thresholds["min_trades"] == 11
+    assert thresholds["min_total_return_pct"] == 2.5
+    assert thresholds["max_drawdown_pct"] == 15.0
+    assert thresholds["min_sharpe"] == 1.2
+    assert thresholds["candidate_keep_top_n"] == 5
+    assert thresholds["keep_top_n"] == 5
+    assert snapshot["candidate_keep_top_n"] == 5
+    assert snapshot["keep_top_n"] == 5
+
+    conn = db_module._conn()
+    try:
+        assert int(db_module.get_setting(conn, "candidate_keep_top_n", 0)) == 5
+    finally:
+        conn.close()
+
+    alias_events = _query_sys_events(db_module, "DEPRECATED_ALIAS_USED")
+    assert any("/admin/settings/thresholds" in row["message"] for row in alias_events)
+
+
+def test_admin_routes_and_aliases_return_seeded_data(admin_client):
+    client = admin_client["client"]
+    headers = admin_client["headers"]
+    db_module = admin_client["db"]
+    pool_id = admin_client["pool_id"]
+    cycle_id = admin_client["cycle_id"]
+
+    pools = client.get("/admin/factor_pools", headers=headers)
+    strategies = client.get("/admin/strategies", headers=headers)
+    assert pools.status_code == 200, pools.text
+    assert strategies.status_code == 200, strategies.text
+
+    pools_body = pools.json()
+    strategies_body = strategies.json()
+    assert pools_body["cycle_id"] == cycle_id
+    assert len(pools_body["pools"]) == 1
+    assert strategies_body["total"] == 1
+
+    alias_pools = client.get("/admin/pools", headers=headers)
+    alias_strategies = client.get("/api/trading/strategies", headers=headers)
+    assert alias_pools.status_code == 200
+    assert alias_pools.json()["pools"][0]["id"] == pool_id
+    assert alias_strategies.status_code == 200
+    assert alias_strategies.json()["total"] == 1
+
+    pool = pools_body["pools"][0]
+    update = client.post(
+        f"/admin/pools/{pool_id}/update",
+        headers=headers,
+        json={
+            "name": "Primary Pool Updated",
+            "symbol": pool["symbol"],
+            "timeframe_min": pool["timeframe_min"],
+            "years": pool["years"],
+            "family": pool["family"],
+            "grid_spec": pool["grid_spec"],
+            "risk_spec": pool["risk_spec"],
+            "num_partitions": pool["num_partitions"],
+            "seed": pool["seed"],
+            "active": bool(pool["active"]),
+        },
+    )
+    assert update.status_code == 200, update.text
+
+    refreshed = client.get("/admin/factor_pools", headers=headers).json()["pools"][0]
+    assert refreshed["name"] == "Primary Pool Updated"
+
+    alias_events = _query_sys_events(db_module, "DEPRECATED_ALIAS_USED")
+    assert any("/admin/pools -> /admin/factor_pools" in row["message"] for row in alias_events)
+    assert any("/api/trading/strategies -> /admin/strategies" in row["message"] for row in alias_events)
+    assert any(f"/admin/pools/{pool_id}/update" in row["message"] for row in alias_events)
+
+
+def test_system_diagnostics_and_stop_route_reflect_runtime_state(admin_client):
+    client = admin_client["client"]
+    headers = admin_client["headers"]
+    db_module = admin_client["db"]
+    user_id = admin_client["user_id"]
+    cycle_id = admin_client["cycle_id"]
+
+    db_module.set_user_run_enabled(user_id, True)
+    stop = client.post("/tasks/stop", headers=headers)
+    assert stop.status_code == 200, stop.text
+    assert db_module.get_user_run_enabled(user_id) is False
+
+    diagnostics = client.get("/admin/system_diagnostics", headers=headers)
+    assert diagnostics.status_code == 200, diagnostics.text
+    body = diagnostics.json()
+    assert body["db_kind"] == "sqlite"
+    assert body["active_cycle"]["id"] == cycle_id
+    assert body["active_pool_count"] == 1
+    assert body["active_strategy_count"] == 1
+    assert body["thresholds"]["candidate_keep_top_n"] == body["thresholds"]["keep_top_n"]
+    assert body["threshold_updated_at"]["candidate_keep_top_n"]
+
+
+def test_dashboard_start_route_workers_token_and_task_review_fields(admin_client):
+    client = admin_client["client"]
+    headers = admin_client["headers"]
+    web_headers = admin_client["web_headers"]
+    db_module = admin_client["db"]
+    user_id = admin_client["user_id"]
+    pool_id = admin_client["pool_id"]
+    cycle_id = admin_client["cycle_id"]
+
+    rejected_task_id = _insert_task(
+        db_module,
+        user_id=user_id,
+        pool_id=pool_id,
+        cycle_id=cycle_id,
+        status="completed",
+        progress={
+            "best_any_score": -0.25,
+            "best_any_passed": False,
+            "review_status": "rejected",
+            "review_reason": "交易筆數僅 30 筆，小於門檻 50 筆",
+            "review_failures": [
+                {
+                    "code": "min_trades",
+                    "label": "交易筆數",
+                    "actual": 30,
+                    "threshold": 50,
+                    "comparator": ">=",
+                    "message": "交易筆數僅 30 筆，小於門檻 50 筆",
+                }
+            ],
+            "oos_status": "rejected",
+        },
+    )
+    _insert_task(
+        db_module,
+        user_id=user_id,
+        pool_id=pool_id,
+        cycle_id=cycle_id,
+        status="completed",
+        progress={
+            "best_any_score": 1.75,
+            "best_any_passed": True,
+            "review_status": "auto_managed",
+            "review_reason": "已達標，後續流程由系統自動管理中",
+            "oos_status": "auto_managed",
+        },
+    )
+
+    dashboard = client.get("/dashboard", headers=headers)
+    assert dashboard.status_code == 200, dashboard.text
+    dash = dashboard.json()
+    assert dash["personal_live_strategies_active"] == 1
+    assert dash["strategies_active"] == 1
+    assert dash["global_strategies_active"] == 1
+    assert dash["personal_review_pipeline_count"] == 1
+
+    tasks = client.get("/tasks", headers=headers)
+    assert tasks.status_code == 200, tasks.text
+    task_rows = {int(t["id"]): t for t in tasks.json()["tasks"]}
+    rejected = task_rows[rejected_task_id]
+    assert rejected["review_status"] == "rejected"
+    assert rejected["review_reason"] == "交易筆數僅 30 筆，小於門檻 50 筆"
+    assert rejected["review_failures"][0]["code"] == "min_trades"
+    assert rejected["best_any_passed"] is False
+
+    conn = db_module._conn()
+    try:
+        conn.execute("DELETE FROM mining_tasks WHERE user_id = ?", (int(user_id),))
+        conn.commit()
+    finally:
+        conn.close()
+
+    db_module.set_user_run_enabled(user_id, False)
+    start = client.post("/tasks/start", headers=headers)
+    assert start.status_code == 200, start.text
+    start_body = start.json()
+    assert start_body["run_enabled"] is True
+    assert start_body["active_cycle_id"] == cycle_id
+    assert start_body["assigned_count"] >= 1
+    assert start_body["task_count"] >= start_body["assigned_count"]
+
+    old_worker = db_module.create_api_token(user_id, ttl_seconds=3600, name="worker")["token"]
+    worker_issue = client.post(
+        "/workers/token",
+        headers=web_headers,
+        json={"ttl_seconds": 7200, "rotate_existing": True},
+    )
+    assert worker_issue.status_code == 200, worker_issue.text
+    worker_body = worker_issue.json()
+    assert worker_body["token_kind"] == "worker"
+    assert worker_body["token"] != old_worker
+    assert worker_body["rotated_count"] >= 1
+    assert db_module.verify_api_token(old_worker) is None
+    fresh_worker = db_module.verify_api_token(worker_body["token"])
+    assert fresh_worker is not None
+    assert fresh_worker["token"]["name"] == "worker"
+
+    db_module.set_user_run_enabled(user_id, False)
+    flags_web = client.get("/flags", headers=web_headers)
+    flags_worker = client.get("/flags", headers={"Authorization": f"Bearer {worker_body['token']}"})
+    flags_compute = client.get("/flags", headers=headers)
+    assert flags_web.status_code == 200
+    assert flags_worker.status_code == 200
+    assert flags_compute.status_code == 200
+    assert flags_web.json()["token_kind"] == "web_session"
+    assert flags_web.json()["assignment_mode"] == "personal_worker"
+    assert flags_web.json()["reason"] == "legacy_web_session_token"
+    assert flags_worker.json()["token_kind"] == "worker"
+    assert flags_worker.json()["assignment_mode"] == "personal_worker"
+    assert flags_worker.json()["reason"] == "run_disabled"
+    assert flags_compute.json()["token_kind"] == "compute"
+    assert flags_compute.json()["assignment_mode"] == "global_compute"
+
+
+def test_legacy_submit_oos_is_read_only_and_unknown_routes_return_404(admin_client):
+    client = admin_client["client"]
+    headers = admin_client["headers"]
+    db_module = admin_client["db"]
+    task_id = admin_client["task_id"]
+
+    before = db_module.get_task(task_id)
+    assert before is not None
+
+    legacy = client.post(f"/tasks/{task_id}/submit_oos", headers=headers)
+    assert legacy.status_code == 200, legacy.text
+    legacy_body = legacy.json()
+    assert legacy_body["deprecated"] is True
+    assert legacy_body["auto_managed"] is True
+    assert legacy_body["oos_status"] == "queued"
+
+    after = db_module.get_task(task_id)
+    assert after["status"] == before["status"]
+    assert after["progress_json"] == before["progress_json"]
+
+    missing = client.get("/totally/missing", headers=headers)
+    assert missing.status_code == 404
+    assert missing.json() == {
+        "ok": False,
+        "error": "route_not_found",
+        "path": "/totally/missing",
+        "method": "GET",
+    }
+
+    alias_events = _query_sys_events(db_module, "DEPRECATED_ALIAS_USED")
+    assert any(f"/tasks/{task_id}/submit_oos" in row["message"] for row in alias_events)
+    unknown_route_events = _query_sys_events(db_module, "UNKNOWN_ROUTE")
+    assert any("/totally/missing" in row["message"] for row in unknown_route_events)
+
+
+def test_spa_api_contract_script_passes():
+    script = ROOT / "deploy" / "scripts" / "check_spa_api_contract.py"
+    result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_spa_uses_dedicated_worker_token_and_review_status_fields():
+    html_path = ROOT / "deploy" / "nginx" / "html" / "index.html"
+    html = html_path.read_text(encoding="utf-8")
+    assert "sheep_worker_token" in html
+    assert 'fetchApi(\'/workers/token\'' in html
+    assert 'name: "web_session"' in html
+    assert "getScoreNumber(t) >= 0" not in html
+    assert "getReviewStatusMeta" in html

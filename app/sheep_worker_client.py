@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 import logging
 
+from sheep_runtime_paths import default_worker_id_path, runtime_dir
+
 # 【專家級優化】徹底屏蔽 Streamlit 在非 Web 環境下運作時產生的洗版警告
 # 避免因無限輸出警告導致終端機 IO 阻塞或 GUI 介面假死崩潰
 logging.getLogger("streamlit").setLevel(logging.ERROR)
@@ -173,8 +175,11 @@ class Thresholds:
 
 
 def _load_or_create_worker_id(path: str) -> str:
-    path = str(path or "").strip() or ".sheep_worker_id"
+    path = str(path or "").strip() or str(default_worker_id_path())
+    if not os.path.isabs(path):
+        path = str((runtime_dir() / path).resolve())
     try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         if os.path.exists(path):
             s = open(path, "r", encoding="utf-8").read().strip()
             if s:

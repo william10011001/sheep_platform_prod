@@ -28,6 +28,13 @@ def enrich_task_row(task: Dict[str, Any]) -> Dict[str, Any]:
     if "risk_spec_json" in t:
         try: t["risk_spec"] = json.loads(t["risk_spec_json"] or "{}")
         except Exception: t["risk_spec"] = {}
+    review = normalize_review_fields(dict(t.get("progress") or {}), str(t.get("status") or ""))
+    t["best_any_passed"] = bool((t.get("progress") or {}).get("best_any_passed") or False)
+    t["best_any_score"] = (t.get("progress") or {}).get("best_any_score")
+    t["oos_status"] = str(review.get("oos_status") or "not_eligible")
+    t["review_status"] = str(review.get("review_status") or "not_eligible")
+    t["review_reason"] = str(review.get("review_reason") or "")
+    t["review_failures"] = list(review.get("review_failures") or [])
     return t
 
 def evaluate_thresholds(metrics: Dict[str, Any], min_trades: int, min_total_return_pct: float, max_drawdown_pct: float, min_sharpe: float) -> Dict[str, Any]:
@@ -50,13 +57,33 @@ def evaluate_thresholds(metrics: Dict[str, Any], min_trades: int, min_total_retu
     }
 
 def normalize_review_fields(progress: Dict[str, Any], status: str) -> Dict[str, Any]:
+    progress = dict(progress or {})
+    explicit_oos = str(progress.get("oos_status") or "").strip()
+    explicit_review = str(progress.get("review_status") or "").strip()
+    review_reason = str(progress.get("review_reason") or "")
+    review_failures = list(progress.get("review_failures") or [])
+    if explicit_oos or explicit_review:
+        return {
+            "oos_status": explicit_oos or explicit_review or "not_eligible",
+            "review_status": explicit_review or explicit_oos or "not_eligible",
+            "review_reason": review_reason,
+            "review_failures": review_failures,
+        }
     if status != "completed":
-        return {"oos_status": "not_eligible", "review_status": "not_eligible", "review_reason": "", "review_failures": []}
+        status_norm = str(status or "").strip().lower()
+        derived = "not_eligible"
+        if status_norm in {"assigned", "queued"}:
+            derived = "queued"
+        elif status_norm in {"running", "syncing"}:
+            derived = "running"
+        elif status_norm == "error":
+            derived = "error"
+        return {"oos_status": derived, "review_status": derived, "review_reason": review_reason, "review_failures": review_failures}
     return {
         "oos_status": str(progress.get("oos_status") or progress.get("review_status") or "not_eligible"),
         "review_status": str(progress.get("review_status") or progress.get("oos_status") or "not_eligible"),
-        "review_reason": str(progress.get("review_reason") or ""),
-        "review_failures": list(progress.get("review_failures") or [])
+        "review_reason": review_reason,
+        "review_failures": review_failures
     }
 
 def count_review_pipeline_tasks(completed_tasks: List[Dict[str, Any]]) -> int:
@@ -81,7 +108,7 @@ if hasattr(db, "init_db"):
 
 # [極致修復] 自動對齊 Compute 算力節點的系統帳號與權限
 try:
-    _c_user = os.environ.get("SHEEP_COMPUTE_USER", "sheep").strip()
+    _c_user = os.environ.get("SHEEP_COMPUTE_USER", "").strip()
     _c_pass = os.environ.get("SHEEP_COMPUTE_PASS", "").strip()
     if _c_user and _c_pass:
         from sheep_platform_security import hash_password, normalize_username
@@ -95,7 +122,10 @@ try:
             _conn = db._conn()
             try:
                 # 霸道覆寫密碼，確保與 .env 絕對一致，並強制解鎖、給予 admin 權限
-                _conn.execute("UPDATE users SET password_hash = ?, role = 'admin', run_enabled = 1, disabled = 0 WHERE username_norm = ?", (_pw_str, _c_norm))
+                _conn.execute(
+                    "UPDATE users SET role = 'admin', run_enabled = 1, disabled = 0 WHERE username_norm = ?",
+                    (_c_norm,),
+                )
                 _conn.commit()
             finally:
                 _conn.close()
@@ -966,7 +996,7 @@ def landing() -> HTMLResponse:
     """
     [專家級修改] 將管理員面板無縫整合至系統根目錄 (Root Path)。
     一般訪客 (如 LINE/IG 爬蟲) 仍會讀取到正確的 OG Meta Tags，畫面上會提供按鈕前往 Streamlit 平台。
-    若在畫面上的特權表單輸入最高權限密碼 (sheep / @@Wm105020)，即會原地解鎖並展開全中文管理員控制面板。
+    若在畫面上的特權表單輸入已於環境變數中配置的管理權限密碼，即會原地解鎖並展開全中文管理員控制面板。
     """
     conn = db._conn()
     try:
@@ -1512,7 +1542,7 @@ def issue_token(req: Request, body: TokenRequest):
             raise HTTPException(status_code=429, detail="rate_limited", headers=headers)
 
         if requested_name == "compute":
-            env_user = os.environ.get("SHEEP_COMPUTE_USER", "sheep").strip()
+            env_user = os.environ.get("SHEEP_COMPUTE_USER", "").strip()
             env_pass = os.environ.get("SHEEP_COMPUTE_PASS", "").strip()
             if env_user and env_pass and body.username == env_user and body.password == env_pass:
                 u = db.get_user_by_username(env_user)

@@ -11,8 +11,10 @@ from typing import Optional, Tuple
 import bcrypt
 from cryptography.fernet import Fernet, InvalidToken
 
+from sheep_runtime_paths import data_dir
 
-DATA_DIR = Path("data")
+
+DATA_DIR = data_dir()
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 SECRET_FILE = DATA_DIR / "secret.key"

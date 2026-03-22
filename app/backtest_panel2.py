@@ -26,6 +26,8 @@ from pathlib import Path
 from dateutil.relativedelta import relativedelta
 from filelock import FileLock, Timeout
 
+from sheep_runtime_paths import data_dir
+
 # UI 與視覺
 import streamlit as st
 import plotly.graph_objects as go
@@ -46,7 +48,7 @@ BITMART_UI_TIMEFRAMES = {
     "1d": 1440,
 }
 
-DATA_DIR = Path("data")
+DATA_DIR = data_dir()
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
