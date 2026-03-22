@@ -140,9 +140,14 @@
                             </div>
                         </div>
                     </div>
+                    
+                    <div v-show="!captchaState.token && authForm.username.trim().length > 0 && authForm.password.trim().length > 0" class="w-full mt-4 p-3 border border-red-500/50 bg-red-900/20 rounded text-red-400 text-xs text-center flex flex-col gap-2">
+                        <span>無法載入安全驗證碼，請確認網路連線或伺服器狀態。</span>
+                        <button type="button" @click="resetCaptcha" class="px-4 py-1.5 bg-red-800/50 hover:bg-red-700/50 rounded border border-red-600/50 mx-auto transition-colors font-bold tracking-wide">重新載入驗證碼</button>
+                    </div>
 
                     <div v-if="errorMsg" class="text-red-500 text-sm font-bold">{{ errorMsg }}</div>
-                    <button type="submit" :disabled="!captchaState.success" class="cyber-btn w-full py-2.5 rounded-md font-bold mt-4 disabled:opacity-50 disabled:cursor-not-allowed">{{ isLoginMode ? '登入' : '註冊' }}</button>
+                    <button type="submit" :disabled="!captchaState.success" class="cyber-btn w-full py-2.5 rounded-md font-bold mt-4 disabled:opacity-50 disabled:cursor-not-allowed" :title="!captchaState.success ? '請先完成上方滑動驗證' : ''">{{ isLoginMode ? '登入' : '註冊' }}</button>
                     
                     <div class="text-center pt-2">
                         <button type="button" @click="isLoginMode = !isLoginMode; errorMsg = ''; authForm.password = ''; resetCaptcha();" class="text-sm text-gray-400 hover:text-white transition-colors">
@@ -543,6 +548,8 @@
                         captchaState.tracks = [];
                     } catch (e) {
                         console.error('加載驗證碼失敗', e);
+                        // [專家級修復] 驗證碼加載失敗時給予明確提示，避免使用者卡在無法登入的畫面
+                        showToast(`加載安全驗證失敗：${e.message}`, 'error', 5000);
                     }
                 };
 
@@ -805,25 +812,28 @@
                     try {
                         const res = await fetch(`${API_BASE}${endpoint}`, { ...options, headers });
                         pingMs.value = Math.round(performance.now() - start);
+                        const contentType = res.headers.get("content-type") || "";
+                        
+                        // [專家級修復] 1. 優先攔截並處理非 JSON 響應 (例如 Cloudflare 的 502 Bad Gateway 網頁)
+                        if (!contentType.includes("application/json")) {
+                            const badText = await res.text();
+                            if (badText.includes('<html') || badText.includes('Cloudflare') || badText.includes('502 Bad Gateway') || res.status >= 500) {
+                                throw new Error(`系統連線異常 (伺服器重啟或網路擁塞)，請稍後再試。`);
+                            }
+                            throw new Error(`API 錯誤：未收到預期的資料格式，狀態碼 ${res.status}。`);
+                        }
+
+                        // [專家級修復] 2. 確認為 JSON 後，再解析業務邏輯的錯誤狀態
                         if (!res.ok) {
                             let errorText = await res.text();
                             try {
                                 const errObj = JSON.parse(errorText);
-                                errorText = JSON.stringify(errObj); // 嘗試格式化顯示
+                                // 優先取用友善的錯誤訊息欄位
+                                errorText = errObj.detail || errObj.message || JSON.stringify(errObj);
                             } catch(e) {}
                             throw new Error(`API 錯誤 (${res.status}): ${errorText}`);
                         }
                         
-                        // [專家級防護] 嚴格檢查 Response 的 Content-Type，防止 Nginx 配置錯誤或路由偏移時收到 200 OK 的 HTML 而引發解析崩潰
-                        const contentType = res.headers.get("content-type") || "";
-                        if (!contentType.includes("application/json")) {
-                            const badText = await res.text();
-                            // [專家級修復] 遇到 Cloudflare 520 / Nginx 502 等錯誤 HTML 時，給予友善提示，隱藏龐大代碼
-                            if (badText.includes('<html') || badText.includes('Cloudflare') || badText.includes('502 Bad Gateway')) {
-                                throw new Error(`系統連線異常 (伺服器重啟或升級中)，請稍後再試。`);
-                            }
-                            throw new Error(`API 路由錯誤：預期收到 JSON，卻收到 ${contentType} (內容預覽：${badText.substring(0, 50)}...)`);
-                        }
                         return await res.json();
                     } catch (error) {
                         console.error(`[fetchApi Error] ${endpoint}:`, error);
@@ -1264,7 +1274,7 @@
                 return { 
                     user, isLoading, isLoginMode, currentTab, authForm, errorMsg, handleAuth, logout, 
                     userToken, copyToken, refreshWorkerToken, // 導出 Token 顯示與複製方法
-                    captchaContainer, captchaState, onSliderDown, // 導出驗證碼狀態與事件 
+                    captchaContainer, captchaState, onSliderDown, resetCaptcha, loadCaptcha, // 導出驗證碼狀態與事件 
                     toastMsg, toastType, // 導出供 UI 使用
                     dashData, tasksData, leaderboard, pingMs, startMining, stopMining, 
                     getStatusText, getPhaseText, getProgressState, getScore, getScoreNumber,
