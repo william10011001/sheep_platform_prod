@@ -49,7 +49,7 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 warnings.simplefilter(action='ignore', category=FutureWarning)
 
-# [專家級潔癖] 必須在 import backtest_panel2 之前封鎖 Streamlit Cache 警告
+# [專家級潔癖] 在匯入任何可能間接觸發 Streamlit 的模組前，先封鎖快取警告
 import logging
 logging.getLogger("streamlit.runtime.caching.cache_data_api").setLevel(logging.CRITICAL)
 
@@ -62,14 +62,14 @@ if str(APP_DIR) not in sys.path:
 from sheep_holy_grail_runtime import HolyGrailRuntime, run_holy_grail_build
 from sheep_runtime_paths import (
     ensure_parent,
-    import_backtest_panel,
+    import_backtest_runtime,
     realtime_config_path,
     realtime_exec_log_dir,
     realtime_log_path,
     realtime_state_path,
 )
 
-bt, HOLY_GRAIL_IMPORT_ERROR = import_backtest_panel(PROJECT_ROOT)
+bt, HOLY_GRAIL_IMPORT_ERROR = import_backtest_runtime(PROJECT_ROOT)
 
 # [專家級潔癖] import 完成後，進行全域掃蕩，確保沒有任何遺漏的 Streamlit 日誌會弄髒您的實盤介面
 for name in list(logging.root.manager.loggerDict.keys()):
@@ -2683,7 +2683,7 @@ class FactorPoolUpdater:
 
     def start(self):
         if bt is None:
-            log(f"【致命錯誤】聖杯引擎停用，無法匯入 backtest_panel2: {HOLY_GRAIL_IMPORT_ERROR}")
+            log(f"【致命錯誤】聖杯引擎停用，無法匯入 backtest runtime: {HOLY_GRAIL_IMPORT_ERROR}")
             self.running = False
             return
         t = threading.Thread(target=self._loop, daemon=True)
@@ -2704,7 +2704,7 @@ class FactorPoolUpdater:
 
     def _build_holy_grail(self):
         if bt is None:
-            log(f"【致命錯誤】聖杯引擎停用，無法匯入 backtest_panel2: {HOLY_GRAIL_IMPORT_ERROR}")
+            log(f"【致命錯誤】聖杯引擎停用，無法匯入 backtest runtime: {HOLY_GRAIL_IMPORT_ERROR}")
             self.running = False
             return
 

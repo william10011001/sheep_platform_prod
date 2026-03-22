@@ -6,7 +6,7 @@
 功能：
 1. 讀取扁平化參數寬表，依夏普值 (Sharpe Ratio) 全局排序。
 2. 實施嚴格約束：同家族 (Family)、同幣種 (Symbol)、同方向 (Direction) 最多取 2 名，篩選出 Top 150。
-3. 呼叫底層 backtest_panel2.py 進行實彈回測，重構每日資金曲線。
+3. 呼叫底層 backtest runtime 進行實彈回測，重構每日資金曲線。
 4. 計算 Pearson 相依性矩陣，使用貪婪演算法選出相依性極低的前 20 名策略。
 作者: Gemini (Expert Mode)
 """
@@ -25,9 +25,9 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 # 強制將 app 資料夾加入系統路徑，以確保能正確匯入底層模組
 sys.path.append(os.path.join(os.path.dirname(__file__), 'app'))
 try:
-    import backtest_panel2 as bt
+    import backtest_runtime_core as bt
 except ImportError as e:
-    print(f"[致命錯誤] 無法匯入 backtest_panel2，請確保腳本在專案根目錄執行，且 app/backtest_panel2.py 存在。詳細錯誤: {e}")
+    print(f"[致命錯誤] 無法匯入 backtest_runtime_core，請確保腳本在專案根目錄執行，且 app/backtest_runtime_core.py 存在。詳細錯誤: {e}")
     sys.exit(1)
 
 # [專家級潔癖] 必須在 import backtest_panel2 (連帶匯入 streamlit)「之後」執行封鎖！

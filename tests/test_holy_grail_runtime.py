@@ -1,4 +1,5 @@
 import importlib
+import subprocess
 import sys
 from pathlib import Path
 
@@ -41,6 +42,61 @@ def test_import_backtest_panel_failure_is_explicit(monkeypatch, tmp_path):
     assert module is None
     assert "backtest_panel2" in error
     assert str(tmp_path / "app") in error
+
+
+def test_import_backtest_runtime_failure_is_explicit(monkeypatch, tmp_path):
+    def _boom(_name):
+        raise ImportError("boom")
+
+    monkeypatch.setattr(importlib, "import_module", _boom)
+    module, error = paths.import_backtest_runtime(tmp_path)
+    assert module is None
+    assert "backtest_runtime_core" in error
+    assert str(tmp_path / "app") in error
+
+
+def test_backend_runtime_import_does_not_emit_streamlit_runtime_warning():
+    code = (
+        "import sys;"
+        f"sys.path.insert(0, {str(APP_DIR)!r});"
+        "import backtest_runtime_core as mod;"
+        "print(bool(getattr(mod, 'run_backtest', None)))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "True"
+    assert "No runtime found" not in result.stderr
+    assert "MemoryCacheStorageManager" not in result.stderr
+
+
+def test_realtime_trader_import_does_not_emit_streamlit_runtime_warning():
+    script_path = ROOT / "實盤程式" / "實盤因子池下單程式.py"
+    code = (
+        "import importlib.util, sys;"
+        f"sys.path.insert(0, {str(APP_DIR)!r});"
+        f"script_path = {str(script_path)!r};"
+        "spec = importlib.util.spec_from_file_location('sheep_live_trader', script_path);"
+        "mod = importlib.util.module_from_spec(spec);"
+        "spec.loader.exec_module(mod);"
+        "print(bool(getattr(mod, 'HolyGrailRuntime', None)))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "True"
+    assert "No runtime found" not in result.stderr
+    assert "MemoryCacheStorageManager" not in result.stderr
 
 
 def test_kline_loader_supports_exact_and_resample(monkeypatch, tmp_path):

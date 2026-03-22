@@ -129,7 +129,7 @@ def main() -> None:
                             tf = int(oos_task.get("timeframe_min", 15))
                             years = int(oos_task.get("years", 3))
                             
-                            import backtest_panel2 as bt
+                            import backtest_runtime_core as bt
                             # 真實讀取本地/下載歷史 K 線，VM 伺服器維持 0% 負擔！
                             csv_main, _ = bt.ensure_bitmart_data(symbol, tf, years, auto_sync=True, skip_1m=True)
                             df = bt.load_and_validate_csv(csv_main)

@@ -21,7 +21,7 @@ logging.getLogger("streamlit").setLevel(logging.ERROR)
 logging.getLogger("streamlit.runtime.caching.cache_data_api").setLevel(logging.ERROR)
 logging.getLogger("streamlit.runtime.scriptrunner_utils.script_run_context").setLevel(logging.ERROR)
 
-import backtest_panel2 as bt
+import backtest_runtime_core as bt
 
 # =========================================================
 # 專家級多進程核心：加入終端機詳細調試輸出，揭露假死真相
@@ -68,7 +68,7 @@ def _process_eval_chunk(args):
         t0 = time.time()
         
         results = []
-        import backtest_panel2 as bt
+        import backtest_runtime_core as bt
         import math
         
         # 【數值清洗防護盾】攔截所有導致 JSON 崩潰的 NaN 與 Infinity

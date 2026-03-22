@@ -15,7 +15,7 @@ APP_DIR = ROOT / "app"
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
-from sheep_runtime_paths import import_backtest_panel, project_root
+from sheep_runtime_paths import import_backtest_runtime, project_root
 
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -28,7 +28,7 @@ def _print(message: str) -> None:
 
 
 def main() -> int:
-    bt, import_error = import_backtest_panel(project_root())
+    bt, import_error = import_backtest_runtime(project_root())
     if bt is None:
         print(f"[fatal] {import_error}")
         return 1

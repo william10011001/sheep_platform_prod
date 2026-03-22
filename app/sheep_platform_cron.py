@@ -2,7 +2,7 @@ import argparse
 import hashlib
 from datetime import datetime, timedelta, timezone
 
-import backtest_panel2 as bt
+import backtest_runtime_core as bt
 
 import sheep_platform_db as db
 

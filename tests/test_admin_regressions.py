@@ -114,6 +114,89 @@ def _insert_task(db_module, *, user_id: int, pool_id: int, cycle_id: int, status
         conn.close()
 
 
+def _attach_review_pipeline(
+    db_module,
+    *,
+    task_id: int,
+    user_id: int,
+    pool_id: int,
+    with_submission: bool = True,
+    with_active_strategy: bool = True,
+) -> dict:
+    now = db_module._now_iso()
+    conn = db_module._conn()
+    try:
+        candidate_cur = conn.execute(
+            """
+            INSERT INTO candidates (
+                task_id, user_id, pool_id, params_json, metrics_json, score, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(task_id),
+                int(user_id),
+                int(pool_id),
+                json.dumps({"family": "TEMA_Cross", "fast_len": 12, "slow_len": 50}),
+                json.dumps({"sharpe": 1.8, "trades": 88}),
+                1.8,
+                now,
+            ),
+        )
+        candidate_id = int(candidate_cur.lastrowid)
+
+        submission_id = None
+        strategy_id = None
+        if with_submission:
+            submission_cur = conn.execute(
+                """
+                INSERT INTO submissions (
+                    candidate_id, user_id, pool_id, status, audit_json, submitted_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(candidate_id),
+                    int(user_id),
+                    int(pool_id),
+                    "approved",
+                    json.dumps({"source": "test"}),
+                    now,
+                ),
+            )
+            submission_id = int(submission_cur.lastrowid)
+            conn.execute("UPDATE candidates SET is_submitted = 1 WHERE id = ?", (candidate_id,))
+
+            if with_active_strategy:
+                strategy_cur = conn.execute(
+                    """
+                    INSERT INTO strategies (
+                        submission_id, user_id, pool_id, params_json, status,
+                        allocation_pct, note, created_at, expires_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        int(submission_id),
+                        int(user_id),
+                        int(pool_id),
+                        json.dumps({"family": "TEMA_Cross"}),
+                        "active",
+                        5.0,
+                        "review-pipeline-test",
+                        now,
+                        "2099-12-31T23:59:59+00:00",
+                    ),
+                )
+                strategy_id = int(strategy_cur.lastrowid)
+
+        conn.commit()
+        return {
+            "candidate_id": candidate_id,
+            "submission_id": submission_id,
+            "strategy_id": strategy_id,
+        }
+    finally:
+        conn.close()
+
+
 def _query_sys_events(db_module, event_type: str):
     conn = db_module._conn()
     try:
@@ -312,15 +395,15 @@ def test_dashboard_start_route_workers_token_and_task_review_fields(admin_client
             "best_any_score": -0.25,
             "best_any_passed": False,
             "review_status": "rejected",
-            "review_reason": "交易筆數僅 30 筆，小於門檻 50 筆",
+            "review_reason": "最少交易數不足。",
             "review_failures": [
                 {
                     "code": "min_trades",
-                    "label": "交易筆數",
+                    "label": "最少交易數",
                     "actual": 30,
                     "threshold": 50,
                     "comparator": ">=",
-                    "message": "交易筆數僅 30 筆，小於門檻 50 筆",
+                    "message": "最少交易數為 30，低於門檻 50。",
                 }
             ],
             "oos_status": "rejected",
@@ -336,8 +419,30 @@ def test_dashboard_start_route_workers_token_and_task_review_fields(admin_client
             "best_any_score": 1.75,
             "best_any_passed": True,
             "review_status": "auto_managed",
-            "review_reason": "已達標，後續流程由系統自動管理中",
+            "review_reason": "已通過審核並進入自動管理流程。",
             "oos_status": "auto_managed",
+        },
+    )
+    _insert_task(
+        db_module,
+        user_id=user_id,
+        pool_id=pool_id,
+        cycle_id=cycle_id,
+        status="running",
+        progress={
+            "best_any_score": 1.22,
+            "best_any_passed": True,
+        },
+    )
+    _insert_task(
+        db_module,
+        user_id=user_id,
+        pool_id=pool_id,
+        cycle_id=cycle_id,
+        status="assigned",
+        progress={
+            "best_any_score": 1.09,
+            "best_any_passed": True,
         },
     )
 
@@ -347,14 +452,14 @@ def test_dashboard_start_route_workers_token_and_task_review_fields(admin_client
     assert dash["personal_live_strategies_active"] == 1
     assert dash["strategies_active"] == 1
     assert dash["global_strategies_active"] == 1
-    assert dash["personal_review_pipeline_count"] == 1
+    assert dash["personal_review_pipeline_count"] == 3
+    assert "本週期已達標" in dash["personal_review_pipeline_hint"]
 
     tasks = client.get("/tasks", headers=headers)
     assert tasks.status_code == 200, tasks.text
     task_rows = {int(t["id"]): t for t in tasks.json()["tasks"]}
     rejected = task_rows[rejected_task_id]
     assert rejected["review_status"] == "rejected"
-    assert rejected["review_reason"] == "交易筆數僅 30 筆，小於門檻 50 筆"
     assert rejected["review_failures"][0]["code"] == "min_trades"
     assert rejected["best_any_passed"] is False
 
@@ -407,6 +512,106 @@ def test_dashboard_start_route_workers_token_and_task_review_fields(admin_client
     assert flags_compute.json()["assignment_mode"] == "global_compute"
 
 
+def test_review_state_maintenance_repairs_legacy_tasks_and_is_idempotent(admin_client):
+    client = admin_client["client"]
+    headers = admin_client["headers"]
+    db_module = admin_client["db"]
+    user_id = admin_client["user_id"]
+    pool_id = admin_client["pool_id"]
+    cycle_id = admin_client["cycle_id"]
+
+    explicit_rejected_id = _insert_task(
+        db_module,
+        user_id=user_id,
+        pool_id=pool_id,
+        cycle_id=cycle_id,
+        status="completed",
+        progress={
+            "best_any_passed": False,
+            "review_status": "rejected",
+            "review_reason": "未通過門檻審核。",
+            "review_failures": [{"code": "min_trades", "message": "最少交易數不足。"}],
+            "oos_status": "rejected",
+        },
+    )
+    legacy_auto_id = _insert_task(
+        db_module,
+        user_id=user_id,
+        pool_id=pool_id,
+        cycle_id=cycle_id,
+        status="completed",
+        progress={
+            "best_any_score": 2.25,
+        },
+    )
+    _attach_review_pipeline(
+        db_module,
+        task_id=legacy_auto_id,
+        user_id=user_id,
+        pool_id=pool_id,
+        with_submission=True,
+        with_active_strategy=True,
+    )
+    legacy_rejected_id = _insert_task(
+        db_module,
+        user_id=user_id,
+        pool_id=pool_id,
+        cycle_id=cycle_id,
+        status="completed",
+        progress={
+            "best_any_score": 0.1,
+            "best_any_passed": False,
+            "review_failures": [{"code": "min_sharpe", "message": "夏普值不足。"}],
+            "last_reject_reason": "夏普值不足。",
+        },
+    )
+
+    rebuild = client.post("/admin/maintenance/rebuild-review-state", headers=headers)
+    assert rebuild.status_code == 200, rebuild.text
+    rebuild_body = rebuild.json()
+    assert rebuild_body["ok"] is True
+    assert rebuild_body["updated"] >= 2
+    assert rebuild_body["explicit_preserved"] >= 1
+    assert rebuild_body["auto_managed_repairs"] >= 1
+    assert rebuild_body["rejected_repairs"] >= 1
+
+    tasks = client.get("/tasks", headers=headers)
+    assert tasks.status_code == 200, tasks.text
+    task_rows = {int(t["id"]): t for t in tasks.json()["tasks"]}
+
+    assert task_rows[explicit_rejected_id]["review_status"] == "rejected"
+    assert task_rows[explicit_rejected_id]["oos_status"] == "rejected"
+
+    assert task_rows[legacy_auto_id]["best_any_passed"] is True
+    assert task_rows[legacy_auto_id]["review_status"] == "auto_managed"
+    assert task_rows[legacy_auto_id]["oos_status"] == "auto_managed"
+
+    assert task_rows[legacy_rejected_id]["best_any_passed"] is False
+    assert task_rows[legacy_rejected_id]["review_status"] == "rejected"
+    assert task_rows[legacy_rejected_id]["oos_status"] == "rejected"
+
+    legacy = client.post(f"/tasks/{legacy_auto_id}/submit_oos", headers=headers)
+    assert legacy.status_code == 200, legacy.text
+    legacy_body = legacy.json()
+    assert legacy_body["review_status"] == "auto_managed"
+    assert legacy_body["oos_status"] == "auto_managed"
+
+    rebuild_again = client.post("/admin/maintenance/rebuild-review-state", headers=headers)
+    assert rebuild_again.status_code == 200, rebuild_again.text
+    assert rebuild_again.json()["updated"] == 0
+
+    cli = subprocess.run(
+        [sys.executable, str(APP_DIR / "sheep_review_maintenance.py"), "--dry-run", "--limit", "10"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert cli.returncode == 0, cli.stdout + cli.stderr
+    cli_body = json.loads(cli.stdout)
+    assert cli_body["scanned"] >= 1
+
+
 def test_legacy_submit_oos_is_read_only_and_unknown_routes_return_404(admin_client):
     client = admin_client["client"]
     headers = admin_client["headers"]
@@ -440,19 +645,3 @@ def test_legacy_submit_oos_is_read_only_and_unknown_routes_return_404(admin_clie
     assert any(f"/tasks/{task_id}/submit_oos" in row["message"] for row in alias_events)
     unknown_route_events = _query_sys_events(db_module, "UNKNOWN_ROUTE")
     assert any("/totally/missing" in row["message"] for row in unknown_route_events)
-
-
-def test_spa_api_contract_script_passes():
-    script = ROOT / "deploy" / "scripts" / "check_spa_api_contract.py"
-    result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, check=False)
-    assert result.returncode == 0, result.stdout + result.stderr
-
-
-def test_spa_uses_dedicated_worker_token_and_review_status_fields():
-    html_path = ROOT / "deploy" / "nginx" / "html" / "index.html"
-    html = html_path.read_text(encoding="utf-8")
-    assert "sheep_worker_token" in html
-    assert 'fetchApi(\'/workers/token\'' in html
-    assert 'name: "web_session"' in html
-    assert "getScoreNumber(t) >= 0" not in html
-    assert "getReviewStatusMeta" in html

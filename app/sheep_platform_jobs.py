@@ -305,10 +305,10 @@ class JobManager:
 
     def _auto_enqueue_orphans(self) -> None:
         try:
-            import backtest_panel2
+            import backtest_runtime_core as bt_runtime
         except Exception as e:
             import sys
-            print(f"[CRITICAL] backtest_panel2 import failed: {e}", file=sys.stderr)
+            print(f"[CRITICAL] backtest_runtime_core import failed: {e}", file=sys.stderr)
             return
 
         conn = db._conn()
@@ -360,7 +360,7 @@ class JobManager:
 
         # 1. 記憶體層級快速加入佇列
         for uid, tids in to_enqueue.items():
-            self.enqueue_many(int(uid), tids, backtest_panel2)
+            self.enqueue_many(int(uid), tids, bt_runtime)
 
         # [致命死鎖修復] 移除了將狀態標記為 'queued' 的批次更新。
         # 原因是核心的 db.claim_task_for_run() 只允許領取狀態為 'assigned' 的任務，

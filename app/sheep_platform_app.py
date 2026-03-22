@@ -6194,7 +6194,7 @@ def _page_dashboard(user: Dict[str, Any]) -> None:
 
         active_strategies = int(db.count_strategies(user_id=int(user["id"]), status="active"))
         global_active_strategies = int(db.count_strategies(status="active"))
-        review_pipeline_count = int(count_review_pipeline_tasks([t for t in tasks if t.get("status") == "completed"]))
+        review_pipeline_count = int(count_review_pipeline_tasks(tasks))
         unpaid = [p for p in payouts if p["status"] == "unpaid"]
 
         st.markdown('<div class="metric-row">', unsafe_allow_html=True)

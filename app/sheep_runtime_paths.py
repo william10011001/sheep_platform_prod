@@ -139,6 +139,16 @@ def import_backtest_panel(root: Optional[Path | str] = None) -> Tuple[object | N
         return None, f"Unable to import backtest_panel2 from {app_path}: {exc}"
 
 
+def import_backtest_runtime(root: Optional[Path | str] = None) -> Tuple[object | None, str | None]:
+    try:
+        app_path = ensure_app_on_syspath(root)
+        module = importlib.import_module("backtest_runtime_core")
+        return module, None
+    except Exception as exc:
+        app_path = Path(root).resolve() / "app" if root is not None else app_dir()
+        return None, f"Unable to import backtest_runtime_core from {app_path}: {exc}"
+
+
 def normalize_symbol(symbol: str) -> str:
     return str(symbol or "").strip().replace("/", "_").replace(":", "_")
 

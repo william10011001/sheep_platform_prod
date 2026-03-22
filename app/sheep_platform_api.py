@@ -14,89 +14,42 @@ import logging
 from pydantic import BaseModel
 
 import sheep_platform_db as db
-import backtest_panel2 as bt
+import backtest_runtime_core as bt
+from sheep_review import (
+    count_review_pipeline_tasks as _count_review_pipeline_tasks,
+    enrich_task_row as _enrich_task_row,
+    evaluate_thresholds as _evaluate_thresholds,
+    normalize_review_fields as _normalize_review_fields,
+    rebuild_review_state as _rebuild_review_state,
+)
 
-# [專家級修復] 補充遺失的 sheep_review 模組核心函數，直接內建於 API 層確保啟動無礙
 def enrich_task_row(task: Dict[str, Any]) -> Dict[str, Any]:
-    t = dict(task)
-    if "progress_json" in t:
-        try: t["progress"] = json.loads(t["progress_json"] or "{}")
-        except Exception: t["progress"] = {}
-    if "grid_spec_json" in t:
-        try: t["grid_spec"] = json.loads(t["grid_spec_json"] or "{}")
-        except Exception: t["grid_spec"] = {}
-    if "risk_spec_json" in t:
-        try: t["risk_spec"] = json.loads(t["risk_spec_json"] or "{}")
-        except Exception: t["risk_spec"] = {}
-    review = normalize_review_fields(dict(t.get("progress") or {}), str(t.get("status") or ""))
-    t["best_any_passed"] = bool((t.get("progress") or {}).get("best_any_passed") or False)
-    t["best_any_score"] = (t.get("progress") or {}).get("best_any_score")
-    t["oos_status"] = str(review.get("oos_status") or "not_eligible")
-    t["review_status"] = str(review.get("review_status") or "not_eligible")
-    t["review_reason"] = str(review.get("review_reason") or "")
-    t["review_failures"] = list(review.get("review_failures") or [])
-    return t
+    row = _enrich_task_row(task)
+    if "grid_spec_json" in row:
+        try:
+            row["grid_spec"] = json.loads(row["grid_spec_json"] or "{}")
+        except Exception:
+            row["grid_spec"] = {}
+    if "risk_spec_json" in row:
+        try:
+            row["risk_spec"] = json.loads(row["risk_spec_json"] or "{}")
+        except Exception:
+            row["risk_spec"] = {}
+    return row
 
 def evaluate_thresholds(metrics: Dict[str, Any], min_trades: int, min_total_return_pct: float, max_drawdown_pct: float, min_sharpe: float) -> Dict[str, Any]:
-    failures = []
-    trades = int(metrics.get("trades", 0))
-    ret = float(metrics.get("total_return_pct", 0.0))
-    dd = float(metrics.get("max_drawdown_pct", 0.0))
-    sh = float(metrics.get("sharpe", 0.0))
-    
-    if trades < min_trades: failures.append(f"交易筆數 {trades} < {min_trades}")
-    if ret < min_total_return_pct: failures.append(f"總報酬 {ret:.2f}% < {min_total_return_pct}%")
-    if dd > max_drawdown_pct: failures.append(f"最大回撤 {dd:.2f}% > {max_drawdown_pct}%")
-    if sh < min_sharpe: failures.append(f"夏普值 {sh:.2f} < {min_sharpe}")
-    
-    passed = len(failures) == 0
+    result = _evaluate_thresholds(metrics, min_trades, min_total_return_pct, max_drawdown_pct, min_sharpe)
     return {
-        "passed": passed,
-        "reason": "、".join(failures) if not passed else "已達標",
-        "failures": failures
+        "passed": bool(result.get("passed") or False),
+        "reason": str(result.get("reason") or ("已達標" if result.get("passed") else "")),
+        "failures": list(result.get("failures") or []),
     }
 
 def normalize_review_fields(progress: Dict[str, Any], status: str) -> Dict[str, Any]:
-    progress = dict(progress or {})
-    explicit_oos = str(progress.get("oos_status") or "").strip()
-    explicit_review = str(progress.get("review_status") or "").strip()
-    review_reason = str(progress.get("review_reason") or "")
-    review_failures = list(progress.get("review_failures") or [])
-    if explicit_oos or explicit_review:
-        return {
-            "oos_status": explicit_oos or explicit_review or "not_eligible",
-            "review_status": explicit_review or explicit_oos or "not_eligible",
-            "review_reason": review_reason,
-            "review_failures": review_failures,
-        }
-    if status != "completed":
-        status_norm = str(status or "").strip().lower()
-        derived = "not_eligible"
-        if status_norm in {"assigned", "queued"}:
-            derived = "queued"
-        elif status_norm in {"running", "syncing"}:
-            derived = "running"
-        elif status_norm == "error":
-            derived = "error"
-        return {"oos_status": derived, "review_status": derived, "review_reason": review_reason, "review_failures": review_failures}
-    return {
-        "oos_status": str(progress.get("oos_status") or progress.get("review_status") or "not_eligible"),
-        "review_status": str(progress.get("review_status") or progress.get("oos_status") or "not_eligible"),
-        "review_reason": review_reason,
-        "review_failures": review_failures
-    }
+    return _normalize_review_fields(progress, status)
 
-def count_review_pipeline_tasks(completed_tasks: List[Dict[str, Any]]) -> int:
-    count = 0
-    for t in completed_tasks:
-        try:
-            p = json.loads(t.get("progress_json") or "{}")
-            status = str(p.get("review_status") or p.get("oos_status") or "")
-            if status in ("auto_managed", "queued", "running", "passed"):
-                count += 1
-        except Exception:
-            pass
-    return count
+def count_review_pipeline_tasks(tasks: List[Dict[str, Any]]) -> int:
+    return _count_review_pipeline_tasks(tasks)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("api")
@@ -131,6 +84,13 @@ try:
                 _conn.close()
 except Exception as e:
     print(f"[BOOT WARN] Auto-provision compute user failed: {e}")
+
+try:
+    _review_rebuild_summary = _rebuild_review_state(db_module=db)
+    if int(_review_rebuild_summary.get("updated") or 0) > 0:
+        logger.info("review-state maintenance updated %s completed tasks", _review_rebuild_summary.get("updated"))
+except Exception as e:
+    print(f"[BOOT WARN] review-state maintenance failed: {e}")
 
 API_ROOT_PATH = os.environ.get("SHEEP_API_ROOT_PATH", "").strip()
 
@@ -963,6 +923,22 @@ def get_admin_system_diagnostics(req: Request, authorization: Optional[str] = He
     }
 
 
+@app.post("/admin/maintenance/rebuild-review-state")
+def admin_rebuild_review_state(req: Request, authorization: Optional[str] = Header(None)):
+    ctx = _auth_ctx(req, authorization)
+    if str(ctx["user"].get("role")) != "admin":
+        raise HTTPException(status_code=403, detail="forbidden: admin only")
+
+    summary = _rebuild_review_state(db_module=db)
+    db.log_sys_event(
+        "REVIEW_STATE_REBUILD",
+        ctx["user"].get("id"),
+        "Admin triggered review-state maintenance",
+        summary,
+    )
+    return {"ok": True, **summary}
+
+
 @app.get("/admin/pools")
 def legacy_get_admin_pools(req: Request, authorization: Optional[str] = Header(None)):
     ctx = _auth_ctx(req, authorization)
@@ -1763,9 +1739,7 @@ def web_dashboard(request: Request, authorization: Optional[str] = Header(None))
     completed_tasks = [t for t in all_tasks if str(t.get("status") or "") == "completed"]
     personal_live_strategies_active = int(db.count_strategies(user_id=uid, status="active"))
     global_strategies_active = int(db.count_strategies(status="active"))
-    personal_review_pipeline_count = count_review_pipeline_tasks(
-        [t for t in tasks if str(t.get("status") or "") == "completed"]
-    )
+    personal_review_pipeline_count = count_review_pipeline_tasks(tasks)
 
     return {
         "ok": True,
@@ -1774,6 +1748,7 @@ def web_dashboard(request: Request, authorization: Optional[str] = Header(None))
         "strategies_active": personal_live_strategies_active,
         "personal_live_strategies_active": personal_live_strategies_active,
         "personal_review_pipeline_count": int(personal_review_pipeline_count),
+        "personal_review_pipeline_hint": "本週期已達標且進入後續自動管理流程的任務數量",
         "global_strategies_active": global_strategies_active,
         "payouts_unpaid": len([p for p in payouts if p["status"] == "unpaid"]),
         "recent_tasks": tasks[:10],
