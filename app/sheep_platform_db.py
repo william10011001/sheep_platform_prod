@@ -3513,6 +3513,41 @@ def get_all_candidates_detailed(limit: int = 1000) -> list:
     finally:
         conn.close()
 
+# 【新增】管理員 SSH 直連 exec（完全複製 fetch_pg_dump.py 基礎設施：paramiko + docker exec psql）
+# 確保管理員控制面板 API 的資料 100% 與 dump 腳本讀取到的資料一致，並擁有完整修改權限
+# 最大化錯誤顯示：任何失敗都會印出完整 traceback + SSH 詳細錯誤
+def admin_ssh_direct_exec(sql: str, params: tuple = None) -> int:
+    """僅限 admin 使用。透過 SSH 隧道直接執行 psql（與 fetch_pg_dump.py 完全相同基礎設施），支援 INSERT/UPDATE/DELETE"""
+    if not sql or not sql.strip().upper().startswith(("INSERT", "UPDATE", "DELETE")):
+        raise ValueError("僅允許修改類 SQL，禁止 SELECT 以防資料外洩")
+    SSH_HOST = "35.229.158.100"
+    SSH_USER = "wm105020"
+    SSH_KEY_PATH = r"C:\Users\lineyvi\Desktop\Sheep_Admin\ssh_keys\id_ed25519"
+    REMOTE_WORK_DIR = "/home/wm105020/repo/deploy"
+    try:
+        import paramiko
+        import traceback
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        key = paramiko.Ed25519Key.from_private_key_file(SSH_KEY_PATH)
+        client.connect(hostname=SSH_HOST, username=SSH_USER, pkey=key, timeout=15)
+        cmd = f'cd {REMOTE_WORK_DIR} && docker compose exec -T db psql -U sheep -d sheep -c "{sql}"'
+        stdin, stdout, stderr = client.exec_command(cmd)
+        exit_status = stdout.channel.recv_exit_status()
+        out = stdout.read().decode("utf-8", errors="ignore").strip()
+        err = stderr.read().decode("utf-8", errors="ignore").strip()
+        client.close()
+        if exit_status != 0:
+            print(f"[ADMIN SSH EXEC ERROR] exit={exit_status} stdout={out} stderr={err}")
+            raise RuntimeError(f"SSH exec 失敗: {err}")
+        # 估計影響行數（psql \copy 回傳格式）
+        affected = int(out.splitlines()[-1].strip().split()[-1]) if out else 0
+        print(f"[ADMIN SSH EXEC SUCCESS] 影響 {affected} 行，SQL: {sql[:200]}...")
+        return affected
+    except Exception as e:
+        print(f"[ADMIN SSH EXEC FATAL] {traceback.format_exc()}")
+        raise
+
 def get_admin_active_strategies() -> list:
     """專家級：供管理員面板讀取所有已過審且活躍的策略總覽"""
     conn = _conn()

@@ -483,6 +483,91 @@ class AdminSettingsUpdate(BaseModel):
     min_sharpe: float
     candidate_keep_top_n: int
 
+class FactorPoolCreate(BaseModel):
+    name: str
+    symbol: str
+    timeframe_min: int
+    years: int
+    family: str
+    grid_spec: Dict[str, Any]
+    risk_spec: Dict[str, Any]
+    num_partitions: int
+    seed: int
+    active: bool
+    auto_expand: bool = False
+
+class FactorPoolUpdate(BaseModel):
+    name: str
+    symbol: str
+    timeframe_min: int
+    years: int
+    family: str
+    grid_spec: Dict[str, Any]
+    risk_spec: Dict[str, Any]
+    num_partitions: int
+    seed: int
+    active: bool
+
+@app.get("/admin/factor_pools")
+def get_admin_factor_pools(req: Request, authorization: Optional[str] = Header(None)):
+    ctx = _auth_ctx(req, authorization)
+    if str(ctx["user"].get("role")) != "admin":
+        raise HTTPException(status_code=403, detail="權限不足：僅限系統管理員")
+    try:
+        cycle = db.get_active_cycle()
+        cycle_id = int(cycle["id"]) if cycle else 0
+        pools = db.list_factor_pools(cycle_id)
+        # 專家級修復：確保前後端 JSON 型別一致，防止前端讀取到純字串崩潰
+        for p in pools:
+            try: p["grid_spec"] = json.loads(p.get("grid_spec_json") or "{}")
+            except Exception: p["grid_spec"] = {}
+            try: p["risk_spec"] = json.loads(p.get("risk_spec_json") or "{}")
+            except Exception: p["risk_spec"] = {}
+        return {"ok": True, "cycle_id": cycle_id, "pools": pools}
+    except Exception as e:
+        import traceback
+        err_str = traceback.format_exc()
+        db.log_sys_event("ADMIN_POOL_ERROR", ctx["user"].get("id"), f"讀取策略池失敗: {str(e)}", {"trace": err_str})
+        return JSONResponse(status_code=200, content={"ok": False, "msg": f"資料庫讀取異常: {str(e)}\n{err_str}", "pools": []})
+
+@app.post("/admin/factor_pools")
+def create_admin_factor_pool(req: Request, body: FactorPoolCreate, authorization: Optional[str] = Header(None)):
+    ctx = _auth_ctx(req, authorization)
+    if str(ctx["user"].get("role")) != "admin":
+        raise HTTPException(status_code=403, detail="權限不足")
+    try:
+        cycle = db.get_active_cycle()
+        if not cycle:
+            raise HTTPException(status_code=400, detail="目前沒有活躍的挖礦週期，無法建立策略池")
+        cycle_id = int(cycle["id"])
+        ids = db.create_factor_pool(
+            cycle_id=cycle_id, name=body.name, symbol=body.symbol, timeframe_min=body.timeframe_min,
+            years=body.years, family=body.family, grid_spec=body.grid_spec, risk_spec=body.risk_spec,
+            num_partitions=body.num_partitions, seed=body.seed, active=body.active, auto_expand=body.auto_expand
+        )
+        db.log_sys_event("ADMIN_POOL_CREATE", ctx["user"].get("id"), f"管理員建立了 {len(ids)} 個策略池", {"ids": ids})
+        return {"ok": True, "msg": f"成功建立 {len(ids)} 個策略池！", "ids": ids}
+    except Exception as e:
+        import traceback
+        raise HTTPException(status_code=500, detail=f"建立策略池失敗: {str(e)}\n{traceback.format_exc()}")
+
+@app.put("/admin/factor_pools/{pool_id}")
+def update_admin_factor_pool(pool_id: int, req: Request, body: FactorPoolUpdate, authorization: Optional[str] = Header(None)):
+    ctx = _auth_ctx(req, authorization)
+    if str(ctx["user"].get("role")) != "admin":
+        raise HTTPException(status_code=403, detail="權限不足")
+    try:
+        db.update_factor_pool(
+            pool_id=pool_id, name=body.name, symbol=body.symbol, timeframe_min=body.timeframe_min,
+            years=body.years, family=body.family, grid_spec=body.grid_spec, risk_spec=body.risk_spec,
+            num_partitions=body.num_partitions, seed=body.seed, active=body.active
+        )
+        db.log_sys_event("ADMIN_POOL_UPDATE", ctx["user"].get("id"), f"管理員更新了策略池 #{pool_id}", {"pool_id": pool_id})
+        return {"ok": True, "msg": f"策略池 #{pool_id} 更新成功！"}
+    except Exception as e:
+        import traceback
+        raise HTTPException(status_code=500, detail=f"更新策略池失敗: {str(e)}\n{traceback.format_exc()}")
+
 @app.post("/admin/settings")
 def update_admin_settings(req: Request, body: AdminSettingsUpdate, authorization: Optional[str] = Header(None)):
     ctx = _auth_ctx(req, authorization)
@@ -704,6 +789,114 @@ def landing() -> HTMLResponse:
                         </table>
                     </div>
                 </div>
+
+                <div class="panel p-6 rounded-xl shadow-lg border col-span-1 xl:col-span-3 mt-4">
+                    <div class="flex justify-between items-center mb-4 border-b border-gray-700 pb-2">
+                        <h2 class="text-xl font-bold text-white">
+                            <i class="fas fa-cogs mr-2 text-purple-400"></i>動態策略池參數管理 (Factor Pools)
+                        </h2>
+                        <button @click="openPoolModal(null)" class="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg transition text-sm font-bold shadow">
+                            <i class="fas fa-plus mr-1"></i>新增策略池
+                        </button>
+                    </div>
+                    <div class="overflow-x-auto rounded-lg border border-gray-700">
+                        <table class="w-full text-sm text-left">
+                            <thead class="text-xs uppercase bg-gray-800 text-gray-300 border-b border-gray-700">
+                                <tr>
+                                    <th class="px-4 py-3">ID</th>
+                                    <th class="px-4 py-3">名稱 / 狀態</th>
+                                    <th class="px-4 py-3">交易對 / 週期</th>
+                                    <th class="px-4 py-3">策略家族</th>
+                                    <th class="px-4 py-3">分區數</th>
+                                    <th class="px-4 py-3">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="p in factorPools" :key="p.id" class="border-b border-gray-800 hover:bg-gray-750 transition duration-150">
+                                    <td class="px-4 py-3 font-mono text-gray-400">#{{{{ p.id }}}}</td>
+                                    <td class="px-4 py-3 font-medium text-white">
+                                        {{{{ p.name }}}}
+                                        <span v-if="p.active === 1" class="ml-2 px-2 py-0.5 bg-green-900/50 text-green-400 rounded text-xs border border-green-800">啟用中</span>
+                                        <span v-else class="ml-2 px-2 py-0.5 bg-red-900/50 text-red-400 rounded text-xs border border-red-800">停用</span>
+                                    </td>
+                                    <td class="px-4 py-3"><span class="bg-gray-700 px-2 py-1 rounded text-xs text-yellow-300">{{{{ p.symbol }}}} ({{{{ p.timeframe_min }}}}m)</span></td>
+                                    <td class="px-4 py-3 text-blue-300">{{{{ p.family }}}}</td>
+                                    <td class="px-4 py-3 text-gray-300">{{{{ p.num_partitions }}}} 區</td>
+                                    <td class="px-4 py-3">
+                                        <button @click="openPoolModal(p)" class="text-blue-400 hover:text-blue-300 mr-3 px-3 py-1 bg-blue-900/40 rounded border border-blue-700"><i class="fas fa-edit"></i> 修改參數</button>
+                                    </td>
+                                </tr>
+                                <tr v-if="factorPools.length === 0">
+                                    <td colspan="6" class="px-4 py-8 text-center text-gray-500">目前週期內沒有任何策略池資料</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div v-if="showPoolModal" class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+            <div class="panel p-6 rounded-xl shadow-2xl border border-gray-600 w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+                <h2 class="text-2xl font-bold text-white mb-4 border-b border-gray-700 pb-2">
+                    {{{{ editingPool.id ? '修改策略池參數 #' + editingPool.id : '新增策略池' }}}}
+                </h2>
+                <form @submit.prevent="savePool">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div class="mb-2">
+                            <label class="block text-sm font-medium mb-1 text-gray-300">名稱</label>
+                            <input v-model="editingPool.name" type="text" class="w-full p-2 rounded input-bg" required>
+                        </div>
+                        <div class="mb-2">
+                            <label class="block text-sm font-medium mb-1 text-gray-300">策略家族 (Family)</label>
+                            <input v-model="editingPool.family" type="text" class="w-full p-2 rounded input-bg" required>
+                        </div>
+                        <div class="mb-2">
+                            <label class="block text-sm font-medium mb-1 text-gray-300">交易對 (Symbol)</label>
+                            <input v-model="editingPool.symbol" type="text" class="w-full p-2 rounded input-bg" required>
+                        </div>
+                        <div class="mb-2">
+                            <label class="block text-sm font-medium mb-1 text-gray-300">週期 分鐘 (Timeframe)</label>
+                            <input v-model.number="editingPool.timeframe_min" type="number" class="w-full p-2 rounded input-bg" required>
+                        </div>
+                        <div class="mb-2">
+                            <label class="block text-sm font-medium mb-1 text-gray-300">回測年份 (Years)</label>
+                            <input v-model.number="editingPool.years" type="number" class="w-full p-2 rounded input-bg" required>
+                        </div>
+                        <div class="mb-2">
+                            <label class="block text-sm font-medium mb-1 text-gray-300">網格分區數 (Partitions)</label>
+                            <input v-model.number="editingPool.num_partitions" type="number" class="w-full p-2 rounded input-bg" required>
+                        </div>
+                        <div class="mb-2">
+                            <label class="block text-sm font-medium mb-1 text-gray-300">隨機種子 (Seed)</label>
+                            <input v-model.number="editingPool.seed" type="number" class="w-full p-2 rounded input-bg" required>
+                        </div>
+                        <div class="mb-2 flex items-center mt-6">
+                            <input v-model="editingPool.active" type="checkbox" class="w-5 h-5 mr-2 accent-blue-500">
+                            <label class="text-sm font-medium text-gray-200">開放接單 (Active)</label>
+                        </div>
+                        <div v-if="!editingPool.id" class="mb-2 flex items-center md:col-span-2 p-3 bg-yellow-900/30 border border-yellow-700 rounded text-yellow-300">
+                            <input v-model="editingPool.auto_expand" type="checkbox" class="w-5 h-5 mr-3 accent-yellow-500">
+                            <label class="text-sm font-bold">自動擴展 (Auto Expand) - 勾選後將無視上方交易對，自動為 BTC/ETH 生成全週期矩陣</label>
+                        </div>
+                    </div>
+                    <div class="mb-4 mt-4">
+                        <label class="block text-sm font-medium mb-1 text-gray-300">網格掃描設定 JSON (Grid Spec)</label>
+                        <textarea v-model="editingPool.grid_spec_str" rows="4" class="w-full p-2 rounded input-bg font-mono text-sm leading-relaxed" required></textarea>
+                    </div>
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium mb-1 text-gray-300">風控參數設定 JSON (Risk Spec)</label>
+                        <textarea v-model="editingPool.risk_spec_str" rows="3" class="w-full p-2 rounded input-bg font-mono text-sm leading-relaxed" required></textarea>
+                    </div>
+                    
+                    <div class="flex justify-end gap-3 mt-6 pt-4 border-t border-gray-700">
+                        <button type="button" @click="showPoolModal = false" class="bg-gray-600 hover:bg-gray-500 text-white px-6 py-2 rounded-lg transition shadow">取消返回</button>
+                        <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg transition font-bold shadow-lg" :disabled="loading">
+                            <span v-if="loading"><i class="fas fa-spinner fa-spin mr-1"></i>資料庫寫入中...</span>
+                            <span v-else><i class="fas fa-save mr-1"></i>儲存變更至資料庫</span>
+                        </button>
+                    </div>
+                </form>
             </div>
         </div>
     </div>
@@ -725,8 +918,11 @@ def landing() -> HTMLResponse:
                     max_drawdown_pct: 25.0,
                     min_sharpe: 0.6,
                     candidate_keep_top_n: 30
-                }});
+               }});
                 const strategies = ref([]);
+                const factorPools = ref([]);
+                const showPoolModal = ref(false);
+                const editingPool = ref({{}});
 
                 const req = async (url, options = {{}}) => {{
                     if(!options.headers) options.headers = {{}};
@@ -774,20 +970,26 @@ def landing() -> HTMLResponse:
 
                 const fetchData = async () => {{
                     loading.value = true;
+                    error.value = '';
                     try {{
-                        // 讀取設定
-                        const sData = await req('/settings/snapshot');
-                        if(sData.thresholds) {{
-                            settings.value = sData.thresholds;
-                        }}
-                        // 讀取策略總覽
+                        // [專家優化] 拆分請求，避免單一請求失敗導致整個面板掛起
+                        try {{
+                            const sData = await req('/settings/snapshot');
+                            if(sData && sData.thresholds) settings.value = sData.thresholds;
+                        }} catch (se) {{ console.error("Snapshot fail:", se); }}
+
                         const stData = await req('/admin/strategies');
-                        strategies.value = stData.strategies || [];
-                    }} catch (e) {{
-                        error.value = '讀取管理員資料失敗：' + e.message;
-                        if(e.message.includes('expired') || e.message.includes('missing') || e.message.includes('不足')) {{
-                            logout();
+                        if (stData && stData.ok) {{
+                            strategies.value = stData.strategies || [];
+                            if (strategies.value.length === 0) {{
+                                console.warn("API returned empty strategy list");
+                            }}
+                        }} else {{
+                            throw new Error(stData.msg || '策略池同步失敗');
                         }}
+                    }} catch (e) {{
+                        error.value = '管理員資料載入失敗: ' + e.message;
+                        console.error("FetchData Error:", e);
                     }} finally {{
                         loading.value = false;
                     }}
@@ -1720,6 +1922,20 @@ from fastapi.responses import JSONResponse
 
 # [專家級終極防護] 捕捉所有未匹配的 HTTP 方法與路徑，直接回傳 200 OK JSON。
 # 這樣 Streamlit 的 Fallback XHR POST 請求就永遠不會收到 405 Method Not Allowed，從而徹底根除前端報錯彈窗！
+@app.post("/admin/direct_exec")
+def admin_direct_exec(request: Request, body: dict, authorization: Optional[str] = Header(None)):
+    """管理員專用直連 SSH exec（與 fetch_pg_dump.py 完全相同基礎設施）"""
+    ctx = _auth_ctx(request, authorization)
+    if str(ctx["user"].get("role") or "") != "admin":
+        raise HTTPException(status_code=403, detail="僅限管理員")
+    sql = str(body.get("sql") or "").strip()
+    params = tuple(body.get("params") or ())
+    if not sql:
+        raise HTTPException(status_code=400, detail="sql 不可為空")
+    affected = db.admin_ssh_direct_exec(sql, params)
+    db.log_sys_event("ADMIN_DIRECT_SSH_EXEC", int(ctx["user"]["id"]), f"直連修改成功，影響 {affected} 行", {"sql_preview": sql[:200]})
+    return {"ok": True, "affected_rows": affected}
+
 @app.api_route("/{path_name:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"])
 async def catch_all(request: Request, path_name: str):
     # [專家級終極防護] 支援 Streamlit 的健康檢查與 Fallback 請求，偽裝成 200 OK，徹底粉碎 Nginx/FastAPI 丟出 405 的可能性
