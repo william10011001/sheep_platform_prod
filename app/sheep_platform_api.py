@@ -554,7 +554,8 @@ class AdminSettingsUpdate(BaseModel):
     min_total_return_pct: float
     max_drawdown_pct: float
     min_sharpe: float
-    candidate_keep_top_n: int
+    candidate_keep_top_n: Optional[int] = None
+    keep_top_n: Optional[int] = None
 
 class FactorPoolCreate(BaseModel):
     name: str
@@ -580,6 +581,76 @@ class FactorPoolUpdate(BaseModel):
     num_partitions: int
     seed: int
     active: bool
+
+
+_THRESHOLD_DEFAULTS: Dict[str, Any] = {
+    "min_trades": 30,
+    "min_total_return_pct": 3.0,
+    "max_drawdown_pct": 25.0,
+    "min_sharpe": 0.6,
+    "candidate_keep_top_n": 30,
+}
+
+
+def _resolve_candidate_keep_top_n(payload: Any) -> int:
+    if isinstance(payload, BaseModel):
+        raw = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
+    elif isinstance(payload, dict):
+        raw = dict(payload)
+    else:
+        raw = {}
+
+    value = raw.get("candidate_keep_top_n")
+    if value is None:
+        value = raw.get("keep_top_n")
+    if value is None:
+        raise HTTPException(status_code=422, detail="candidate_keep_top_n is required")
+    return int(value)
+
+
+def _load_threshold_state() -> Tuple[Dict[str, Any], Dict[str, Optional[str]]]:
+    keys = [
+        "min_trades",
+        "min_total_return_pct",
+        "max_drawdown_pct",
+        "min_sharpe",
+        "candidate_keep_top_n",
+    ]
+    details = db.get_settings_details(keys)
+    thresholds = {
+        "min_trades": int(details.get("min_trades", {}).get("value") if details.get("min_trades", {}).get("value") is not None else _THRESHOLD_DEFAULTS["min_trades"]),
+        "min_total_return_pct": float(details.get("min_total_return_pct", {}).get("value") if details.get("min_total_return_pct", {}).get("value") is not None else _THRESHOLD_DEFAULTS["min_total_return_pct"]),
+        "max_drawdown_pct": float(details.get("max_drawdown_pct", {}).get("value") if details.get("max_drawdown_pct", {}).get("value") is not None else _THRESHOLD_DEFAULTS["max_drawdown_pct"]),
+        "min_sharpe": float(details.get("min_sharpe", {}).get("value") if details.get("min_sharpe", {}).get("value") is not None else _THRESHOLD_DEFAULTS["min_sharpe"]),
+        "candidate_keep_top_n": int(details.get("candidate_keep_top_n", {}).get("value") if details.get("candidate_keep_top_n", {}).get("value") is not None else _THRESHOLD_DEFAULTS["candidate_keep_top_n"]),
+    }
+    thresholds["keep_top_n"] = int(thresholds["candidate_keep_top_n"])
+
+    updated_at = {
+        "min_trades": details.get("min_trades", {}).get("updated_at"),
+        "min_total_return_pct": details.get("min_total_return_pct", {}).get("updated_at"),
+        "max_drawdown_pct": details.get("max_drawdown_pct", {}).get("updated_at"),
+        "min_sharpe": details.get("min_sharpe", {}).get("updated_at"),
+        "candidate_keep_top_n": details.get("candidate_keep_top_n", {}).get("updated_at"),
+        "keep_top_n": details.get("candidate_keep_top_n", {}).get("updated_at"),
+    }
+    return thresholds, updated_at
+
+
+def _log_deprecated_alias(req: Request, ctx: Dict[str, Any], legacy_path: str, canonical_path: str) -> None:
+    user = (ctx or {}).get("user") or {}
+    db.log_sys_event(
+        "DEPRECATED_ALIAS_USED",
+        user.get("id"),
+        f"Legacy API alias used: {legacy_path} -> {canonical_path}",
+        {
+            "legacy_path": legacy_path,
+            "canonical_path": canonical_path,
+            "method": req.method,
+            "ip": _client_ip(req),
+            "user_agent": req.headers.get("user-agent", ""),
+        },
+    )
 
 @app.get("/admin/factor_pools")
 def get_admin_factor_pools(req: Request, authorization: Optional[str] = Header(None)):
@@ -647,13 +718,14 @@ def update_admin_settings(req: Request, body: AdminSettingsUpdate, authorization
     if str(ctx["user"].get("role")) != "admin":
         raise HTTPException(status_code=403, detail="權限不足：僅限系統管理員")
     
+    keep_top_n = _resolve_candidate_keep_top_n(body)
     conn = db._conn()
     try:
         db.set_setting(conn, "min_trades", body.min_trades)
         db.set_setting(conn, "min_total_return_pct", body.min_total_return_pct)
         db.set_setting(conn, "max_drawdown_pct", body.max_drawdown_pct)
         db.set_setting(conn, "min_sharpe", body.min_sharpe)
-        db.set_setting(conn, "candidate_keep_top_n", body.candidate_keep_top_n)
+        db.set_setting(conn, "candidate_keep_top_n", keep_top_n)
         conn.commit()
     except Exception as e:
         conn.rollback()
@@ -683,6 +755,69 @@ def get_admin_strategies(req: Request, authorization: Optional[str] = Header(Non
         db.log_sys_event("ADMIN_STRAT_ERROR", ctx["user"].get("id"), f"讀取策略池失敗: {str(e)}", {"trace": err_msg})
         # 即使發生錯誤也回傳 200 並帶上錯誤詳情，防止前端觸發 504 崩潰
         return JSONResponse(status_code=200, content={"ok": False, "msg": f"資料庫讀取異常: {str(e)}", "strategies": []})
+
+@app.get("/admin/system_diagnostics")
+def get_admin_system_diagnostics(req: Request, authorization: Optional[str] = Header(None)):
+    ctx = _auth_ctx(req, authorization)
+    if str(ctx["user"].get("role")) != "admin":
+        raise HTTPException(status_code=403, detail="forbidden: admin only")
+
+    cycle = db.get_active_cycle() or {}
+    cycle_id = int(cycle.get("id") or 0)
+    pools = db.list_factor_pools(cycle_id) if cycle_id > 0 else []
+    strategies = db.get_admin_active_strategies()
+    thresholds, threshold_updated_at = _load_threshold_state()
+    db_source = db.describe_db_source()
+
+    return {
+        "ok": True,
+        "db_kind": db_source.get("kind"),
+        "db_target": db_source.get("masked_dsn"),
+        "db_host": db_source.get("host"),
+        "db_database": db_source.get("database"),
+        "git_sha": str(os.environ.get("SHEEP_GIT_SHA", "") or ""),
+        "active_cycle": {
+            "id": cycle_id,
+            "name": cycle.get("name"),
+            "status": cycle.get("status"),
+            "start_ts": cycle.get("start_ts"),
+            "end_ts": cycle.get("end_ts"),
+        },
+        "active_pool_count": len(pools),
+        "active_strategy_count": len(strategies),
+        "thresholds": thresholds,
+        "threshold_updated_at": threshold_updated_at,
+        "server_time": _utc_iso(),
+    }
+
+
+@app.get("/admin/pools")
+def legacy_get_admin_pools(req: Request, authorization: Optional[str] = Header(None)):
+    ctx = _auth_ctx(req, authorization)
+    _log_deprecated_alias(req, ctx, "/admin/pools", "/admin/factor_pools")
+    return get_admin_factor_pools(req, authorization)
+
+
+@app.post("/admin/pools/{pool_id}/update")
+def legacy_update_admin_pool(pool_id: int, req: Request, body: FactorPoolUpdate, authorization: Optional[str] = Header(None)):
+    ctx = _auth_ctx(req, authorization)
+    _log_deprecated_alias(req, ctx, f"/admin/pools/{pool_id}/update", f"/admin/factor_pools/{pool_id}")
+    return update_admin_factor_pool(pool_id, req, body, authorization)
+
+
+@app.get("/api/trading/strategies")
+def legacy_get_trading_strategies(req: Request, authorization: Optional[str] = Header(None)):
+    ctx = _auth_ctx(req, authorization)
+    _log_deprecated_alias(req, ctx, "/api/trading/strategies", "/admin/strategies")
+    return get_admin_strategies(req, authorization)
+
+
+@app.post("/admin/settings/thresholds")
+def legacy_update_admin_settings(req: Request, body: AdminSettingsUpdate, authorization: Optional[str] = Header(None)):
+    ctx = _auth_ctx(req, authorization)
+    _log_deprecated_alias(req, ctx, "/admin/settings/thresholds", "/admin/settings")
+    return update_admin_settings(req, body, authorization)
+
 
 @app.get("/", response_class=HTMLResponse)
 def landing() -> HTMLResponse:
@@ -1443,6 +1578,45 @@ def web_start_tasks(request: Request, authorization: Optional[str] = Header(None
     db.set_user_run_enabled(uid, True)
     return {"ok": True}
 
+
+@app.post("/tasks/stop")
+def web_stop_tasks(request: Request, authorization: Optional[str] = Header(None)):
+    ctx = _auth_ctx(request, authorization)
+    uid = int(ctx["user"]["id"])
+    db.set_user_run_enabled(uid, False)
+    db.log_sys_event("USER_RUN_DISABLED", uid, "User requested task stop via API", {"ip": _client_ip(request)})
+    return {"ok": True}
+
+
+@app.post("/tasks/{task_id}/submit_oos")
+def legacy_submit_oos(task_id: int, request: Request, authorization: Optional[str] = Header(None)):
+    ctx = _auth_ctx(request, authorization)
+    task = db.get_task(int(task_id))
+    if not task:
+        raise HTTPException(status_code=404, detail="task_not_found")
+
+    owner_id = int(task.get("user_id") or 0)
+    if (not _is_compute_token(ctx)) and owner_id != int(ctx["user"]["id"]):
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    _log_deprecated_alias(request, ctx, f"/tasks/{task_id}/submit_oos", "auto-managed OOS flow")
+
+    progress = {}
+    try:
+        progress = json.loads(task.get("progress_json") or "{}")
+    except Exception:
+        progress = {}
+
+    oos_status = str(progress.get("oos_status") or "auto_managed")
+    return {
+        "ok": True,
+        "deprecated": True,
+        "auto_managed": True,
+        "task_id": int(task_id),
+        "oos_status": oos_status,
+        "msg": "OOS review is fully automatic; manual submit is deprecated.",
+    }
+
 @app.get("/admin/candidates/all")
 def admin_get_all_candidates(request: Request, authorization: Optional[str] = Header(None)):
     """
@@ -1506,18 +1680,8 @@ def thresholds(
     ctx = _auth_ctx(request, authorization)
     if x_worker_id:
         _require_worker(request, ctx, x_worker_id, x_worker_version, x_worker_protocol)
-
-    conn = db._conn()
-    try:
-        return {
-            "min_trades": int(db.get_setting(conn, "min_trades", 30)),
-            "min_total_return_pct": float(db.get_setting(conn, "min_total_return_pct", 3.0)),
-            "max_drawdown_pct": float(db.get_setting(conn, "max_drawdown_pct", 25.0)),
-            "min_sharpe": float(db.get_setting(conn, "min_sharpe", 0.6)),
-            "keep_top_n": int(db.get_setting(conn, "candidate_keep_top_n", 30)),
-        }
-    finally:
-        conn.close()
+    thresholds_data, _ = _load_threshold_state()
+    return thresholds_data
 
 
 @app.get("/settings/snapshot")
@@ -1531,17 +1695,7 @@ def settings_snapshot(
     ctx = _auth_ctx(request, authorization)
     if x_worker_id:
         _require_worker(request, ctx, x_worker_id, x_worker_version, x_worker_protocol)
-    conn = db._conn()
-    try:
-        thresholds = {
-            "min_trades": int(db.get_setting(conn, "min_trades", 30)),
-            "min_total_return_pct": float(db.get_setting(conn, "min_total_return_pct", 3.0)),
-            "max_drawdown_pct": float(db.get_setting(conn, "max_drawdown_pct", 25.0)),
-            "min_sharpe": float(db.get_setting(conn, "min_sharpe", 0.6)),
-            "keep_top_n": int(db.get_setting(conn, "candidate_keep_top_n", 30)),
-        }
-    finally:
-        conn.close()
+    thresholds, _ = _load_threshold_state()
     return {"ts": _utc_iso(), "thresholds": thresholds}
 
 
@@ -2014,4 +2168,19 @@ async def catch_all(request: Request, path_name: str):
     # [專家級終極防護] 支援 Streamlit 的健康檢查與 Fallback 請求，偽裝成 200 OK，徹底粉碎 Nginx/FastAPI 丟出 405 的可能性
     if "health" in path_name or "ping" in path_name:
         return JSONResponse(status_code=200, content={"ok": True, "status": "alive"})
-    return JSONResponse(status_code=200, content={"ok": False, "msg": f"Intercepted unhandled route to prevent 405 error: {path_name}"})
+    user_id = getattr(request.state, "user_id", None)
+    db.log_sys_event(
+        "UNKNOWN_ROUTE",
+        user_id,
+        f"Unknown route requested: {request.method} /{path_name}",
+        {"path": f"/{path_name}", "method": request.method, "ip": _client_ip(request)},
+    )
+    return JSONResponse(
+        status_code=404,
+        content={
+            "ok": False,
+            "error": "route_not_found",
+            "path": f"/{path_name}",
+            "method": request.method,
+        },
+    )

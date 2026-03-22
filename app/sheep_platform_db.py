@@ -187,6 +187,67 @@ def _db_path() -> str:
     return os.path.join(base_dir, "data", "sheep.db")
 
 
+_DEFAULT_THRESHOLD_SETTINGS: Dict[str, Any] = {
+    "min_trades": 30,
+    "min_total_return_pct": 3.0,
+    "max_drawdown_pct": 25.0,
+    "min_sharpe": 0.6,
+    "candidate_keep_top_n": 30,
+}
+
+
+def describe_db_source() -> Dict[str, Any]:
+    kind = _db_kind()
+    if kind == "postgres":
+        dsn = str(_db_url() or "")
+        parsed = urlparse(dsn) if dsn else None
+        return {
+            "kind": "postgres",
+            "masked_dsn": _mask_dsn(dsn),
+            "host": str(getattr(parsed, "hostname", "") or ""),
+            "database": str((parsed.path or "").lstrip("/") if parsed else ""),
+            "path": "",
+        }
+
+    db_path = _db_path()
+    return {
+        "kind": "sqlite",
+        "masked_dsn": db_path,
+        "host": "",
+        "database": os.path.basename(db_path),
+        "path": db_path,
+    }
+
+
+def ensure_default_settings(conn: Any = None) -> Dict[str, Any]:
+    owns_conn = not bool(getattr(conn, "_is_db_conn", False))
+    if owns_conn:
+        conn = _conn()
+
+    inserted: List[str] = []
+    try:
+        for key, value in _DEFAULT_THRESHOLD_SETTINGS.items():
+            row = conn.execute("SELECT 1 FROM settings WHERE key = ? LIMIT 1", (str(key),)).fetchone()
+            if row:
+                continue
+            set_setting(conn, str(key), value)
+            inserted.append(str(key))
+
+        if owns_conn:
+            conn.commit()
+        return {"inserted": inserted, "count": len(inserted)}
+    except Exception:
+        if owns_conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        raise
+    finally:
+        if owns_conn:
+            conn.close()
+
+
 class _DBResult:
     def __init__(self, cur, rowcount: int = 0, lastrowid: int = 0):
         self._cur = cur
@@ -258,7 +319,8 @@ class _DBConn:
         if is_pg and psycopg2 is not None:
             cur = self._c.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         else:
-            cur = self._c.cursor()
+            self._c.executescript(sql)
+            return None
             
         try:
             cur.execute(sql)
@@ -761,7 +823,9 @@ def init_db() -> None:
                     conn.commit()
                 except Exception:
                     conn.rollback()
-                    
+
+            ensure_default_settings(conn)
+            conn.commit()
             # 執行完 Postgres 的 DDL 後，直接結束函數，絕對不往下跑 SQLite 的邏圈
             return
             
@@ -974,6 +1038,9 @@ def init_db() -> None:
                 except Exception:
                     pass # SQLite 不支援 IF NOT EXISTS 的 ALTER TABLE 寫法，若報錯通常代表已存在
 
+            ensure_default_settings(conn)
+            conn.commit()
+
     finally:
         conn.close()
 
@@ -1002,8 +1069,9 @@ def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
         try:
             row = conn.execute("SELECT * FROM users WHERE username_norm = ? LIMIT 1", (uname_norm,)).fetchone()
             if row:
-                log_sys_event("AUTH_LOGIN_TRACE_4", None, "SQL 查詢成功並找到用戶", {"id": row.get("id")})
-                return dict(row)
+                row_dict = dict(row)
+                log_sys_event("AUTH_LOGIN_TRACE_4", None, "SQL 查詢成功並找到用戶", {"id": row_dict.get("id")})
+                return row_dict
         except Exception as e:
             conn.rollback()
             log_sys_event("AUTH_LOGIN_WARN", None, f"1階查詢失敗: {e}", {})
@@ -1261,10 +1329,11 @@ def get_setting(arg1: Any, arg2: Any = None, arg3: Any = None) -> Any:
         row = conn.execute("SELECT value FROM settings WHERE key = ? LIMIT 1", (k,)).fetchone()
         if not row:
             return default
+        row_dict = dict(row)
         try:
-            return json.loads(row.get("value"))
+            return json.loads(row_dict.get("value"))
         except Exception:
-            return row.get("value")
+            return row_dict.get("value")
     else:
         k = str(arg1 or "").strip()
         default = arg2
@@ -1276,10 +1345,11 @@ def get_setting(arg1: Any, arg2: Any = None, arg3: Any = None) -> Any:
         row = conn.execute("SELECT value FROM settings WHERE key = ? LIMIT 1", (k,)).fetchone()
         if not row:
             return default
+        row_dict = dict(row)
         try:
-            return json.loads(row.get("value"))
+            return json.loads(row_dict.get("value"))
         except Exception:
-            return row.get("value")
+            return row_dict.get("value")
     finally:
         conn.close()
 
@@ -1318,6 +1388,35 @@ def set_setting(arg1: Any, arg2: Any, arg3: Any = None) -> None:
             (k, v_json, _now_iso()),
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def get_settings_details(keys: List[str]) -> Dict[str, Dict[str, Any]]:
+    out: Dict[str, Dict[str, Any]] = {}
+    conn = _conn()
+    try:
+        for raw_key in list(keys or []):
+            key = str(raw_key or "").strip()
+            if not key:
+                continue
+            row = conn.execute("SELECT value, updated_at FROM settings WHERE key = ? LIMIT 1", (key,)).fetchone()
+            if not row:
+                out[key] = {"value": None, "updated_at": None}
+                continue
+
+            row_dict = dict(row)
+            value = row_dict.get("value")
+            try:
+                value = json.loads(value)
+            except Exception:
+                pass
+
+            out[key] = {
+                "value": value,
+                "updated_at": row_dict.get("updated_at"),
+            }
+        return out
     finally:
         conn.close()
 
@@ -3601,4 +3700,3 @@ def get_admin_active_strategies() -> list:
         return []
     finally:
         conn.close()
-

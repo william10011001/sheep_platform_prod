@@ -325,11 +325,7 @@
                                         </td>
                                         <td class="py-4 px-6 text-center">
                                             <template v-if="getScoreNumber(t) >= 0">
-                                                <template v-if="!getOosStatus(t)">
-                                                    <button @click="submitReview(t.id)" class="text-[13px] px-3 py-1 border border-white/20 text-slate-300 hover:text-white hover:bg-white/10 rounded transition-colors">
-                                                        提交審核
-                                                    </button>
-                                                </template>
+                                                <span v-if="!getOosStatus(t)" class="text-[13px] text-slate-400">自動管理中</span>
                                                 <span v-else-if="getOosStatus(t) === 'queued'" class="text-[13px] text-slate-400">排隊中</span>
                                                 <span v-else-if="getOosStatus(t) === 'running'" class="text-[13px] text-amber-400">用戶端運算中</span>
                                                 <span v-else-if="getOosStatus(t) === 'passed'" class="text-[13px] text-emerald-400">已通過</span>
@@ -389,13 +385,17 @@
                             <button @click="adminSubTab = 'livestrats'" :class="adminSubTab === 'livestrats' ? 'text-emerald-400 border-b-2 border-emerald-400 font-bold' : 'text-gray-400 hover:text-white'" class="pb-2 whitespace-nowrap">實盤因子池狀態</button>
                         </div>
 
+                        <div v-if="adminError" class="mb-4 rounded-md border border-red-500/40 bg-red-900/20 px-4 py-3 text-sm text-red-200">
+                            {{ adminError }}
+                        </div>
+
                         <div v-if="adminSubTab === 'thresholds'" class="space-y-4">
                             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div><label class="block text-xs text-gray-400 mb-1">最少交易筆數 (筆)</label><input v-model.number="adminThresholds.min_trades" type="number" class="cyber-input w-full px-3 py-2 rounded"></div>
                                 <div><label class="block text-xs text-gray-400 mb-1">最小總報酬 (%)</label><input v-model.number="adminThresholds.min_total_return_pct" type="number" step="0.1" class="cyber-input w-full px-3 py-2 rounded"></div>
                                 <div><label class="block text-xs text-gray-400 mb-1">最大回撤容忍 (%)</label><input v-model.number="adminThresholds.max_drawdown_pct" type="number" step="0.1" class="cyber-input w-full px-3 py-2 rounded"></div>
                                 <div><label class="block text-xs text-gray-400 mb-1">最小夏普指標 (Sharpe)</label><input v-model.number="adminThresholds.min_sharpe" type="number" step="0.01" class="cyber-input w-full px-3 py-2 rounded"></div>
-                                <div><label class="block text-xs text-gray-400 mb-1">單次任務最多保留候選數</label><input v-model.number="adminThresholds.keep_top_n" type="number" class="cyber-input w-full px-3 py-2 rounded"></div>
+                                <div><label class="block text-xs text-gray-400 mb-1">單次任務最多保留候選數</label><input v-model.number="adminThresholds.candidate_keep_top_n" type="number" class="cyber-input w-full px-3 py-2 rounded"></div>
                             </div>
                             <button @click="saveThresholds" class="mt-4 px-6 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded transition-colors">覆寫並儲存全域門檻</button>
                         </div>
@@ -582,20 +582,30 @@
 
                 // 管理員專屬狀態
                 const adminSubTab = ref('thresholds');
-                const adminThresholds = reactive({ min_trades: 30, min_total_return_pct: 3.0, max_drawdown_pct: 25.0, min_sharpe: 0.6, keep_top_n: 30 });
+                const adminThresholds = reactive({ min_trades: 30, min_total_return_pct: 3.0, max_drawdown_pct: 25.0, min_sharpe: 0.6, candidate_keep_top_n: 30 });
                 const adminPools = ref([]);
                 const adminStrats = ref([]);
+                const adminError = ref('');
+
+                const normalizeAdminThresholds = (data = {}) => ({
+                    min_trades: Number(data.min_trades ?? 30),
+                    min_total_return_pct: Number(data.min_total_return_pct ?? 3.0),
+                    max_drawdown_pct: Number(data.max_drawdown_pct ?? 25.0),
+                    min_sharpe: Number(data.min_sharpe ?? 0.6),
+                    candidate_keep_top_n: Number(data.candidate_keep_top_n ?? data.keep_top_n ?? 30)
+                });
 
                 const loadAdminData = async () => {
                     if (!user.value || user.value.role !== 'admin') return;
                     try {
                         showToast('正在獲取管理員資料...', 'info', 1000);
+                        adminError.value = '';
                         const [thRes, pRes, sRes] = await Promise.all([
                             fetchApi('/settings/thresholds'),
-                            fetchApi('/admin/pools'),
-                            fetchApi('/api/trading/strategies')
+                            fetchApi('/admin/factor_pools'),
+                            fetchApi('/admin/strategies')
                         ]);
-                        Object.assign(adminThresholds, thRes);
+                        Object.assign(adminThresholds, normalizeAdminThresholds(thRes));
                         adminPools.value = (pRes.pools || []).map(p => ({
                             ...p,
                             _expanded: false,
@@ -604,22 +614,25 @@
                         }));
                         adminStrats.value = sRes.strategies || [];
                     } catch(e) {
+                        adminError.value = `管理資料同步失敗: ${e.message}`;
                         showToast(`管理員資料載入失敗: ${e.message}`, 'error', 4000);
                     }
                 };
 
                 const saveThresholds = async () => {
                     try {
-                        await fetchApi('/admin/settings/thresholds', {
+                        adminError.value = '';
+                        await fetchApi('/admin/settings', {
                             method: 'POST',
                             body: JSON.stringify({
                                 min_trades: Number(adminThresholds.min_trades),
                                 min_total_return_pct: Number(adminThresholds.min_total_return_pct),
                                 max_drawdown_pct: Number(adminThresholds.max_drawdown_pct),
                                 min_sharpe: Number(adminThresholds.min_sharpe),
-                                keep_top_n: Number(adminThresholds.keep_top_n)
+                                candidate_keep_top_n: Number(adminThresholds.candidate_keep_top_n)
                             })
                         });
+                        await loadAdminData();
                         showToast('全域門檻已成功更新！全網將即時套用。', 'success', 3000);
                     } catch(e) {
                         showToast(`門檻更新失敗: ${e.message}`, 'error', 4000);
@@ -632,8 +645,9 @@
                         try { grid = JSON.parse(p._grid_spec_str); } catch(e) { throw new Error('參數網格 JSON 格式錯誤'); }
                         try { risk = JSON.parse(p._risk_spec_str); } catch(e) { throw new Error('風控設定 JSON 格式錯誤'); }
                         
-                        await fetchApi(`/admin/pools/${p.id}/update`, {
-                            method: 'POST',
+                        adminError.value = '';
+                        await fetchApi(`/admin/factor_pools/${p.id}`, {
+                            method: 'PUT',
                             body: JSON.stringify({
                                 name: p.name,
                                 symbol: p.symbol,
@@ -647,6 +661,7 @@
                                 active: Boolean(p.active)
                             })
                         });
+                        await loadAdminData();
                         showToast(`策略池 ${p.name} 設定已覆寫成功！`, 'success', 3000);
                     } catch(e) {
                         showToast(`更新策略池失敗: ${e.message}`, 'error', 4000);
@@ -667,15 +682,6 @@
                     catch(e) { return null; }
                 };
 
-                // 發送真實 API 請求修改資料庫狀態，無假動畫
-                const submitReview = async (taskId) => {
-                    try {
-                        await fetchApi(`/tasks/${taskId}/submit_oos`, { method: 'POST' });
-                        await loadTasks(); // 真實從資料庫拉取最新狀態
-                    } catch(e) {
-                        alert("提交失敗：" + e.message);
-                    }
-                };
 
                 // 派發任務列表：過濾掉已完成的歷史任務，只顯示正在進行或排程中的任務
                 const activeTasks = computed(() => {
@@ -1152,8 +1158,8 @@
                     getStatusText, getPhaseText, getProgressState, getScore, getScoreNumber,
                     loadTasks, getShortPoolName, getScoreColorClass, formatDate,
                     activeTasks, paginatedCompletedTasks, ratingCurrentPage, totalRatingPages, changeRatingPage,
-                    getOosStatus, submitReview,
-                    adminSubTab, adminThresholds, adminPools, adminStrats, loadAdminData, saveThresholds, savePool
+                    getOosStatus,
+                    adminSubTab, adminThresholds, adminPools, adminStrats, adminError, loadAdminData, saveThresholds, savePool
                 };
             }
         }).mount('#app');
