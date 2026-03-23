@@ -1,4 +1,7 @@
 
+x-app-image: &app-image
+  image: deploy-app:${SHEEP_GIT_SHA:-latest}
+
 x-app-build: &app-build
   build:
     context: ..
@@ -31,7 +34,7 @@ services:
       retries: 10
 
   migrate:
-    <<: *app-build
+    <<: *app-image
     command: ["sh", "-lc", "python -c 'import sheep_platform_db; sheep_platform_db.init_db()'"]
     depends_on:
       db:
@@ -101,7 +104,7 @@ services:
 
   # [Worker 後台服務] 專職負責任務分配，使用較輕量的 api 鏡像
   worker:
-    <<: *app-build
+    <<: *app-image
     environment:
       SHEEP_DB_URL: "${DO_PG_URL}"
       SHEEP_DB_PATH: ""
@@ -129,7 +132,7 @@ services:
     entrypoint: ["python", "-u", "sheep_worker_daemon.py"]
 
   compute:
-    <<: *app-build
+    <<: *app-image
     environment:
       SHEEP_DB_URL: "${DO_PG_URL}"
       SHEEP_DB_PATH: ""
