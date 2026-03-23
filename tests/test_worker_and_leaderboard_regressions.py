@@ -739,3 +739,70 @@ def test_postgres_leaderboard_uses_python_fallback(monkeypatch, tmp_path):
     assert stats["time"]
     assert stats["combos"][0]["username"] == "miner-a"
     assert stats["time"][0]["username"] == "miner-a"
+
+
+def test_leaderboard_python_fallback_prefers_larger_timestamp_elapsed(monkeypatch, tmp_path):
+    db_path = tmp_path / "leaderboard-elapsed-regression.sqlite3"
+    monkeypatch.setenv("SHEEP_DB_URL", "")
+    monkeypatch.setenv("SHEEP_DB_PATH", str(db_path))
+    monkeypatch.setenv("SHEEP_LEADERBOARD_TASK_SCAN_LIMIT", "100")
+    monkeypatch.setenv("SHEEP_LEADERBOARD_TASK_SCAN_MAX_ROWS", "1000")
+    _reset_db_module()
+    import sheep_platform_db as db
+
+    db.init_db()
+    db.ensure_cycle_rollover()
+    cycle = db.get_active_cycle()
+    user = db.get_user_by_username("sheep")
+    if user is None:
+        db.create_user("sheep", "test-hash", role="user")
+        user = db.get_user_by_username("sheep")
+    assert cycle is not None and user is not None
+
+    pool_id = db.create_factor_pool(
+        cycle_id=int(cycle["id"]),
+        name="Leaderboard Elapsed Pool",
+        symbol="BTC_USDT",
+        timeframe_min=60,
+        years=2,
+        family="trend",
+        grid_spec={"alpha": [1, 2]},
+        risk_spec={"max_leverage": 2},
+        num_partitions=4,
+        seed=19,
+        active=True,
+    )[0]
+
+    now_dt = datetime.now(timezone.utc)
+    created_at = (now_dt - timedelta(hours=8, minutes=12)).isoformat()
+    updated_at = now_dt.isoformat()
+    conn = db._conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO mining_tasks (
+                user_id, pool_id, cycle_id, partition_idx, num_partitions,
+                status, progress_json, created_at, updated_at, last_heartbeat
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(user["id"]),
+                int(pool_id),
+                int(cycle["id"]),
+                0,
+                4,
+                "completed",
+                json.dumps({"combos_done": 77, "elapsed_s": 60}),
+                created_at,
+                updated_at,
+                updated_at,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    stats = db.get_leaderboard_stats(period_hours=720)
+
+    assert stats["time"], stats
+    assert float(stats["time"][0]["total_seconds"]) >= (8 * 3600), stats

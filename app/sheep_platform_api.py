@@ -558,6 +558,31 @@ def _as_int(value: Any, default: int = 0) -> int:
         return int(default)
 
 
+def _is_effectively_missing_metric(value: Any) -> bool:
+    try:
+        return abs(float(value or 0.0)) <= 1e-9
+    except Exception:
+        return True
+
+
+def _prefer_runtime_metric(value: Any, fallback: Any) -> float:
+    if not _is_effectively_missing_metric(value):
+        return _as_float(value, 0.0)
+    return _as_float(fallback, 0.0)
+
+
+def _runtime_display_key(value: Any, *, strategy_id: Any = 0) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    strategy_id_text = str(_as_int(strategy_id, 0) or "").strip()
+    if strategy_id_text and text == strategy_id_text:
+        return ""
+    if text.isdigit():
+        return ""
+    return text
+
+
 def _enrich_runtime_items(items: List[Dict[str, Any]], *, strategy_lookup: Optional[Dict[Tuple[str, str, str, str, str], Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     lookup = strategy_lookup or {}
     enriched: List[Dict[str, Any]] = []
@@ -565,6 +590,13 @@ def _enrich_runtime_items(items: List[Dict[str, Any]], *, strategy_lookup: Optio
         item = dict(raw or {})
         match = _find_runtime_strategy_match(item, lookup)
         metrics = dict(match.get("metrics") or {})
+        strategy_id = _as_int(match.get("strategy_id"), _as_int(item.get("strategy_id"), 0))
+        resolved_external_key = (
+            _runtime_display_key(match.get("external_key"), strategy_id=strategy_id)
+            or _runtime_display_key(match.get("pool_external_key"), strategy_id=strategy_id)
+            or _runtime_display_key(item.get("external_key"), strategy_id=strategy_id)
+            or _runtime_display_key(item.get("strategy_key"), strategy_id=strategy_id)
+        )
         item["owner_user_id"] = int(match.get("owner_user_id") or item.get("owner_user_id") or 0)
         item["owner_username"] = str(match.get("username") or item.get("owner_username") or "")
         item["owner_nickname"] = str(
@@ -576,11 +608,13 @@ def _enrich_runtime_items(items: List[Dict[str, Any]], *, strategy_lookup: Optio
             or ""
         )
         item["owner_avatar_url"] = str(match.get("avatar_url") or item.get("owner_avatar_url") or "")
-        item["strategy_id"] = _as_int(match.get("strategy_id"), _as_int(item.get("strategy_id"), 0))
-        item["external_key"] = str(match.get("external_key") or item.get("external_key") or item.get("strategy_key") or "")
-        item["total_return_pct"] = _as_float(item.get("total_return_pct"), _as_float(metrics.get("total_return_pct"), 0.0))
-        item["max_drawdown_pct"] = _as_float(item.get("max_drawdown_pct"), _as_float(metrics.get("max_drawdown_pct"), 0.0))
-        item["score"] = float(match.get("score") or metrics.get("sharpe") or item.get("sharpe") or 0.0)
+        item["strategy_id"] = strategy_id
+        item["strategy_key"] = _runtime_display_key(item.get("strategy_key"), strategy_id=strategy_id)
+        item["external_key"] = resolved_external_key
+        item["total_return_pct"] = _prefer_runtime_metric(item.get("total_return_pct"), metrics.get("total_return_pct"))
+        item["max_drawdown_pct"] = _prefer_runtime_metric(item.get("max_drawdown_pct"), metrics.get("max_drawdown_pct"))
+        item["sharpe"] = _prefer_runtime_metric(item.get("sharpe"), match.get("score") or metrics.get("sharpe"))
+        item["score"] = _prefer_runtime_metric(item.get("score") or item.get("sharpe"), match.get("score") or metrics.get("sharpe"))
         item["display_interval"] = str(item.get("display_interval") or item.get("interval") or match.get("timeframe_min") or "")
         enriched.append(item)
     return enriched
@@ -3150,7 +3184,6 @@ def update_progress(
     )
     if not ok:
         raise HTTPException(status_code=409, detail="lease_mismatch_or_task_not_running")
-    _invalidate_live_state("dashboard", "leaderboard")
     return {"ok": True}
 
 
@@ -3177,7 +3210,7 @@ def release_task(
     )
     if not ok:
         raise HTTPException(status_code=409, detail="lease_mismatch_or_task_not_running")
-    _invalidate_live_state("dashboard", "leaderboard")
+    _invalidate_live_state("dashboard")
     return {"ok": True}
 
 

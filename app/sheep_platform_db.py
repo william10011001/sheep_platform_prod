@@ -417,6 +417,18 @@ def _runtime_item_row(row: Any) -> Dict[str, Any]:
     return data
 
 
+def _runtime_items_have_publishable_metrics(items: List[Dict[str, Any]]) -> bool:
+    for raw_item in list(items or []):
+        item = dict(raw_item or {})
+        for key in ("sharpe", "total_return_pct", "max_drawdown_pct"):
+            try:
+                if abs(float(item.get(key) or 0.0)) > 1e-9:
+                    return True
+            except Exception:
+                continue
+    return False
+
+
 def _stable_json_checksum(payload: Any) -> str:
     normalized = json.dumps(payload or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
@@ -3564,23 +3576,35 @@ def get_runtime_portfolio_snapshot(scope: str, user_id: int = 0) -> Optional[dic
     conn = _conn()
     try:
         if scope_text == "global":
-            row = conn.execute(
-                "SELECT * FROM runtime_portfolio_snapshots WHERE scope = 'global' ORDER BY updated_at DESC, id DESC LIMIT 1"
-            ).fetchone()
+            rows = conn.execute(
+                "SELECT * FROM runtime_portfolio_snapshots WHERE scope = 'global' ORDER BY updated_at DESC, id DESC LIMIT 8"
+            ).fetchall()
         else:
-            row = conn.execute(
-                "SELECT * FROM runtime_portfolio_snapshots WHERE scope = 'personal' AND user_id = ? ORDER BY updated_at DESC, id DESC LIMIT 1",
+            rows = conn.execute(
+                "SELECT * FROM runtime_portfolio_snapshots WHERE scope = 'personal' AND user_id = ? ORDER BY updated_at DESC, id DESC LIMIT 8",
                 (owner_user_id,),
-            ).fetchone()
-        if not row:
+            ).fetchall()
+        if not rows:
             return None
-        snapshot = _runtime_snapshot_row(row)
-        items = conn.execute(
-            "SELECT * FROM runtime_portfolio_items WHERE snapshot_id = ? ORDER BY rank ASC, id ASC",
-            (int(snapshot["id"]),),
-        ).fetchall()
-        snapshot["items"] = [_runtime_item_row(item) for item in items]
-        return snapshot
+
+        snapshots: List[Dict[str, Any]] = []
+        for row in rows:
+            snapshot = _runtime_snapshot_row(row)
+            items = conn.execute(
+                "SELECT * FROM runtime_portfolio_items WHERE snapshot_id = ? ORDER BY rank ASC, id ASC",
+                (int(snapshot["id"]),),
+            ).fetchall()
+            snapshot["items"] = [_runtime_item_row(item) for item in items]
+            snapshots.append(snapshot)
+
+        latest = snapshots[0]
+        latest_source = str(latest.get("source") or "").strip().lower()
+        if latest_source.startswith("holy_grail_cached_") and not _runtime_items_have_publishable_metrics(latest.get("items") or []):
+            for candidate in snapshots[1:]:
+                if _runtime_items_have_publishable_metrics(candidate.get("items") or []):
+                    candidate["_stale_cached_runtime_fallback"] = True
+                    return candidate
+        return latest
     finally:
         conn.close()
 
@@ -4587,9 +4611,15 @@ def _leaderboard_python_fallback(conn: Any, cutoff_iso: str, window_end_iso: str
     max_rows = int(_leaderboard_task_scan_max_rows())
     scanned_rows = 0
     before_id = 0
+    before_activity_at = ""
 
     while scanned_rows < max_rows:
-        if before_id > 0:
+        base_where = """
+            WHERE t.status IN ('running', 'completed')
+              AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
+              AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <= ?
+        """
+        if before_id > 0 and before_activity_at:
             query = """
                 SELECT recent.id, recent.progress_json, recent.created_at, recent.activity_at,
                        u.id as user_id, u.username, u.nickname, u.avatar_url
@@ -4597,14 +4627,21 @@ def _leaderboard_python_fallback(conn: Any, cutoff_iso: str, window_end_iso: str
                     SELECT t.id, t.user_id, t.progress_json, t.created_at,
                            COALESCE(t.last_heartbeat, t.updated_at, t.created_at) as activity_at
                     FROM mining_tasks t
-                    WHERE t.status IN ('running', 'completed') AND t.id < ?
-                    ORDER BY t.id DESC
+            """ + base_where + """
+                      AND (
+                          COALESCE(t.last_heartbeat, t.updated_at, t.created_at) < ?
+                          OR (
+                              COALESCE(t.last_heartbeat, t.updated_at, t.created_at) = ?
+                              AND t.id < ?
+                          )
+                      )
+                    ORDER BY COALESCE(t.last_heartbeat, t.updated_at, t.created_at) DESC, t.id DESC
                     LIMIT ?
                 ) recent
                 JOIN users u ON recent.user_id = u.id
-                ORDER BY recent.id DESC
+                ORDER BY recent.activity_at DESC, recent.id DESC
             """
-            rows = conn.execute(query, (before_id, page_size)).fetchall()
+            rows = conn.execute(query, (cutoff_iso, window_end_iso, before_activity_at, before_activity_at, before_id, page_size)).fetchall()
         else:
             query = """
                 SELECT recent.id, recent.progress_json, recent.created_at, recent.activity_at,
@@ -4613,19 +4650,20 @@ def _leaderboard_python_fallback(conn: Any, cutoff_iso: str, window_end_iso: str
                     SELECT t.id, t.user_id, t.progress_json, t.created_at,
                            COALESCE(t.last_heartbeat, t.updated_at, t.created_at) as activity_at
                     FROM mining_tasks t
-                    WHERE t.status IN ('running', 'completed')
-                    ORDER BY t.id DESC
+            """ + base_where + """
+                    ORDER BY COALESCE(t.last_heartbeat, t.updated_at, t.created_at) DESC, t.id DESC
                     LIMIT ?
                 ) recent
                 JOIN users u ON recent.user_id = u.id
-                ORDER BY recent.id DESC
+                ORDER BY recent.activity_at DESC, recent.id DESC
             """
-            rows = conn.execute(query, (page_size,)).fetchall()
+            rows = conn.execute(query, (cutoff_iso, window_end_iso, page_size)).fetchall()
         if not rows:
             break
 
         scanned_rows += len(rows)
         before_id = int(rows[-1]["id"] or 0)
+        before_activity_at = str(rows[-1]["activity_at"] or "")
 
         for row in rows:
             entry = dict(row or {})
@@ -4646,16 +4684,17 @@ def _leaderboard_python_fallback(conn: Any, cutoff_iso: str, window_end_iso: str
                 elapsed_s = max(0.0, float(progress.get("elapsed_s") or progress.get("elapsed") or 0.0))
             except Exception:
                 elapsed_s = 0.0
-            if elapsed_s <= 0:
-                created_dt = _parse_iso(entry.get("created_at"))
-                if activity_dt is not None and created_dt is not None:
-                    try:
-                        elapsed_s = max(
-                            0.0,
-                            float((activity_dt.astimezone(timezone.utc) - created_dt.astimezone(timezone.utc)).total_seconds()),
-                        )
-                    except Exception:
-                        elapsed_s = 0.0
+            created_dt = _parse_iso(entry.get("created_at"))
+            derived_elapsed_s = 0.0
+            if activity_dt is not None and created_dt is not None:
+                try:
+                    derived_elapsed_s = max(
+                        0.0,
+                        float((activity_dt.astimezone(timezone.utc) - created_dt.astimezone(timezone.utc)).total_seconds()),
+                    )
+                except Exception:
+                    derived_elapsed_s = 0.0
+            elapsed_s = max(float(elapsed_s or 0.0), float(derived_elapsed_s or 0.0))
             uid = int(entry.get("user_id") or 0)
             if uid <= 0:
                 continue
@@ -4741,7 +4780,18 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
                     SELECT
                         t.id,
                         t.user_id,
-                        MAX(COALESCE(CAST(json_extract(t.progress_json, '$.elapsed_s') AS REAL), 0.0)) as elapsed_s
+                        MAX(
+                            MAX(
+                                COALESCE(CAST(json_extract(t.progress_json, '$.elapsed_s') AS REAL), 0.0),
+                                CASE
+                                    WHEN COALESCE(t.created_at, '') = '' THEN 0.0
+                                    ELSE MAX(
+                                        0.0,
+                                        (julianday(COALESCE(t.last_heartbeat, t.updated_at, t.created_at)) - julianday(t.created_at)) * 86400.0
+                                    )
+                                END
+                            )
+                        ) as elapsed_s
                     FROM mining_tasks t
                     WHERE COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
                       AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <= ?
@@ -5555,7 +5605,7 @@ def list_active_strategy_runtime_rows(limit: int = 20000, runtime_items: Optiona
         query = """
             SELECT st.id as strategy_id, st.status, st.allocation_pct, st.created_at, st.direction, st.params_json, st.external_key,
                    u.id as owner_user_id, u.username, u.nickname, u.avatar_url,
-                   p.id as pool_id, p.name as pool_name, p.symbol, p.timeframe_min, p.family,
+                   p.id as pool_id, p.name as pool_name, p.symbol, p.timeframe_min, p.family, p.external_key as pool_external_key,
                    su.id as submission_id,
                    c.id as candidate_id, c.task_id, c.metrics_json, c.score,
                    (
@@ -5649,6 +5699,8 @@ def list_active_strategy_runtime_rows(limit: int = 20000, runtime_items: Optiona
                 item["metrics"] = json.loads(item.get("metrics_json") or "{}")
             except Exception:
                 item["metrics"] = {}
+            if not str(item.get("external_key") or "").strip():
+                item["external_key"] = str(item.get("pool_external_key") or "").strip()
             if item.get("latest_return_pct") is not None and item["metrics"].get("total_return_pct") is None:
                 item["metrics"]["total_return_pct"] = float(item.get("latest_return_pct") or 0.0)
             if item.get("latest_max_drawdown_pct") is not None and item["metrics"].get("max_drawdown_pct") is None:

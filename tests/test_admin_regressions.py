@@ -850,6 +850,137 @@ def test_runtime_portfolio_strategy_id_lookup_recovers_owner_identity(admin_clie
     assert item["owner_avatar_url"]
 
 
+def test_dashboard_prefers_previous_publishable_runtime_snapshot_and_backfills_metrics(admin_client):
+    client = admin_client["client"]
+    headers = admin_client["headers"]
+    db_module = admin_client["db"]
+    user_id = admin_client["user_id"]
+    cycle_id = admin_client["cycle_id"]
+
+    match_pool_id = db_module.create_factor_pool(
+        cycle_id=int(cycle_id),
+        name="Runtime Recovery Pool",
+        symbol="ETH_USDT",
+        timeframe_min=1440,
+        years=2,
+        family="TEMA_RSI",
+        grid_spec={"alpha": [1, 2]},
+        risk_spec={"max_leverage": 2},
+        num_partitions=2,
+        seed=23,
+        active=True,
+        direction="long",
+        external_key="tema-rsi-eth-1d",
+    )[0]
+
+    now = db_module._now_iso()
+    conn = db_module._conn()
+    try:
+        strategy_cur = conn.execute(
+            """
+            INSERT INTO strategies (
+                submission_id, user_id, pool_id, external_key, direction, params_json, status,
+                allocation_pct, note, created_at, expires_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                7,
+                int(user_id),
+                int(match_pool_id),
+                "",
+                "long",
+                json.dumps({"family": "TEMA_RSI", "interval": "1d", "symbol": "ETH_USDT"}),
+                "active",
+                25.0,
+                "runtime-recovery-test",
+                now,
+                "2099-12-31T23:59:59+00:00",
+            ),
+        )
+        strategy_id = int(strategy_cur.lastrowid)
+        conn.commit()
+    finally:
+        conn.close()
+
+    db_module.create_weekly_check(
+        strategy_id=strategy_id,
+        week_start_ts=now,
+        week_end_ts=now,
+        return_pct=57.39,
+        max_drawdown_pct=3.37,
+        trades=24,
+        eligible=True,
+    )
+
+    issued = client.post(
+        "/runtime-sync/token",
+        headers=headers,
+        json={"ttl_seconds": 7200, "rotate_existing": True},
+    )
+    assert issued.status_code == 200, issued.text
+    token = issued.json()["token"]
+
+    good_sync = client.post(
+        "/runtime/portfolio/sync",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "scope": "global",
+            "summary": {"portfolio_metrics": {"sharpe": 4.19}},
+            "items": [
+                {
+                    "strategy_id": strategy_id,
+                    "strategy_key": "tema-rsi-eth-1d",
+                    "family": "TEMA_RSI",
+                    "symbol": "ETH_USDT",
+                    "direction": "long",
+                    "interval": "1d",
+                    "family_params": {"fast_len": 9, "slow_len": 30},
+                    "stake_pct": 45.35,
+                    "sharpe": 4.19,
+                    "total_return_pct": 57.39,
+                    "max_drawdown_pct": 3.37,
+                }
+            ],
+        },
+    )
+    assert good_sync.status_code == 200, good_sync.text
+
+    bad_cached_sync = client.post(
+        "/runtime/portfolio/sync",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "scope": "global",
+            "source": "holy_grail_cached_failure",
+            "summary": {"portfolio_metrics": {"sharpe": 0.0}},
+            "items": [
+                {
+                    "strategy_id": strategy_id,
+                    "strategy_key": str(strategy_id),
+                    "family": "TEMA_RSI",
+                    "symbol": "ETH_USDT",
+                    "direction": "long",
+                    "interval": "1d",
+                    "family_params": {"fast_len": 9, "slow_len": 30},
+                    "stake_pct": 45.35,
+                    "sharpe": 0.0,
+                    "total_return_pct": 0.0,
+                    "max_drawdown_pct": 0.0,
+                }
+            ],
+        },
+    )
+    assert bad_cached_sync.status_code == 200, bad_cached_sync.text
+
+    dashboard = client.get("/dashboard", headers=headers)
+    assert dashboard.status_code == 200, dashboard.text
+    item = dashboard.json()["global_runtime_portfolio_items"][0]
+    assert int(item["strategy_id"]) == strategy_id
+    assert item["external_key"] == "tema-rsi-eth-1d"
+    assert item["strategy_key"] in {"", "tema-rsi-eth-1d"}
+    assert item["total_return_pct"] == pytest.approx(57.39)
+    assert item["max_drawdown_pct"] == pytest.approx(3.37)
+
+
 def test_dashboard_exposes_review_ready_items_for_rating_panel(admin_client):
     client = admin_client["client"]
     headers = admin_client["headers"]
