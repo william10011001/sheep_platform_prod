@@ -88,9 +88,13 @@ except Exception as e:
     print(f"[BOOT WARN] Auto-provision compute user failed: {e}")
 
 try:
-    _review_rebuild_summary = _rebuild_review_state(db_module=db)
-    if int(_review_rebuild_summary.get("updated") or 0) > 0:
-        logger.info("review-state maintenance updated %s completed tasks", _review_rebuild_summary.get("updated"))
+    _run_review_rebuild_on_boot = str(os.environ.get("SHEEP_REBUILD_REVIEW_STATE_ON_BOOT", "0") or "0").strip().lower() in {"1", "true", "yes", "on"}
+    if _run_review_rebuild_on_boot:
+        _review_rebuild_summary = _rebuild_review_state(db_module=db)
+        if int(_review_rebuild_summary.get("updated") or 0) > 0:
+            logger.info("review-state maintenance updated %s completed tasks", _review_rebuild_summary.get("updated"))
+    else:
+        logger.info("review-state maintenance skipped on boot")
 except Exception as e:
     print(f"[BOOT WARN] review-state maintenance failed: {e}")
 

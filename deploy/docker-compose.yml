@@ -10,6 +10,14 @@ services:
       - pgdata:/var/lib/postgresql/data
     ports:
       - "5432:5432"
+    cpus: "${SHEEP_DB_CPUS:-1.0}"
+    mem_limit: "${SHEEP_DB_MEM_LIMIT:-1024m}"
+    pids_limit: 256
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 10s
@@ -49,6 +57,7 @@ services:
       SHEEP_API_ROOT_PATH: /sheep123
       SHEEP_GIT_SHA: ${SHEEP_GIT_SHA}
       SHEEP_RUN_SCHEDULER: "0"
+      SHEEP_REBUILD_REVIEW_STATE_ON_BOOT: "0"
       # 確保 FastAPI 穩定綁定全域介面
       HOST: "0.0.0.0"
       PORT: "8000"
@@ -62,6 +71,14 @@ services:
     volumes:
       - ${SHEEP_HOST_DATA_DIR:-../app/data}:/app/data
     restart: always
+    cpus: "${SHEEP_API_CPUS:-1.5}"
+    mem_limit: "${SHEEP_API_MEM_LIMIT:-1536m}"
+    pids_limit: 512
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/healthz"]
       interval: 10s
@@ -84,10 +101,11 @@ services:
       SHEEP_DB_URL: "${DO_PG_URL}"
       SHEEP_DB_PATH: ""
       SHEEP_GIT_SHA: ${SHEEP_GIT_SHA:-unknown}
-      SHEEP_RUN_SCHEDULER: "1"
-      SHEEP_ASSIGN_INTERVAL_S: "15"
+      SHEEP_RUN_SCHEDULER: "0"
+      SHEEP_ASSIGN_INTERVAL_S: "30"
       SHEEP_MIN_TASKS: "2"
-      SHEEP_MAX_TASKS: "6"
+      SHEEP_MAX_TASKS: "4"
+      SHEEP_RUNNABLE_USER_LIMIT: "1000"
       PYTHONUNBUFFERED: "1"
     depends_on:
       api:
@@ -95,6 +113,14 @@ services:
     volumes:
       - ${SHEEP_HOST_DATA_DIR:-../app/data}:/app/data
     restart: always
+    cpus: "${SHEEP_WORKER_CPUS:-0.75}"
+    mem_limit: "${SHEEP_WORKER_MEM_LIMIT:-768m}"
+    pids_limit: 256
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     entrypoint: ["python", "-u", "sheep_worker_daemon.py"]
 
   compute:
@@ -108,15 +134,23 @@ services:
       SHEEP_COMPUTE_USER: ${SHEEP_BOOTSTRAP_ADMIN_USER}
       SHEEP_COMPUTE_PASS: ${SHEEP_BOOTSTRAP_ADMIN_PASS}
       SHEEP_COMPUTE_TTL_SECONDS: "2592000"
-      SHEEP_COMPUTE_IDLE_S: "0.20"
-      SHEEP_COMPUTE_COMMIT_EVERY: "50"
-      SHEEP_COMPUTE_FLAG_POLL_S: "1.0"
+      SHEEP_COMPUTE_IDLE_S: "1.0"
+      SHEEP_COMPUTE_COMMIT_EVERY: "25"
+      SHEEP_COMPUTE_FLAG_POLL_S: "5.0"
     depends_on:
       api:
         condition: service_healthy
     volumes:
       - ${SHEEP_HOST_DATA_DIR:-../app/data}:/app/data
     restart: always
+    cpus: "${SHEEP_COMPUTE_CPUS:-2.0}"
+    mem_limit: "${SHEEP_COMPUTE_MEM_LIMIT:-3072m}"
+    pids_limit: 512
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     command: ["python", "-u", "sheep_compute_daemon.py"]
 
   nginx:
@@ -134,6 +168,14 @@ services:
       api:
         condition: service_healthy
     restart: always
+    cpus: "${SHEEP_NGINX_CPUS:-0.50}"
+    mem_limit: "${SHEEP_NGINX_MEM_LIMIT:-256m}"
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   certbot:
     image: certbot/certbot:latest

@@ -387,11 +387,15 @@ class JobManager:
                     continue
 
                 # 高頻掃描 orphan（節流 2 秒一次）：根治 QUEUED 卡死
-                if time.time() - getattr(self, "_last_orphan_scan", 0) > 2.0:
+                orphan_scan_interval_s = float(os.environ.get("SHEEP_ORPHAN_SCAN_INTERVAL_S", "15") or "15")
+                orphan_scan_interval_s = max(5.0, min(120.0, orphan_scan_interval_s))
+                if time.time() - getattr(self, "_last_orphan_scan", 0) > orphan_scan_interval_s:
                     self._last_orphan_scan = time.time()
                     self._auto_enqueue_orphans()
 
-                if time.time() - getattr(self, "_last_zombie_clean", 0) > 60:
+                zombie_clean_interval_s = float(os.environ.get("SHEEP_ZOMBIE_CLEAN_INTERVAL_S", "180") or "180")
+                zombie_clean_interval_s = max(30.0, min(900.0, zombie_clean_interval_s))
+                if time.time() - getattr(self, "_last_zombie_clean", 0) > zombie_clean_interval_s:
                     self._last_zombie_clean = time.time()
                     try:
                         cleared = db.clean_zombie_tasks(timeout_minutes=15)
@@ -436,6 +440,14 @@ class JobManager:
                 finally:
                     conn.close()
 
+                cpu_count = max(1, int(os.cpu_count() or 1))
+                safe_limit = max(1, min(2, cpu_count // 2 or 1))
+                env_limit = int(os.environ.get("SHEEP_JOB_DEFAULT_MAX_CONCURRENCY", "0") or "0")
+                if env_limit > 0:
+                    limit = env_limit
+                elif int(limit or 0) <= 0 or int(limit or 0) > max(4, safe_limit):
+                    limit = safe_limit
+
                 started_any = False
                 
                 mem_free_pct = 1.0
@@ -447,7 +459,7 @@ class JobManager:
                     alive = sum(1 for t in self._threads.values() if t.is_alive())
 
                     # [系統效能防護] 增加詳細的記憶體與執行緒監控日誌
-                    if mem_free_pct < 0.15:
+                    if mem_free_pct < 0.30:
                         if alive > 0:
                              print(f"[SYSTEM WARN] 系統記憶體低於安全閾值 ({mem_free_pct:.1%})，暫緩新任務發放。目前活躍執行緒數: {alive}", file=sys.stderr)
                         pass
@@ -480,7 +492,7 @@ class JobManager:
                             alive += 1
                             started_any = True
 
-                time.sleep(0.05 if started_any else 0.5)
+                time.sleep(0.25 if started_any else 2.0)
             except Exception as e:
                 import traceback
                 import sys

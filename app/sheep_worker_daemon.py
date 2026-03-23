@@ -4,7 +4,6 @@ import time
 import traceback
 
 import sheep_platform_db as db
-from sheep_platform_jobs import JOB_MANAGER
 
 
 def _env_int(name: str, default: int) -> int:
@@ -32,24 +31,28 @@ def main() -> None:
         print(f"[worker] ensure_cycle_rollover failed: {e}\n{traceback.format_exc()}", file=sys.stderr, flush=True)
 
     interval_s = _env_float("SHEEP_ASSIGN_INTERVAL_S", 15.0)
-    interval_s = max(3.0, min(120.0, interval_s))
+    interval_s = max(5.0, min(180.0, interval_s))
 
     min_tasks = _env_int("SHEEP_MIN_TASKS", 2)
     max_tasks = _env_int("SHEEP_MAX_TASKS", 6)
+    runnable_user_limit = _env_int("SHEEP_RUNNABLE_USER_LIMIT", 1000)
 
-    print(f"[worker] running. assign_interval={interval_s}s min_tasks={min_tasks} max_tasks={max_tasks}", flush=True)
+    print(
+        f"[worker] running. assign_interval={interval_s}s min_tasks={min_tasks} "
+        f"max_tasks={max_tasks} runnable_user_limit={runnable_user_limit}",
+        flush=True,
+    )
 
     while True:
         try:
-            users = db.list_users(limit=5000)
+            users = db.list_runnable_users(limit=runnable_user_limit)
+            if not users:
+                time.sleep(max(interval_s, 15.0))
+                continue
             for u in users:
                 try:
                     uid = int(u.get("id") or 0)
                     if uid <= 0:
-                        continue
-                    if int(u.get("disabled") or 0) == 1:
-                        continue
-                    if int(u.get("run_enabled") or 0) != 1:
                         continue
 
                     db.assign_tasks_for_user(uid, min_tasks=int(min_tasks), max_tasks=int(max_tasks))

@@ -70,9 +70,9 @@ def main() -> None:
     user = _env_str("SHEEP_COMPUTE_USER", "")
     pwd = _env_str("SHEEP_COMPUTE_PASS", "")
     ttl_seconds = _env_int("SHEEP_COMPUTE_TTL_SECONDS", 2592000)
-    idle_s = _env_float("SHEEP_COMPUTE_IDLE_S", 0.20)
-    commit_every = _env_int("SHEEP_COMPUTE_COMMIT_EVERY", 50)
-    flag_poll_s = _env_float("SHEEP_COMPUTE_FLAG_POLL_S", 1.0)
+    idle_s = max(0.5, min(10.0, _env_float("SHEEP_COMPUTE_IDLE_S", 1.0)))
+    commit_every = max(10, min(100, _env_int("SHEEP_COMPUTE_COMMIT_EVERY", 25)))
+    flag_poll_s = max(2.0, min(30.0, _env_float("SHEEP_COMPUTE_FLAG_POLL_S", 5.0)))
     enable_legacy_oos = _env_str("SHEEP_COMPUTE_ENABLE_LEGACY_OOS", "false").lower() in {"1", "true", "yes", "on"}
 
     if not user or not pwd:
@@ -196,10 +196,10 @@ def main() -> None:
             # claim next task (compute token -> server will dispatch across all users)
             task = api.claim_task()
             if not task:
-                time.sleep(max(0.05, idle_s))
+                time.sleep(max(0.5, idle_s))
                 continue
             if not task:
-                time.sleep(max(0.05, idle_s))
+                time.sleep(max(0.5, idle_s))
                 continue
 
             # run compute-heavy task (grid search)

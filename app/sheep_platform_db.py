@@ -1556,6 +1556,26 @@ def list_users(limit: int = 500) -> List[Dict[str, Any]]:
         conn.close()
 
 
+def list_runnable_users(limit: int = 1000) -> List[Dict[str, Any]]:
+    conn = _conn()
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, username, nickname, avatar_url, disabled, run_enabled
+            FROM users
+            WHERE COALESCE(disabled, 0) = 0
+              AND COALESCE(run_enabled, 0) = 1
+            ORDER BY id ASC
+            LIMIT ?
+            """,
+            (int(limit),),
+        ).fetchall()
+        default_avatar_url = _default_avatar_url_from_conn(conn)
+        return [_decorate_user_row(r, default_avatar_url=default_avatar_url) for r in rows]
+    finally:
+        conn.close()
+
+
 def set_user_disabled(user_id: int, disabled: bool) -> None:
     conn = _conn()
     try:
