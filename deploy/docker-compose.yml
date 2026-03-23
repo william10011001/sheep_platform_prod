@@ -37,6 +37,8 @@ services:
       SHEEP_DB_URL: "${DO_PG_URL}"
       SHEEP_DB_PATH: ""
       SHEEP_DB_MIGRATION: none
+      SHEEP_PG_STATEMENT_TIMEOUT_MS: "0"
+      SHEEP_PG_LOCK_TIMEOUT_MS: "0"
       # [極致修復] 同步傳入管理員憑證，確保資料庫初始化時能一併處理權限
       SHEEP_COMPUTE_USER: ${SHEEP_BOOTSTRAP_ADMIN_USER}
       SHEEP_COMPUTE_PASS: ${SHEEP_BOOTSTRAP_ADMIN_PASS}

@@ -52,6 +52,14 @@ def _now_iso() -> str:
 _REVIEW_READY_CACHE: Dict[str, Any] = {"ts": 0.0, "values": {}, "retry_after": {}}
 
 
+def _env_timeout_ms(name: str, default: int) -> int:
+    try:
+        value = int(float(os.environ.get(name, str(default)) or str(default)))
+    except Exception:
+        value = int(default)
+    return max(0, min(3600000, int(value)))
+
+
 def _in_docker() -> bool:
     # 目的：判斷目前程式是否在 docker/container 裡，避免把 compose 專用的 host 規則套到本機直跑
     # [專家級修復] 增加環境變數與 DNS 解析的啟發式判斷，防止較新版本的 container 引擎沒有 /.dockerenv
@@ -810,9 +818,11 @@ def _conn() -> _DBConn:
             
         # [專家級防護] 注入連線級別的超時保護，徹底消滅無窮等待(Deadlock/Lock wait)
         try:
+            statement_timeout_ms = _env_timeout_ms("SHEEP_PG_STATEMENT_TIMEOUT_MS", 7000)
+            lock_timeout_ms = _env_timeout_ms("SHEEP_PG_LOCK_TIMEOUT_MS", 5000)
             with c.cursor() as cur:
-                cur.execute("SET statement_timeout = '7000';")  # 7秒強制中止查詢
-                cur.execute("SET lock_timeout = '5000';")       # 5秒拿不到鎖直接報錯
+                cur.execute(f"SET statement_timeout = {int(statement_timeout_ms)};")
+                cur.execute(f"SET lock_timeout = {int(lock_timeout_ms)};")
             c.commit() # 必須 commit，確保設定生效且不留下懸空交易
         except Exception:
             try:
