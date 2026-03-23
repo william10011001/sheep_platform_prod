@@ -1123,6 +1123,7 @@
                     personal_live_strategy_items: [],
                     personal_active_strategy_count: 0,
                     personal_review_pipeline_count: 0,
+                    personal_review_ready_items: [],
                     personal_review_pipeline_hint: '',
                     global_strategies_active: 0,
                     global_live_strategies_reviewed_label: '全域過審策略',
@@ -1752,6 +1753,14 @@
                 });
 
                 const qualifiedTasks = computed(() => {
+                    const readyItems = Array.isArray(dashData.personal_review_ready_items) ? dashData.personal_review_ready_items : [];
+                    if (readyItems.length > 0) {
+                        return [...readyItems].sort((a, b) => {
+                            const scoreA = Number(a?.best_any_score ?? a?.score ?? -9999);
+                            const scoreB = Number(b?.best_any_score ?? b?.score ?? -9999);
+                            return (Number.isNaN(scoreB) ? -9999 : scoreB) - (Number.isNaN(scoreA) ? -9999 : scoreA);
+                        });
+                    }
                     return completedTasks.value.filter((t) => {
                         const status = getReviewStatus(t);
                         return Boolean(t?.best_any_passed) || ['auto_managed', 'queued', 'running'].includes(status);
@@ -2536,6 +2545,8 @@
                 const getScoreNumber = (t) => { 
                     const direct = Number(t?.best_any_score ?? -9999);
                     if (!Number.isNaN(direct) && direct !== -9999) return direct;
+                    const fallbackScore = Number(t?.score ?? -9999);
+                    if (!Number.isNaN(fallbackScore) && fallbackScore !== -9999) return fallbackScore;
                     try { return Number(JSON.parse(t.progress_json||'{}').best_any_score || -9999); } 
                     catch(e) { return -9999; } 
                 };

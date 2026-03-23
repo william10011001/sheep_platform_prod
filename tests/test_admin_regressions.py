@@ -579,6 +579,8 @@ def test_runtime_portfolio_sync_updates_dashboard_personal_and_global(admin_clie
     client = admin_client["client"]
     headers = admin_client["headers"]
     db_module = admin_client["db"]
+    user_id = admin_client["user_id"]
+    cycle_id = admin_client["cycle_id"]
 
     payload_items = [
         {
@@ -590,6 +592,8 @@ def test_runtime_portfolio_sync_updates_dashboard_personal_and_global(admin_clie
             "family_params": {"fast_len": 12, "slow_len": 55},
             "stake_pct": 35.5,
             "sharpe": 2.1,
+            "total_return_pct": 18.5,
+            "max_drawdown_pct": 4.2,
             "avg_pairwise_corr_to_selected": 0.15,
             "max_pairwise_corr_to_selected": 0.22,
         },
@@ -602,8 +606,94 @@ def test_runtime_portfolio_sync_updates_dashboard_personal_and_global(admin_clie
             "family_params": {"fast_len": 10, "slow_len": 40},
             "stake_pct": 20.0,
             "sharpe": 1.3,
+            "total_return_pct": 9.4,
+            "max_drawdown_pct": 2.6,
         },
     ]
+
+    match_pool_id = db_module.create_factor_pool(
+        cycle_id=int(cycle_id),
+        name="ETH Runtime 30m",
+        symbol="ETH_USDT",
+        timeframe_min=30,
+        years=2,
+        family="TEMA_Cross",
+        grid_spec={"alpha": [1]},
+        risk_spec={"max_leverage": 2},
+        num_partitions=4,
+        seed=9,
+        active=True,
+    )[0]
+    now = db_module._now_iso()
+    conn = db_module._conn()
+    try:
+        candidate_cur = conn.execute(
+            """
+            INSERT INTO candidates (
+                task_id, user_id, pool_id, direction, params_json, metrics_json, score, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                0,
+                int(user_id),
+                int(match_pool_id),
+                "long",
+                json.dumps({"family": "TEMA_Cross"}),
+                json.dumps({"sharpe": 2.4}),
+                2.4,
+                now,
+            ),
+        )
+        candidate_id = int(candidate_cur.lastrowid)
+        submission_cur = conn.execute(
+            """
+            INSERT INTO submissions (candidate_id, user_id, pool_id, status, audit_json, submitted_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                candidate_id,
+                int(user_id),
+                int(match_pool_id),
+                "approved",
+                json.dumps({"source": "runtime-test"}),
+                now,
+            ),
+        )
+        submission_id = int(submission_cur.lastrowid)
+        strategy_cur = conn.execute(
+            """
+            INSERT INTO strategies (
+                submission_id, user_id, pool_id, external_key, direction, params_json, status,
+                allocation_pct, note, created_at, expires_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                submission_id,
+                int(user_id),
+                int(match_pool_id),
+                "db-runtime-match",
+                "long",
+                json.dumps({"family": "TEMA_Cross"}),
+                "active",
+                10.0,
+                "runtime-match",
+                now,
+                "2099-12-31T23:59:59+00:00",
+            ),
+        )
+        strategy_id = int(strategy_cur.lastrowid)
+        conn.commit()
+    finally:
+        conn.close()
+    db_module.create_weekly_check(
+        strategy_id=strategy_id,
+        week_start_ts=now,
+        week_end_ts=now,
+        return_pct=16.2,
+        max_drawdown_pct=3.7,
+        trades=18,
+        eligible=True,
+    )
 
     personal = client.post(
         "/runtime/portfolio/sync",
@@ -645,6 +735,9 @@ def test_runtime_portfolio_sync_updates_dashboard_personal_and_global(admin_clie
     assert dash["global_runtime_portfolio_count"] == 2
     assert dash["personal_runtime_portfolio_items"][0]["direction"] == "long"
     assert dash["global_runtime_portfolio_items"][1]["direction"] == "short"
+    assert int(dash["global_runtime_portfolio_items"][0]["strategy_id"]) == int(strategy_id)
+    assert dash["global_runtime_portfolio_items"][0]["total_return_pct"] == pytest.approx(18.5)
+    assert dash["global_runtime_portfolio_items"][0]["max_drawdown_pct"] == pytest.approx(4.2)
     assert dash["global_runtime_portfolio_updated_at"]
     assert dash["runtime_sync"]["global"]["last_success_at"]
     assert dash["runtime_sync"]["personal"]["last_success_at"]
@@ -659,6 +752,47 @@ def test_runtime_portfolio_sync_updates_dashboard_personal_and_global(admin_clie
 
     deprecated_events = _query_sys_events(db_module, "RUNTIME_SYNC_DEPRECATED_AUTH")
     assert deprecated_events
+
+
+def test_dashboard_exposes_review_ready_items_for_rating_panel(admin_client):
+    client = admin_client["client"]
+    headers = admin_client["headers"]
+    db_module = admin_client["db"]
+    user_id = admin_client["user_id"]
+    pool_id = admin_client["pool_id"]
+    cycle_id = admin_client["cycle_id"]
+
+    task_id = _insert_task(
+        db_module,
+        user_id=user_id,
+        pool_id=pool_id,
+        cycle_id=cycle_id,
+        status="completed",
+        progress={
+            "best_any_score": 1.92,
+            "best_any_passed": True,
+            "review_status": "auto_managed",
+            "oos_status": "auto_managed",
+        },
+    )
+    review = _attach_review_pipeline(
+        db_module,
+        task_id=task_id,
+        user_id=user_id,
+        pool_id=pool_id,
+        with_submission=True,
+        with_active_strategy=True,
+    )
+
+    dashboard = client.get("/dashboard", headers=headers)
+    assert dashboard.status_code == 200, dashboard.text
+    body = dashboard.json()
+
+    assert body["personal_reviewed_strategy_count"] >= 1
+    assert body["personal_review_ready_items"], body
+    assert int(body["personal_review_ready_items"][0]["strategy_id"]) == int(review["strategy_id"])
+    assert body["personal_review_ready_items"][0]["review_status"] == "auto_managed"
+    assert float(body["personal_review_ready_items"][0]["best_any_score"]) >= 1.8
 
 
 def test_admin_catalog_import_dry_run_apply_and_upsert(admin_client):

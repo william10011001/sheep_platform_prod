@@ -536,16 +536,16 @@ def _enrich_runtime_items(items: List[Dict[str, Any]], *, strategy_lookup: Optio
     enriched: List[Dict[str, Any]] = []
     for raw in list(items or []):
         item = dict(raw or {})
-        match = lookup.get(_runtime_match_signature(item), {})
+        match = _find_runtime_strategy_match(item, lookup)
         metrics = dict(match.get("metrics") or {})
         item["owner_user_id"] = int(match.get("owner_user_id") or 0)
         item["owner_username"] = str(match.get("username") or "")
         item["owner_nickname"] = str(match.get("display_name") or match.get("nickname") or match.get("username") or "")
         item["owner_avatar_url"] = str(match.get("avatar_url") or "")
-        item["strategy_id"] = int(match.get("strategy_id") or 0)
+        item["strategy_id"] = int(match.get("strategy_id") or item.get("strategy_id") or 0)
         item["external_key"] = str(match.get("external_key") or item.get("strategy_key") or "")
-        item["total_return_pct"] = float(metrics.get("total_return_pct") or 0.0)
-        item["max_drawdown_pct"] = float(metrics.get("max_drawdown_pct") or 0.0)
+        item["total_return_pct"] = _as_float(item.get("total_return_pct"), _as_float(metrics.get("total_return_pct"), 0.0))
+        item["max_drawdown_pct"] = _as_float(item.get("max_drawdown_pct"), _as_float(metrics.get("max_drawdown_pct"), 0.0))
         item["score"] = float(match.get("score") or metrics.get("sharpe") or item.get("sharpe") or 0.0)
         item["display_interval"] = str(item.get("interval") or match.get("timeframe_min") or "")
         enriched.append(item)
@@ -563,9 +563,30 @@ def _find_runtime_strategy_match(
             if candidate_key and candidate_key == strategy_key:
                 return candidate
     try:
-        return strategy_lookup.get(_runtime_match_signature(item), {}) or {}
+        exact = strategy_lookup.get(_runtime_match_signature(item), {}) or {}
+        if exact:
+            return exact
     except Exception:
-        return {}
+        exact = {}
+    try:
+        signature = _runtime_match_signature(item)
+        bare_signature = signature[1:]
+        bare_interval_minutes = int(db._interval_to_minutes(signature[4]))
+    except Exception:
+        return exact or {}
+    for candidate in strategy_lookup.values():
+        try:
+            candidate_signature = _runtime_match_signature(candidate)
+            candidate_bare_signature = candidate_signature[1:]
+            if candidate_bare_signature == bare_signature:
+                return candidate
+            if candidate_bare_signature[:3] == bare_signature[:3]:
+                candidate_interval_minutes = int(db._interval_to_minutes(candidate_signature[4]))
+                if bare_interval_minutes > 0 and candidate_interval_minutes == bare_interval_minutes:
+                    return candidate
+        except Exception:
+            continue
+    return exact or {}
 
 
 def _enrich_runtime_position_items(
@@ -1401,6 +1422,8 @@ def runtime_portfolio_sync(
                 "strategy_key": str((raw_item or {}).get("strategy_key") or f"{item.get('family')}_{idx}"),
                 "stake_pct": float((raw_item or {}).get("stake_pct") or item.get("stake_pct") or 0.0),
                 "sharpe": float((raw_item or {}).get("sharpe") or 0.0),
+                "total_return_pct": float((raw_item or {}).get("total_return_pct") or 0.0),
+                "max_drawdown_pct": float((raw_item or {}).get("max_drawdown_pct") or 0.0),
                 "avg_pairwise_corr_to_selected": (raw_item or {}).get("avg_pairwise_corr_to_selected"),
                 "max_pairwise_corr_to_selected": (raw_item or {}).get("max_pairwise_corr_to_selected"),
                 "duplicate_group_id": (raw_item or {}).get("duplicate_group_id"),
@@ -2542,6 +2565,7 @@ def web_dashboard(request: Request, authorization: Optional[str] = Header(None))
         personal_reviewed_strategy_count = int(db.count_review_ready_tasks(user_id=uid))
         global_reviewed_strategy_count = int(db.count_review_ready_tasks())
         personal_review_pipeline_count = int(db.count_review_pipeline_tasks_for_user(uid, cycle_id=cycle_id))
+        personal_review_ready_items = list(db.list_review_ready_items_for_user(uid, limit=100) or [])
         personal_runtime_snapshot = db.get_runtime_portfolio_snapshot("personal", user_id=uid) or {}
         global_runtime_snapshot = db.get_runtime_portfolio_snapshot("global") or {}
         personal_runtime_items = list(personal_runtime_snapshot.get("items") or [])
@@ -2580,6 +2604,7 @@ def web_dashboard(request: Request, authorization: Optional[str] = Header(None))
             "personal_live_strategy_items": personal_live_strategy_items[:20],
             "personal_active_strategy_count": personal_active_strategy_count,
             "personal_review_pipeline_count": int(personal_review_pipeline_count),
+            "personal_review_ready_items": personal_review_ready_items[:100],
             "personal_review_pipeline_hint": "已達標並由系統持續追蹤的任務會優先顯示；未達標或異常結果可在歷史紀錄查看。",
             "global_strategies_active": global_reviewed_strategy_count,
             "global_live_strategies_reviewed_label": "全域過審策略",
