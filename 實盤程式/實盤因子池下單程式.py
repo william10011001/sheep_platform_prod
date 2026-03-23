@@ -2978,8 +2978,14 @@ class FactorPoolUpdater:
         log("【系統服務】全自動聖杯建構引擎已啟動，每 5 分鐘自動尋找並熱更新對沖組合。")
         runtime_kwargs = self._factor_pool_runtime_kwargs()
         if self.last_good_json and self._has_runtime_sync_auth(runtime_kwargs):
-            self._sync_cached_runtime_snapshot("personal", runtime_kwargs, reason="startup")
-            self._sync_cached_runtime_snapshot("global", runtime_kwargs, reason="startup")
+            def _startup_sync():
+                try:
+                    self._sync_cached_runtime_snapshot("personal", runtime_kwargs, reason="startup")
+                    self._sync_cached_runtime_snapshot("global", runtime_kwargs, reason="startup")
+                except Exception as exc:
+                    log(f"【網站同步】startup cached runtime 快照同步異常: {exc}")
+
+            threading.Thread(target=_startup_sync, daemon=True).start()
 
     def _loop(self):
         while self.running:
@@ -3823,13 +3829,15 @@ class AnimatedUI(tk.Tk):
     # ----- 日誌輸出 -----
     def _drain_logs(self):
         try:
-            while True:
+            drained = 0
+            while drained < 200:
                 line = log_q.get_nowait()
                 self.log_text.insert("end", line+"\n")
                 self.log_text.see("end")
+                drained += 1
         except queue.Empty:
             pass
-        self.after(80, self._drain_logs)
+        self.after(50 if not log_q.empty() else 80, self._drain_logs)
 
 # ============ 主程式入口 ============
 def main():

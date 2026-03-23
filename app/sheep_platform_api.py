@@ -180,6 +180,7 @@ _live_last_nonempty: Dict[str, Dict[str, Dict[str, Any]]] = {
     "leaderboard": {},
 }
 _http_error_telemetry_cache: Dict[str, float] = {}
+_runtime_lookup_cache: Dict[str, Any] = {"ts": 0.0, "lookup": {}, "limit": 0}
 
 
 class _ChatHub:
@@ -247,6 +248,9 @@ def _invalidate_live_state(*channels: str) -> None:
     if "dashboard" in requested or "runtime" in requested:
         _live_cache["dashboard"].clear()
         _live_versions["dashboard"] = now_iso
+        _runtime_lookup_cache["ts"] = 0.0
+        _runtime_lookup_cache["lookup"] = {}
+        _runtime_lookup_cache["limit"] = 0
     if "leaderboard" in requested:
         _live_cache["leaderboard"].clear()
         _live_versions["leaderboard"] = now_iso
@@ -449,6 +453,12 @@ def _runtime_snapshot_signatures(snapshot: Dict[str, Any]) -> set[Tuple[str, str
 
 
 def _active_strategy_runtime_lookup(limit: int = 20000) -> Dict[Tuple[str, str, str, str, str], Dict[str, Any]]:
+    now = time.time()
+    cache_limit = int(_runtime_lookup_cache.get("limit") or 0)
+    cache_lookup = _runtime_lookup_cache.get("lookup") or {}
+    if cache_lookup and now - float(_runtime_lookup_cache.get("ts") or 0.0) < 60.0 and cache_limit >= int(limit or 0):
+        return dict(cache_lookup)
+
     lookup: Dict[Tuple[str, str, str, str, str], Dict[str, Any]] = {}
     for row in db.list_active_strategy_runtime_rows(limit=limit):
         item = dict(row or {})
@@ -461,6 +471,9 @@ def _active_strategy_runtime_lookup(limit: int = 20000) -> Dict[Tuple[str, str, 
         current_score = float((current or {}).get("score") or ((current or {}).get("metrics") or {}).get("sharpe") or 0.0)
         if current is None or score >= current_score:
             lookup[signature] = item
+    _runtime_lookup_cache["ts"] = now
+    _runtime_lookup_cache["lookup"] = dict(lookup)
+    _runtime_lookup_cache["limit"] = int(limit or 0)
     return lookup
 
 
@@ -2466,8 +2479,8 @@ def web_dashboard(request: Request, authorization: Optional[str] = Header(None))
     uid = int(ctx["user"]["id"])
     def _load_dashboard() -> Dict[str, Any]:
         cycle_id = _get_active_cycle_id()
-        all_tasks = db.list_tasks_for_user(uid, cycle_id=0)
-        tasks = [enrich_task_row(t) for t in all_tasks if int(t.get("cycle_id") or 0) == int(cycle_id)]
+        current_cycle_tasks = db.list_tasks_for_user(uid, cycle_id=cycle_id)
+        tasks = [enrich_task_row(t) for t in current_cycle_tasks]
         strategies = db.list_strategies(user_id=uid, limit=200)
         payouts = db.list_payouts(user_id=uid, limit=200)
 
@@ -2477,7 +2490,7 @@ def web_dashboard(request: Request, authorization: Optional[str] = Header(None))
         finally:
             conn.close()
 
-        completed_tasks = [t for t in all_tasks if str(t.get("status") or "") == "completed"]
+        completed_task_count = int(db.count_tasks_for_user(uid, cycle_id=0, statuses=["completed"]))
         personal_active_strategy_count = int(db.count_strategies(user_id=uid, status="active"))
         personal_reviewed_strategy_count = int(db.count_review_ready_tasks(user_id=uid))
         global_reviewed_strategy_count = int(db.count_review_ready_tasks())
@@ -2504,7 +2517,7 @@ def web_dashboard(request: Request, authorization: Optional[str] = Header(None))
         return {
             "ok": True,
             "cycle_id": cycle_id,
-            "tasks_count": len(completed_tasks),
+            "tasks_count": completed_task_count,
             "strategies_active": personal_active_strategy_count,
             "personal_live_strategies_active": personal_active_strategy_count,
             "personal_live_strategies_reviewed_label": "個人過審策略",

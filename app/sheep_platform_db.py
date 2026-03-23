@@ -2624,23 +2624,46 @@ def count_submissions(user_id: int = 0, status: str = "") -> int:
 
 
 def count_review_ready_tasks(user_id: int = 0) -> int:
-    from sheep_review import normalize_review_fields
-
     conn = _conn()
     try:
-        query = "SELECT progress_json, status FROM mining_tasks WHERE status = 'completed'"
+        query = "SELECT COUNT(*) AS c FROM mining_tasks WHERE status = 'completed'"
         params: List[Any] = []
         if int(user_id or 0) > 0:
             query += " AND user_id = ?"
             params.append(int(user_id))
-        rows = conn.execute(query, params).fetchall()
-        total = 0
-        for row in rows:
-            entry = dict(row or {})
-            review = normalize_review_fields(entry.get("progress_json"), str(entry.get("status") or ""))
-            if str(review.get("review_status") or "").strip().lower() == "auto_managed":
-                total += 1
-        return int(total)
+        if _db_kind() == "postgres":
+            query += " AND COALESCE(progress_json::jsonb->>'review_status', progress_json::jsonb->>'oos_status', '') IN ('auto_managed', 'passed')"
+        else:
+            query += " AND LOWER(COALESCE(json_extract(progress_json, '$.review_status'), json_extract(progress_json, '$.oos_status'), '')) IN ('auto_managed', 'passed')"
+        row = conn.execute(query, params).fetchone()
+        if row is None:
+            return 0
+        try:
+            return int((dict(row) if not isinstance(row, dict) else row).get("c") or 0)
+        except Exception:
+            try:
+                return int(row["c"] or 0)
+            except Exception:
+                return int(row[0] or 0)
+    except Exception:
+        from sheep_review import normalize_review_fields
+
+        try:
+            query = "SELECT progress_json, status FROM mining_tasks WHERE status = 'completed'"
+            params = []
+            if int(user_id or 0) > 0:
+                query += " AND user_id = ?"
+                params.append(int(user_id))
+            rows = conn.execute(query, params).fetchall()
+            total = 0
+            for row in rows:
+                entry = dict(row or {})
+                review = normalize_review_fields(entry.get("progress_json"), str(entry.get("status") or ""))
+                if str(review.get("review_status") or "").strip().lower() == "auto_managed":
+                    total += 1
+            return int(total)
+        except Exception:
+            return 0
     finally:
         conn.close()
 
@@ -4169,7 +4192,7 @@ def _leaderboard_python_fallback(conn: Any, cutoff_iso: str, window_end_iso: str
           AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <= ?
           AND t.status IN ('assigned', 'queued', 'running', 'completed')
         ORDER BY activity_at DESC, t.id DESC
-        LIMIT 200000
+        LIMIT 30000
         """,
         (cutoff_iso, window_end_iso),
     ).fetchall()

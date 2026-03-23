@@ -1451,8 +1451,10 @@
                         profileForm.avatar_url = user.value?.avatar_url || '';
                         profileForm.clear_avatar = false;
                         showToast('帳戶設定已更新', 'success', 3000);
-                        await loadLeaderboardData({ silent: true, preserveExisting: true });
-                        await loadDashboardData();
+                        Promise.allSettled([
+                            loadLeaderboardData({ silent: true, preserveExisting: true }),
+                            loadDashboardData(),
+                        ]);
                     } catch (e) {
                         showToast(`更新帳戶設定失敗: ${e.message}`, 'error', 4000);
                     }
@@ -1881,7 +1883,18 @@
 
                 const describeApiError = async (res) => {
                     const payload = await readApiPayload(res);
-                    return extractApiErrorMessage(payload) || (typeof payload === 'string' ? payload : JSON.stringify(payload));
+                    const payloadText = extractApiErrorMessage(payload) || (typeof payload === 'string' ? payload : JSON.stringify(payload));
+                    if (
+                        payloadText.includes('<html') ||
+                        payloadText.includes('Cloudflare') ||
+                        payloadText.includes('Connection timed out') ||
+                        payloadText.includes('502 Bad Gateway') ||
+                        payloadText.includes('Error code 522') ||
+                        res.status >= 500
+                    ) {
+                        return `伺服器目前回應逾時或暫時無法連線（狀態碼 ${res.status}），請稍後再試。`;
+                    }
+                    return payloadText;
                 };
 
                 const fetchApi = async (endpoint, options = {}) => {
@@ -1899,12 +1912,19 @@
                         if (!contentType.includes("application/json")) {
                             const payload = await readApiPayload(res);
                             const payloadText = typeof payload === 'string' ? payload : JSON.stringify(payload);
+                            const looksLikeGatewayHtml =
+                                payloadText.includes('<html') ||
+                                payloadText.includes('Cloudflare') ||
+                                payloadText.includes('Connection timed out') ||
+                                payloadText.includes('502 Bad Gateway') ||
+                                payloadText.includes('Error code 522') ||
+                                res.status >= 500;
+                            if (looksLikeGatewayHtml) {
+                                throw new Error(`伺服器目前回應逾時或暫時無法連線（狀態碼 ${res.status}），請稍後再試。`);
+                            }
                             if (!res.ok) {
                                 const detail = extractApiErrorMessage(payload) || payloadText;
                                 throw new Error(`API 請求失敗 (${res.status}): ${detail}`);
-                            }
-                            if (payloadText.includes('<html') || payloadText.includes('Cloudflare') || payloadText.includes('502 Bad Gateway') || res.status >= 500) {
-                                throw new Error(`系統連線異常 (伺服器重啟或網路擁塞)，請稍後再試。`);
                             }
                             throw new Error(`API 錯誤：未收到預期的資料格式，狀態碼 ${res.status}。`);
                         }
