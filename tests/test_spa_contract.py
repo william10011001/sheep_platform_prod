@@ -28,6 +28,11 @@ def test_spa_index_contains_mobile_rating_and_leaderboard_contracts():
 
     required_snippets = [
         "personal_review_pipeline_hint",
+        "personal_runtime_portfolio_count",
+        "personal_runtime_portfolio_items",
+        "global_runtime_portfolio_count",
+        "global_runtime_portfolio_items",
+        "global_runtime_portfolio_updated_at",
         "setRatingView('qualified')",
         "setRatingView('archive')",
         "qualifiedTasks",
@@ -35,6 +40,9 @@ def test_spa_index_contains_mobile_rating_and_leaderboard_contracts():
         "paginatedRatingTasks",
         "leaderboardSections",
         "formatLeaderboardValue",
+        "catalogImportText",
+        "runCatalogImport",
+        "/admin/catalog/import",
         "hidden sm:block",
         "sm:hidden",
         "overflow-x-auto",

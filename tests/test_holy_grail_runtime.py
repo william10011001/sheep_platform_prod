@@ -158,6 +158,58 @@ class _DummyBT:
         }
 
 
+class _SyntheticBT:
+    def __init__(self, curve_map):
+        self.curve_map = curve_map
+
+    def run_backtest(self, **kwargs):
+        params = kwargs.get("params") or {}
+        family_params = dict(kwargs.get("family_params") or params.get("family_params") or {})
+        curve_key = str(params.get("curve_key") or family_params.get("curve_key") or "A")
+        sharpe = float(family_params.get("sharpe") or 1.0)
+        cagr = float(family_params.get("cagr_pct") or (10.0 + sharpe))
+        max_dd = float(family_params.get("max_drawdown_pct") or 5.0)
+        return {
+            "trades_detail": [
+                {
+                    "entry_ts": f"2026-01-0{idx + 1}T00:00:00+00:00",
+                    "exit_ts": f"2026-01-0{idx + 2}T00:00:00+00:00",
+                    "entry_price": 100 + idx,
+                    "exit_price": 100 + idx + ret,
+                    "net_return": float(ret),
+                    "curve_key": curve_key,
+                }
+                for idx, ret in enumerate(self.curve_map[curve_key])
+            ],
+            "sharpe": sharpe,
+            "sortino": sharpe + 0.5,
+            "calmar": max(0.1, cagr / max(max_dd, 0.1)),
+            "cagr_pct": cagr,
+            "total_return_pct": float(sum(self.curve_map[curve_key]) * 100.0),
+            "max_drawdown_pct": max_dd,
+            "trades": len(self.curve_map[curve_key]),
+            "win_rate_pct": 60.0,
+            "payoff": 1.4,
+            "profit_factor": 1.2,
+            "avg_win_pct": 1.1,
+            "avg_loss_pct": -0.7,
+            "expectancy_pct": 0.3,
+            "avg_hold_bars": 3,
+            "time_in_market_pct": 12.0,
+        }
+
+
+def _equity_from_returns(returns):
+    returns = list(returns)
+    base_index = pd.date_range("2026-01-01", periods=len(returns) + 1, freq="D", tz="UTC")
+    equity = [1.0]
+    running = 1.0
+    for ret in returns:
+        running *= 1.0 + float(ret)
+        equity.append(running)
+    return pd.Series(equity, index=base_index)
+
+
 def test_shared_runtime_builds_portfolio(monkeypatch, tmp_path):
     monkeypatch.setenv("SHEEP_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("SHEEP_RUNTIME_DIR", str(tmp_path / "runtime"))
@@ -206,4 +258,189 @@ def test_shared_runtime_builds_portfolio(monkeypatch, tmp_path):
     assert result.selected_count == 1
     assert result.multi_payload[0]["interval"] == "1h"
     assert result.multi_payload[0]["stake_pct"] == 50.0
+    assert result.multi_payload[0]["direction"] == "long"
     assert Path(result.report_paths["summary_report"]).exists()
+
+
+def test_duplicate_trade_signatures_are_deduplicated(monkeypatch, tmp_path):
+    monkeypatch.setenv("SHEEP_RUNTIME_DIR", str(tmp_path / "runtime"))
+
+    def _fake_fetch(self):
+        return (
+            [
+                {
+                    "strategy_id": 1,
+                    "symbol": "BTC_USDT",
+                    "timeframe_min": 60,
+                    "pool_name": "pool",
+                    "progress": {
+                        "checkpoint_candidates": [
+                            {
+                                "score": 10,
+                                "params": {
+                                    "family": "WMA_Cross",
+                                    "tp": 0.01,
+                                    "sl": 0.02,
+                                    "max_hold": 10,
+                                    "family_params": {"curve_key": "dup", "sharpe": 2.2, "cagr_pct": 18.0},
+                                },
+                                "metrics": {"sharpe": 2.2},
+                            },
+                            {
+                                "score": 9.8,
+                                "params": {
+                                    "family": "WMA_Cross",
+                                    "tp": 0.01,
+                                    "sl": 0.02,
+                                    "max_hold": 10,
+                                    "family_params": {"curve_key": "dup", "sharpe": 2.1, "cagr_pct": 17.0},
+                                },
+                                "metrics": {"sharpe": 2.1},
+                            },
+                            {
+                                "score": 9.2,
+                                "params": {
+                                    "family": "TEMA_Cross",
+                                    "tp": 0.01,
+                                    "sl": 0.02,
+                                    "max_hold": 10,
+                                    "family_params": {"curve_key": "unique", "sharpe": 1.5, "cagr_pct": 11.0},
+                                },
+                                "metrics": {"sharpe": 1.5},
+                            },
+                        ]
+                    },
+                }
+            ],
+            "https://example.com/api",
+        )
+
+    def _fake_kline(self, symbol, timeframe_min):
+        return pd.DataFrame(
+            {
+                "ts": pd.date_range("2026-01-01", periods=6, freq="D", tz="UTC"),
+                "open": [100, 101, 102, 103, 104, 105],
+                "high": [101, 102, 103, 104, 105, 106],
+                "low": [99, 100, 101, 102, 103, 104],
+                "close": [100.5, 101.5, 102.5, 103.5, 104.5, 105.5],
+                "volume": [10, 11, 12, 13, 14, 15],
+            }
+        )
+
+    def _fake_equity(trades):
+        curve_key = trades[0]["curve_key"]
+        mapping = {
+            "dup": _equity_from_returns([0.01, 0.02, 0.02, 0.015, 0.018, 0.017]),
+            "unique": _equity_from_returns([0.01, -0.02, 0.01, -0.02, 0.01, -0.02]),
+        }
+        return mapping[curve_key]
+
+    monkeypatch.setattr(HolyGrailRuntime, "fetch_factor_pool_data", _fake_fetch)
+    monkeypatch.setattr(HolyGrailRuntime, "load_kline_data", _fake_kline)
+    monkeypatch.setattr(HolyGrailRuntime, "build_daily_equity_curve", staticmethod(_fake_equity))
+
+    result = run_holy_grail_build(bt_module=_SyntheticBT({"dup": [0.01, 0.02, 0.02], "unique": [0.0, 0.01, 0.005]}), log=lambda _msg: None)
+    assert result.ok
+    assert result.selected_count == 2
+    assert len([item for item in result.selected_portfolio if item.get("duplicate_rank") == 1]) == 2
+    full_report = pd.read_csv(result.report_paths["final_report"])
+    dup_rows = full_report[full_report["duplicate_group_size"] > 1]
+    assert len(dup_rows) == 2
+    assert dup_rows["duplicate_group_id"].nunique() == 1
+    assert set(dup_rows["selection_status"]) == {"selected", "rejected_duplicate"}
+    assert any("duplicate" in str(reason) for reason in dup_rows["selection_reject_reason"].fillna(""))
+    assert "direction" in full_report.columns
+    assert "max_pairwise_corr_to_selected" in full_report.columns
+    assert "behavior_hash_type" in full_report.columns
+
+
+def test_pairwise_hard_threshold_blocks_highly_correlated_pair(monkeypatch, tmp_path):
+    monkeypatch.setenv("SHEEP_RUNTIME_DIR", str(tmp_path / "runtime"))
+
+    def _fake_fetch(self):
+        return (
+            [
+                {
+                    "strategy_id": 1,
+                    "symbol": "ETH_USDT",
+                    "timeframe_min": 60,
+                    "pool_name": "pool",
+                    "progress": {
+                        "checkpoint_candidates": [
+                            {
+                                "score": 10.0,
+                                "params": {
+                                    "family": "Alpha",
+                                    "tp": 0.01,
+                                    "sl": 0.02,
+                                    "max_hold": 10,
+                                    "family_params": {"curve_key": "A", "sharpe": 2.4},
+                                },
+                                "metrics": {"sharpe": 2.4},
+                            },
+                            {
+                                "score": 9.8,
+                                "params": {
+                                    "family": "Beta",
+                                    "tp": 0.01,
+                                    "sl": 0.02,
+                                    "max_hold": 10,
+                                    "family_params": {"curve_key": "B", "sharpe": 1.8},
+                                },
+                                "metrics": {"sharpe": 1.8},
+                            },
+                            {
+                                "score": 9.7,
+                                "params": {
+                                    "family": "Gamma",
+                                    "tp": 0.01,
+                                    "sl": 0.02,
+                                    "max_hold": 10,
+                                    "family_params": {"curve_key": "C", "sharpe": 1.7},
+                                },
+                                "metrics": {"sharpe": 1.7},
+                            },
+                        ]
+                    },
+                }
+            ],
+            "https://example.com/api",
+        )
+
+    def _fake_kline(self, symbol, timeframe_min):
+        return pd.DataFrame(
+            {
+                "ts": pd.date_range("2026-01-01", periods=8, freq="D", tz="UTC"),
+                "open": [100] * 8,
+                "high": [101] * 8,
+                "low": [99] * 8,
+                "close": [100.5] * 8,
+                "volume": [10] * 8,
+            }
+        )
+
+    def _fake_equity(trades):
+        curve_key = trades[0]["curve_key"]
+        mapping = {
+            "A": _equity_from_returns([0.02, 0.0, -0.02, 0.0, 0.02, 0.0, -0.02, 0.0]),
+            "B": _equity_from_returns([0.01, 0.02, 0.01, 0.02, -0.01, -0.02, -0.01, -0.02]),
+            "C": _equity_from_returns([0.011, 0.021, 0.012, 0.022, -0.011, -0.021, -0.012, -0.022]),
+        }
+        return mapping[curve_key]
+
+    monkeypatch.setattr(HolyGrailRuntime, "fetch_factor_pool_data", _fake_fetch)
+    monkeypatch.setattr(HolyGrailRuntime, "load_kline_data", _fake_kline)
+    monkeypatch.setattr(HolyGrailRuntime, "build_daily_equity_curve", staticmethod(_fake_equity))
+
+    result = run_holy_grail_build(
+        bt_module=_SyntheticBT({"A": [0.02, 0.02, 0.02], "B": [0.01, -0.01, 0.01], "C": [-0.01, 0.01, -0.01]}),
+        log=lambda _msg: None,
+    )
+    assert result.ok
+    families = [row["family"] for row in result.selected_portfolio]
+    assert "Alpha" in families
+    assert len([name for name in families if name in {"Beta", "Gamma"}]) == 1
+    full_report = pd.read_csv(result.report_paths["final_report"])
+    rejected = full_report[full_report["selection_status"] == "rejected_corr"]
+    assert not rejected.empty
+    assert rejected["max_pairwise_corr_to_selected"].abs().max() > 0.4

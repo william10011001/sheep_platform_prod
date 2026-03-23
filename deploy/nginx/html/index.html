@@ -307,12 +307,93 @@
                     </div>
                 </div>
 
-                <div v-if="currentTab === 'dashboard'" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4 animate-fade-in">
-                    <div class="cyber-card p-4 flex flex-col justify-center items-center"><div class="text-xs text-white mb-1">已完成任務</div><div class="text-3xl text-white cyber-num">{{ dashData.tasks_count || 0 }}</div></div>
-                    <div class="cyber-card p-4 flex flex-col justify-center items-center"><div class="text-xs text-white mb-1">個人已上線策略</div><div class="text-3xl text-white cyber-num">{{ dashData.personal_live_strategies_active || dashData.strategies_active || 0 }}</div></div>
-                    <div class="cyber-card p-4 flex flex-col justify-center items-center text-center"><div class="text-xs text-white mb-1">個人達標 / 自動管理中</div><div class="text-3xl text-white cyber-num">{{ dashData.personal_review_pipeline_count || 0 }}</div><div class="mt-2 text-[11px] leading-5 text-slate-400">{{ dashData.personal_review_pipeline_hint || '本週期已達標且進入後續自動管理流程的任務數量' }}</div></div>
-                    <div class="cyber-card p-4 flex flex-col justify-center items-center bg-emerald-900/20 border-emerald-500/30"><div class="text-xs text-emerald-400 font-bold mb-1">全網實盤因子總數</div><div class="text-3xl text-emerald-400 font-bold cyber-num">{{ dashData.global_strategies_active || 0 }}</div></div>
-                    <div class="cyber-card p-4 flex flex-col justify-center items-center"><div class="text-xs text-white mb-1">待發放獎勵(USDT)</div><div class="text-3xl text-white cyber-num">{{ dashData.payouts_unpaid || 0 }}</div></div>
+                <div v-if="currentTab === 'dashboard'" class="space-y-6 animate-fade-in">
+                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-4">
+                        <div class="cyber-card p-4 flex flex-col justify-center items-center">
+                            <div class="text-xs text-white mb-1">已完成任務</div>
+                            <div class="text-3xl text-white cyber-num">{{ dashData.tasks_count || 0 }}</div>
+                        </div>
+                        <div class="cyber-card p-4 flex flex-col justify-center items-center">
+                            <div class="text-xs text-white mb-1">{{ dashData.personal_live_strategies_reviewed_label || '個人審核上線策略' }}</div>
+                            <div class="text-3xl text-white cyber-num">{{ dashData.personal_live_strategies_active || dashData.strategies_active || 0 }}</div>
+                        </div>
+                        <div class="cyber-card p-4 flex flex-col justify-center items-center text-center">
+                            <div class="text-xs text-white mb-1">個人達標 / 自動管理中</div>
+                            <div class="text-3xl text-white cyber-num">{{ dashData.personal_review_pipeline_count || 0 }}</div>
+                            <div class="mt-2 text-[11px] leading-5 text-slate-400">{{ dashData.personal_review_pipeline_hint || '本週期已達標且進入後續自動管理流程的任務數量' }}</div>
+                        </div>
+                        <div class="cyber-card p-4 flex flex-col justify-center items-center border-cyan-500/30 bg-cyan-900/10">
+                            <div class="text-xs text-cyan-300 mb-1">目前實盤載入策略</div>
+                            <div class="text-3xl text-cyan-300 cyber-num">{{ dashData.personal_runtime_portfolio_count || 0 }}</div>
+                            <div class="mt-2 text-[11px] leading-5 text-slate-400">{{ formatDate(dashData.personal_runtime_portfolio_updated_at) }}</div>
+                        </div>
+                        <div class="cyber-card p-4 flex flex-col justify-center items-center bg-emerald-900/20 border-emerald-500/30">
+                            <div class="text-xs text-emerald-400 font-bold mb-1">{{ dashData.global_live_strategies_reviewed_label || '全網審核上線策略' }}</div>
+                            <div class="text-3xl text-emerald-400 font-bold cyber-num">{{ dashData.global_strategies_active || 0 }}</div>
+                        </div>
+                        <div class="cyber-card p-4 flex flex-col justify-center items-center border-amber-500/30 bg-amber-900/10 text-center">
+                            <div class="text-xs text-amber-300 font-bold mb-1">全域已上線策略</div>
+                            <div class="text-3xl text-amber-300 font-bold cyber-num">{{ dashData.global_runtime_portfolio_count || 0 }}</div>
+                            <div class="mt-2 text-[11px] leading-5 text-slate-400">最近系統自動更新時間</div>
+                            <div class="text-[11px] leading-5 text-slate-300">{{ formatDate(dashData.global_runtime_portfolio_updated_at) }}</div>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                        <div class="cyber-card p-4 sm:p-5 space-y-3">
+                            <div class="flex items-center justify-between gap-3">
+                                <div>
+                                    <h3 class="text-lg font-bold text-white">目前實盤載入策略</h3>
+                                    <div class="text-xs text-slate-400 mt-1">由本機實盤程式每次 Holy Grail 熱更新成功後同步。</div>
+                                </div>
+                                <div class="text-xs text-slate-400">{{ formatDate(dashData.personal_runtime_portfolio_updated_at) }}</div>
+                            </div>
+                            <div class="space-y-3">
+                                <div v-for="item in dashData.personal_runtime_portfolio_items || []" :key="`personal-runtime-${item.strategy_key || item.rank}`" class="rounded-xl border border-white/10 bg-black/30 p-4">
+                                    <div class="flex items-start justify-between gap-3">
+                                        <div>
+                                            <div class="text-sm text-white font-semibold">{{ item.family }} · {{ item.symbol }}</div>
+                                            <div class="text-xs text-slate-400 mt-1">{{ item.interval }} · {{ (item.direction || 'long').toUpperCase() }}</div>
+                                        </div>
+                                        <div class="text-right">
+                                            <div class="text-xs text-slate-400">權重</div>
+                                            <div class="text-sm text-cyan-300 cyber-num">{{ Number(item.stake_pct || 0).toFixed(2) }}%</div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div v-if="!dashData.personal_runtime_portfolio_items || dashData.personal_runtime_portfolio_items.length === 0" class="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-sm text-slate-500">
+                                    目前尚未同步任何個人實盤組合。
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="cyber-card p-4 sm:p-5 space-y-3">
+                            <div class="flex items-center justify-between gap-3">
+                                <div>
+                                    <h3 class="text-lg font-bold text-white">全域已上線策略</h3>
+                                    <div class="text-xs text-slate-400 mt-1">中央 Holy Grail 最新發布的全域 Top 組合。</div>
+                                </div>
+                                <div class="text-xs text-slate-400">{{ formatDate(dashData.global_runtime_portfolio_updated_at) }}</div>
+                            </div>
+                            <div class="space-y-3">
+                                <div v-for="item in dashData.global_runtime_portfolio_items || []" :key="`global-runtime-${item.strategy_key || item.rank}`" class="rounded-xl border border-white/10 bg-black/30 p-4">
+                                    <div class="flex items-start justify-between gap-3">
+                                        <div>
+                                            <div class="text-sm text-white font-semibold">#{{ item.rank || '-' }} · {{ item.family }} · {{ item.symbol }}</div>
+                                            <div class="text-xs text-slate-400 mt-1">{{ item.interval }} · {{ (item.direction || 'long').toUpperCase() }}</div>
+                                        </div>
+                                        <div class="text-right">
+                                            <div class="text-xs text-slate-400">權重 / Sharpe</div>
+                                            <div class="text-sm text-amber-300 cyber-num">{{ Number(item.stake_pct || 0).toFixed(2) }}% / {{ Number(item.sharpe || 0).toFixed(2) }}</div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div v-if="!dashData.global_runtime_portfolio_items || dashData.global_runtime_portfolio_items.length === 0" class="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-sm text-slate-500">
+                                    目前尚未同步任何全域實盤組合。
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
                 <div v-if="currentTab === 'rewards'" class="cyber-card p-4 sm:p-6 animate-fade-in">
@@ -543,6 +624,7 @@
                             <button @click="adminSubTab = 'thresholds'" :class="adminSubTab === 'thresholds' ? 'text-emerald-400 border-b-2 border-emerald-400 font-bold' : 'text-gray-400 hover:text-white'" class="pb-2 whitespace-nowrap">達標門檻設定</button>
                             <button @click="adminSubTab = 'pools'" :class="adminSubTab === 'pools' ? 'text-emerald-400 border-b-2 border-emerald-400 font-bold' : 'text-gray-400 hover:text-white'" class="pb-2 whitespace-nowrap">策略池參數修改</button>
                             <button @click="adminSubTab = 'livestrats'" :class="adminSubTab === 'livestrats' ? 'text-emerald-400 border-b-2 border-emerald-400 font-bold' : 'text-gray-400 hover:text-white'" class="pb-2 whitespace-nowrap">實盤因子池狀態</button>
+                            <button @click="adminSubTab = 'catalogImport'" :class="adminSubTab === 'catalogImport' ? 'text-emerald-400 border-b-2 border-emerald-400 font-bold' : 'text-gray-400 hover:text-white'" class="pb-2 whitespace-nowrap">批次 JSON 匯入</button>
                         </div>
 
                         <div v-if="adminError" class="mb-4 rounded-md border border-red-500/40 bg-red-900/20 px-4 py-3 text-sm text-red-200">
@@ -573,7 +655,15 @@
                                 <div v-if="p._expanded" class="space-y-4 border-t border-white/10 pt-4 mt-4">
                                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                                         <div><label class="block text-xs text-gray-400 mb-1">策略池名稱</label><input v-model="p.name" type="text" class="cyber-input w-full px-3 py-2 rounded"></div>
+                                        <div><label class="block text-xs text-gray-400 mb-1">外部鍵值 (external_key)</label><input v-model="p.external_key" type="text" class="cyber-input w-full px-3 py-2 rounded"></div>
                                         <div><label class="block text-xs text-gray-400 mb-1">交易對 (Symbol)</label><input v-model="p.symbol" type="text" class="cyber-input w-full px-3 py-2 rounded"></div>
+                                        <div>
+                                            <label class="block text-xs text-gray-400 mb-1">方向</label>
+                                            <select v-model="p.direction" class="cyber-input w-full px-3 py-2 rounded">
+                                                <option value="long">LONG</option>
+                                                <option value="short">SHORT</option>
+                                            </select>
+                                        </div>
                                         <div><label class="block text-xs text-gray-400 mb-1">K線週期 (分鐘)</label><input v-model.number="p.timeframe_min" type="number" class="cyber-input w-full px-3 py-2 rounded"></div>
                                         <div><label class="block text-xs text-gray-400 mb-1">回測年數</label><input v-model.number="p.years" type="number" class="cyber-input w-full px-3 py-2 rounded"></div>
                                         <div><label class="block text-xs text-gray-400 mb-1">策略家族 (Family)</label><input v-model="p.family" type="text" class="cyber-input w-full px-3 py-2 rounded"></div>
@@ -595,6 +685,28 @@
                             </div>
                             <div class="bg-black/50 border border-white/10 rounded-md p-4 max-h-[600px] overflow-y-auto">
                                 <pre class="text-xs text-emerald-300 whitespace-pre-wrap font-mono">{{ JSON.stringify(adminStrats, null, 2) }}</pre>
+                            </div>
+                        </div>
+
+                        <div v-if="adminSubTab === 'catalogImport'" class="space-y-4">
+                            <div class="rounded-xl border border-white/10 bg-black/30 p-4 space-y-3">
+                                <div>
+                                    <h4 class="text-lg font-bold text-white">批次 JSON 匯入</h4>
+                                    <div class="text-xs text-slate-400 mt-1">支援同一份檔案同時匯入 `factor_pools` 與 `strategies`，先 dry-run 驗證，再正式套用。</div>
+                                </div>
+                                <div class="flex flex-col sm:flex-row gap-3">
+                                    <input type="file" accept=".json,application/json" @change="handleCatalogFileChange" class="cyber-input w-full px-3 py-2 rounded text-sm">
+                                    <button @click="runCatalogImport(true)" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded border border-slate-600 text-sm">Dry Run 驗證</button>
+                                    <button @click="runCatalogImport(false)" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-sm font-bold">正式套用</button>
+                                </div>
+                                <textarea v-model="catalogImportText" class="cyber-input w-full px-3 py-2 rounded h-56 font-mono text-xs" placeholder='{"schema_version":1,"factor_pools":[],"strategies":[]}'></textarea>
+                            </div>
+                            <div v-if="catalogImportResult" class="rounded-xl border border-white/10 bg-black/30 p-4 space-y-3">
+                                <div class="flex items-center justify-between gap-3">
+                                    <div class="text-sm text-white font-semibold">最近一次匯入結果</div>
+                                    <div class="text-xs" :class="catalogImportResult.ok ? 'text-emerald-400' : 'text-red-400'">{{ catalogImportResult.ok ? '成功' : '失敗' }}</div>
+                                </div>
+                                <pre class="text-xs text-slate-300 whitespace-pre-wrap font-mono">{{ JSON.stringify(catalogImportResult, null, 2) }}</pre>
                             </div>
                         </div>
                     </div>
@@ -636,7 +748,26 @@
                 };
                 
                 const authForm = reactive({ username: '', password: '' });
-                const dashData = reactive({ tasks_count: 0, strategies_active: 0, personal_live_strategies_active: 0, personal_review_pipeline_count: 0, personal_review_pipeline_hint: '', global_strategies_active: 0, payouts_unpaid: 0, strategies: [], payouts: [], min_sharpe: 0.6 });
+                const dashData = reactive({
+                    tasks_count: 0,
+                    strategies_active: 0,
+                    personal_live_strategies_active: 0,
+                    personal_live_strategies_reviewed_label: '個人審核上線策略',
+                    personal_review_pipeline_count: 0,
+                    personal_review_pipeline_hint: '',
+                    global_strategies_active: 0,
+                    global_live_strategies_reviewed_label: '全網審核上線策略',
+                    personal_runtime_portfolio_count: 0,
+                    personal_runtime_portfolio_updated_at: '',
+                    personal_runtime_portfolio_items: [],
+                    global_runtime_portfolio_count: 0,
+                    global_runtime_portfolio_updated_at: '',
+                    global_runtime_portfolio_items: [],
+                    payouts_unpaid: 0,
+                    strategies: [],
+                    payouts: [],
+                    min_sharpe: 0.6
+                });
                 
                 // 專屬 worker Token 狀態管理
                 const workerTokenKey = 'sheep_worker_token';
@@ -781,6 +912,8 @@
                 const adminPools = ref([]);
                 const adminStrats = ref([]);
                 const adminError = ref('');
+                const catalogImportText = ref('');
+                const catalogImportResult = ref(null);
 
                 const normalizeAdminThresholds = (data = {}) => ({
                     min_trades: Number(data.min_trades ?? 30),
@@ -803,6 +936,8 @@
                         Object.assign(adminThresholds, normalizeAdminThresholds(thRes));
                         adminPools.value = (pRes.pools || []).map(p => ({
                             ...p,
+                            direction: p.direction || 'long',
+                            external_key: p.external_key || '',
                             _expanded: false,
                             _grid_spec_str: JSON.stringify(p.grid_spec || p.grid_spec_json || {}, null, 2),
                             _risk_spec_str: JSON.stringify(p.risk_spec || p.risk_spec_json || {}, null, 2)
@@ -845,7 +980,9 @@
                             method: 'PUT',
                             body: JSON.stringify({
                                 name: p.name,
+                                external_key: p.external_key || '',
                                 symbol: p.symbol,
+                                direction: p.direction || 'long',
                                 timeframe_min: Number(p.timeframe_min),
                                 years: Number(p.years),
                                 family: p.family,
@@ -860,6 +997,29 @@
                         showToast(`策略池 ${p.name} 設定已覆寫成功！`, 'success', 3000);
                     } catch(e) {
                         showToast(`更新策略池失敗: ${e.message}`, 'error', 4000);
+                    }
+                };
+
+                const handleCatalogFileChange = async (event) => {
+                    const file = event?.target?.files?.[0];
+                    if (!file) return;
+                    catalogImportText.value = await file.text();
+                };
+
+                const runCatalogImport = async (dryRun = true) => {
+                    try {
+                        adminError.value = '';
+                        const parsed = JSON.parse(catalogImportText.value || '{}');
+                        const res = await fetchApi(`/admin/catalog/import?dry_run=${dryRun ? 'true' : 'false'}`, {
+                            method: 'POST',
+                            body: JSON.stringify(parsed)
+                        });
+                        catalogImportResult.value = res;
+                        await loadAdminData();
+                        showToast(dryRun ? '批次匯入 dry-run 驗證完成。' : '批次匯入已正式套用。', 'success', 3000);
+                    } catch(e) {
+                        catalogImportResult.value = { ok: false, error: e.message };
+                        showToast(`批次匯入失敗: ${e.message}`, 'error', 4000);
                     }
                 };
 
@@ -1481,7 +1641,8 @@
                     activeTasks, activeTaskEmptyStateText, ratingView, setRatingView, paginatedRatingTasks, activeRatingPage, totalRatingPages, changeRatingPage,
                     qualifiedTasks, rejectedArchiveTasks, leaderboardSections, formatLeaderboardValue,
                     getReviewStatus, getReviewStatusMeta, getReviewDetail,
-                    adminSubTab, adminThresholds, adminPools, adminStrats, adminError, loadAdminData, saveThresholds, savePool
+                    adminSubTab, adminThresholds, adminPools, adminStrats, adminError, loadAdminData, saveThresholds, savePool,
+                    catalogImportText, catalogImportResult, handleCatalogFileChange, runCatalogImport
                 };
             }
         }).mount('#app');

@@ -22,6 +22,7 @@ from sheep_review import (
     normalize_review_fields as _normalize_review_fields,
     rebuild_review_state as _rebuild_review_state,
 )
+from sheep_strategy_schema import normalize_direction, normalize_runtime_strategy_entry
 
 def enrich_task_row(task: Dict[str, Any]) -> Dict[str, Any]:
     row = _enrich_task_row(task)
@@ -377,6 +378,45 @@ def _token_kind(ctx: Dict[str, Any]) -> str:
         return "unknown"
 
 
+def _is_admin_ctx(ctx: Dict[str, Any]) -> bool:
+    try:
+        return str((ctx.get("user") or {}).get("role") or "") == "admin"
+    except Exception:
+        return False
+
+
+def _can_publish_global_runtime(ctx: Dict[str, Any]) -> bool:
+    if not _is_admin_ctx(ctx):
+        return False
+    token_name = str((ctx.get("token") or {}).get("name") or "").strip().lower()
+    return token_name in {"compute", "web_session", "worker", "system_sync"} or token_name == ""
+
+
+def _runtime_sync_auth_ctx(
+    req: Request,
+    authorization: Optional[str],
+    *,
+    username: str = "",
+    password: str = "",
+) -> Dict[str, Any]:
+    if authorization:
+        return _auth_ctx(req, authorization)
+    uname = str(username or "").strip()
+    pwd = str(password or "")
+    if not uname or not pwd:
+        raise HTTPException(status_code=401, detail="missing_runtime_sync_credentials")
+    from sheep_platform_security import verify_password
+
+    user = db.get_user_by_username(uname)
+    if not user or not verify_password(pwd, user.get("password_hash", "")):
+        raise HTTPException(status_code=401, detail="bad_runtime_sync_credentials")
+    if int(user.get("disabled") or 0) != 0:
+        raise HTTPException(status_code=403, detail="user_disabled")
+    req.state.user_id = int(user["id"])
+    req.state.token_id = 0
+    return {"user": user, "token": {"id": 0, "name": "runtime_password"}}
+
+
 def _log_legacy_worker_token_use(req: Request, ctx: Dict[str, Any], endpoint: str) -> None:
     if _token_kind(ctx) != "web_session":
         return
@@ -691,7 +731,9 @@ class AdminSettingsUpdate(BaseModel):
 
 class FactorPoolCreate(BaseModel):
     name: str
+    external_key: str = ""
     symbol: str
+    direction: str = "long"
     timeframe_min: int
     years: int
     family: str
@@ -704,7 +746,9 @@ class FactorPoolCreate(BaseModel):
 
 class FactorPoolUpdate(BaseModel):
     name: str
+    external_key: str = ""
     symbol: str
+    direction: str = "long"
     timeframe_min: int
     years: int
     family: str
@@ -713,6 +757,23 @@ class FactorPoolUpdate(BaseModel):
     num_partitions: int
     seed: int
     active: bool
+
+
+class RuntimePortfolioSyncIn(BaseModel):
+    scope: str
+    updated_at: Optional[str] = None
+    source: str = "holy_grail_runtime"
+    summary: Dict[str, Any] = {}
+    items: List[Dict[str, Any]] = []
+    checksum: Optional[str] = None
+    username: str = ""
+    password: str = ""
+
+
+class CatalogImportIn(BaseModel):
+    schema_version: int = 1
+    factor_pools: List[Dict[str, Any]] = []
+    strategies: List[Dict[str, Any]] = []
 
 
 _THRESHOLD_DEFAULTS: Dict[str, Any] = {
@@ -819,7 +880,9 @@ def create_admin_factor_pool(req: Request, body: FactorPoolCreate, authorization
         ids = db.create_factor_pool(
             cycle_id=cycle_id, name=body.name, symbol=body.symbol, timeframe_min=body.timeframe_min,
             years=body.years, family=body.family, grid_spec=body.grid_spec, risk_spec=body.risk_spec,
-            num_partitions=body.num_partitions, seed=body.seed, active=body.active, auto_expand=body.auto_expand
+            num_partitions=body.num_partitions, seed=body.seed, active=body.active, auto_expand=body.auto_expand,
+            direction=normalize_direction(body.direction, reverse=(body.risk_spec or {}).get("reverse_mode"), default="long"),
+            external_key=str(body.external_key or "").strip(),
         )
         db.log_sys_event("ADMIN_POOL_CREATE", ctx["user"].get("id"), f"管理員建立了 {len(ids)} 個策略池", {"ids": ids})
         return {"ok": True, "msg": f"成功建立 {len(ids)} 個策略池！", "ids": ids}
@@ -836,13 +899,86 @@ def update_admin_factor_pool(pool_id: int, req: Request, body: FactorPoolUpdate,
         db.update_factor_pool(
             pool_id=pool_id, name=body.name, symbol=body.symbol, timeframe_min=body.timeframe_min,
             years=body.years, family=body.family, grid_spec=body.grid_spec, risk_spec=body.risk_spec,
-            num_partitions=body.num_partitions, seed=body.seed, active=body.active
+            num_partitions=body.num_partitions, seed=body.seed, active=body.active,
+            direction=normalize_direction(body.direction, reverse=(body.risk_spec or {}).get("reverse_mode"), default="long"),
+            external_key=str(body.external_key or "").strip(),
         )
         db.log_sys_event("ADMIN_POOL_UPDATE", ctx["user"].get("id"), f"管理員更新了策略池 #{pool_id}", {"pool_id": pool_id})
         return {"ok": True, "msg": f"策略池 #{pool_id} 更新成功！"}
     except Exception as e:
         import traceback
         raise HTTPException(status_code=500, detail=f"更新策略池失敗: {str(e)}\n{traceback.format_exc()}")
+
+@app.post("/admin/catalog/import")
+def admin_catalog_import(
+    req: Request,
+    body: CatalogImportIn,
+    dry_run: bool = True,
+    authorization: Optional[str] = Header(None),
+):
+    ctx = _auth_ctx(req, authorization)
+    if not _is_admin_ctx(ctx):
+        raise HTTPException(status_code=403, detail="admin_required")
+    cycle = db.get_active_cycle()
+    cycle_id = int(cycle.get("id") or 0) if cycle else 0
+    if cycle_id <= 0:
+        raise HTTPException(status_code=400, detail="active_cycle_required")
+    report = db.import_admin_catalog(
+        cycle_id=cycle_id,
+        owner_user_id=int(ctx["user"]["id"]),
+        payload=body.model_dump() if hasattr(body, "model_dump") else body.dict(),
+        dry_run=bool(dry_run),
+    )
+    return JSONResponse(status_code=200 if report.get("ok") else 400, content=report)
+
+
+@app.post("/runtime/portfolio/sync")
+def runtime_portfolio_sync(
+    req: Request,
+    body: RuntimePortfolioSyncIn,
+    authorization: Optional[str] = Header(None),
+):
+    ctx = _runtime_sync_auth_ctx(
+        req,
+        authorization,
+        username=str(body.username or ""),
+        password=str(body.password or ""),
+    )
+    scope = "global" if str(body.scope or "").strip().lower() == "global" else "personal"
+    if scope == "global" and not _can_publish_global_runtime(ctx):
+        raise HTTPException(status_code=403, detail="global_runtime_admin_required")
+
+    normalized_items: List[Dict[str, Any]] = []
+    for idx, raw_item in enumerate(list(body.items or []), start=1):
+        item = normalize_runtime_strategy_entry(dict(raw_item or {}))
+        direction = normalize_direction(item.get("direction"), default="")
+        if direction not in {"long", "short"}:
+            raise HTTPException(status_code=422, detail=f"invalid_direction_at_item_{idx}")
+        item.update(
+            {
+                "rank": int((raw_item or {}).get("rank") or idx),
+                "strategy_key": str((raw_item or {}).get("strategy_key") or f"{item.get('family')}_{idx}"),
+                "stake_pct": float((raw_item or {}).get("stake_pct") or item.get("stake_pct") or 0.0),
+                "sharpe": float((raw_item or {}).get("sharpe") or 0.0),
+                "avg_pairwise_corr_to_selected": (raw_item or {}).get("avg_pairwise_corr_to_selected"),
+                "max_pairwise_corr_to_selected": (raw_item or {}).get("max_pairwise_corr_to_selected"),
+                "duplicate_group_id": (raw_item or {}).get("duplicate_group_id"),
+            }
+        )
+        normalized_items.append(item)
+
+    snapshot = db.save_runtime_portfolio_snapshot(
+        scope=scope,
+        user_id=int(ctx["user"]["id"]) if scope == "personal" else 0,
+        published_by=int(ctx["user"]["id"]),
+        source=str(body.source or "holy_grail_runtime"),
+        items=normalized_items,
+        summary=dict(body.summary or {}),
+        updated_at=str(body.updated_at or ""),
+        checksum=str(body.checksum or ""),
+    )
+    return {"ok": True, "snapshot": snapshot}
+
 
 @app.post("/admin/settings")
 def update_admin_settings(req: Request, body: AdminSettingsUpdate, authorization: Optional[str] = Header(None)):
@@ -1740,6 +1876,10 @@ def web_dashboard(request: Request, authorization: Optional[str] = Header(None))
     personal_live_strategies_active = int(db.count_strategies(user_id=uid, status="active"))
     global_strategies_active = int(db.count_strategies(status="active"))
     personal_review_pipeline_count = count_review_pipeline_tasks(tasks)
+    personal_runtime_snapshot = db.get_runtime_portfolio_snapshot("personal", user_id=uid) or {}
+    global_runtime_snapshot = db.get_runtime_portfolio_snapshot("global") or {}
+    personal_runtime_items = list(personal_runtime_snapshot.get("items") or [])
+    global_runtime_items = list(global_runtime_snapshot.get("items") or [])
 
     return {
         "ok": True,
@@ -1747,9 +1887,17 @@ def web_dashboard(request: Request, authorization: Optional[str] = Header(None))
         "tasks_count": len(completed_tasks),
         "strategies_active": personal_live_strategies_active,
         "personal_live_strategies_active": personal_live_strategies_active,
+        "personal_live_strategies_reviewed_label": "個人審核上線策略",
         "personal_review_pipeline_count": int(personal_review_pipeline_count),
         "personal_review_pipeline_hint": "本週期已達標且進入後續自動管理流程的任務數量",
         "global_strategies_active": global_strategies_active,
+        "global_live_strategies_reviewed_label": "全網審核上線策略",
+        "personal_runtime_portfolio_count": int(personal_runtime_snapshot.get("strategy_count") or len(personal_runtime_items)),
+        "personal_runtime_portfolio_updated_at": str(personal_runtime_snapshot.get("updated_at") or ""),
+        "personal_runtime_portfolio_items": personal_runtime_items,
+        "global_runtime_portfolio_count": int(global_runtime_snapshot.get("strategy_count") or len(global_runtime_items)),
+        "global_runtime_portfolio_updated_at": str(global_runtime_snapshot.get("updated_at") or ""),
+        "global_runtime_portfolio_items": global_runtime_items[:20],
         "payouts_unpaid": len([p for p in payouts if p["status"] == "unpaid"]),
         "recent_tasks": tasks[:10],
         "strategies": strategies,

@@ -4,6 +4,7 @@ import json
 import math
 import os
 import traceback
+import hashlib
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +25,7 @@ from sheep_runtime_paths import (
     timeframe_min_to_label,
     unique_existing_paths,
 )
+from sheep_strategy_schema import normalize_direction
 
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -193,8 +195,7 @@ class HolyGrailRuntime:
         for idx, row in df_sorted.iterrows():
             family = str(row.get("family", "Unknown"))
             symbol = str(row.get("symbol", "Unknown"))
-            reverse_value = str(row.get("param_reverse_mode", "")).strip().lower()
-            direction = "short" if reverse_value in {"true", "1", "1.0"} else "long"
+            direction = normalize_direction(reverse=row.get("param_reverse_mode"), default="long")
             group_key = (family, symbol, direction)
 
             param_dict = {
@@ -330,6 +331,86 @@ class HolyGrailRuntime:
         df_trades["equity"] = (1.0 + df_trades["ret"]).cumprod()
         return df_trades["equity"].resample("1D").last().ffill()
 
+    @staticmethod
+    def _stable_number(value: Any, *, precision: int = 8) -> Optional[float]:
+        try:
+            number = float(value)
+        except Exception:
+            return None
+        if math.isnan(number) or math.isinf(number):
+            return None
+        return round(number, precision)
+
+    @staticmethod
+    def _stable_timestamp(value: Any) -> str:
+        ts = pd.to_datetime(value, utc=True, errors="coerce")
+        if pd.isna(ts):
+            return ""
+        try:
+            return ts.isoformat()
+        except Exception:
+            return str(ts)
+
+    @classmethod
+    def _trade_signature_hash(
+        cls,
+        trades_detail: List[Dict[str, Any]],
+        *,
+        symbol: str,
+        direction: str,
+    ) -> Tuple[str, str]:
+        rows: List[Dict[str, Any]] = []
+        for trade in trades_detail or []:
+            normalized = {
+                "symbol": normalize_symbol(symbol),
+                "direction": normalize_direction(direction),
+                "entry_ts": cls._stable_timestamp(trade.get("entry_ts") or trade.get("entry_time") or trade.get("Time")),
+                "exit_ts": cls._stable_timestamp(trade.get("exit_ts") or trade.get("exit_time") or trade.get("Time")),
+                "entry_price": cls._stable_number(trade.get("entry_price") or trade.get("entry_avg") or trade.get("entry")),
+                "exit_price": cls._stable_number(trade.get("exit_price") or trade.get("exit_avg") or trade.get("exit")),
+                "pnl_pct": cls._stable_number(
+                    trade.get("pnl_pct")
+                    if trade.get("pnl_pct") is not None
+                    else trade.get("net_return")
+                    if trade.get("net_return") is not None
+                    else trade.get("net_ret")
+                ),
+            }
+            rows.append(normalized)
+        if not rows:
+            return "", ""
+        payload = json.dumps(rows, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest(), "trade"
+
+    @classmethod
+    def _equity_signature_hash(cls, equity_curve: pd.Series) -> Tuple[str, str]:
+        if equity_curve is None or equity_curve.empty:
+            return "", ""
+        series = equity_curve.dropna().astype(float)
+        if series.empty:
+            return "", ""
+        base_value = float(series.iloc[0]) if float(series.iloc[0]) != 0 else 1.0
+        normalized = [cls._stable_number(v / base_value, precision=10) for v in series.tolist()]
+        payload = json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest(), "equity"
+
+    @staticmethod
+    def _sort_candidate_key(candidate: Dict[str, Any]) -> Tuple[float, float, float, str]:
+        perf = candidate.get("perf") or {}
+        return (
+            -float(perf.get("sharpe") or 0.0),
+            -float(perf.get("cagr_pct") or 0.0),
+            float(perf.get("max_drawdown_pct") or 0.0),
+            str(candidate.get("curve_key") or ""),
+        )
+
+    @staticmethod
+    def _corr_value(corr_matrix: pd.DataFrame, left_key: str, right_key: str) -> float:
+        if corr_matrix.empty or left_key not in corr_matrix.index or right_key not in corr_matrix.columns:
+            return 0.0
+        value = float(corr_matrix.loc[left_key, right_key])
+        return 0.0 if math.isnan(value) else value
+
     def _family_payload_from_row(
         self,
         row: pd.Series,
@@ -432,6 +513,7 @@ class HolyGrailRuntime:
 
         equity_curves: Dict[str, pd.Series] = {}
         detailed_results_cache: Dict[str, Dict[str, Any]] = {}
+        candidate_records: List[Dict[str, Any]] = []
         standard_params = {
             "strategy_id",
             "symbol",
@@ -492,6 +574,31 @@ class HolyGrailRuntime:
             equity_curves[curve_key] = daily_eq
             pool_df.at[idx, "curve_key"] = curve_key
             detailed_results_cache[curve_key] = dict(res)
+            direction = normalize_direction(reverse=reverse_mode, default="long")
+            trade_signature_hash, behavior_hash_type = self._trade_signature_hash(
+                trades,
+                symbol=symbol,
+                direction=direction,
+            )
+            equity_signature_hash, _ = self._equity_signature_hash(daily_eq)
+            if not trade_signature_hash:
+                trade_signature_hash = equity_signature_hash
+                behavior_hash_type = "equity"
+
+            candidate_records.append(
+                {
+                    "curve_key": curve_key,
+                    "row_index": int(idx),
+                    "row_data": row.to_dict(),
+                    "perf": dict(res),
+                    "daily_equity": daily_eq,
+                    "trades": trades,
+                    "direction": direction,
+                    "trade_signature_hash": trade_signature_hash,
+                    "equity_signature_hash": equity_signature_hash,
+                    "behavior_hash_type": behavior_hash_type,
+                }
+            )
 
         if not equity_curves:
             return HolyGrailResult(
@@ -507,33 +614,61 @@ class HolyGrailRuntime:
         equity_df = pd.DataFrame(equity_curves).ffill().fillna(1.0)
         returns_df = equity_df.pct_change().dropna(how="all").fillna(0.0)
         corr_matrix = returns_df.corr().fillna(0.0) if not returns_df.empty else pd.DataFrame()
+        duplicate_groups: Dict[str, List[Dict[str, Any]]] = {}
+        for candidate in candidate_records:
+            signature = str(candidate.get("trade_signature_hash") or candidate.get("equity_signature_hash") or "")
+            if not signature:
+                signature = str(candidate.get("curve_key") or "")
+            duplicate_groups.setdefault(signature, []).append(candidate)
 
-        sorted_curve_keys = sorted(equity_curves.keys())
-        selected_curve_keys: List[str] = [sorted_curve_keys[0]]
-        while len(selected_curve_keys) < min(int(max_selected), len(sorted_curve_keys)):
-            best_next: Optional[str] = None
-            lowest_avg_corr = float("inf")
-            for curve_key in sorted_curve_keys:
-                if curve_key in selected_curve_keys:
-                    continue
-                perf = detailed_results_cache.get(curve_key) or {}
-                if float(perf.get("sharpe") or 0.0) <= 0 or float(perf.get("cagr_pct") or 0.0) <= 0:
-                    continue
+        selected_representatives: Dict[str, Dict[str, Any]] = {}
+        duplicate_group_keys = sorted(duplicate_groups.keys())
+        for group_idx, group_key in enumerate(duplicate_group_keys, start=1):
+            group_members = sorted(duplicate_groups[group_key], key=self._sort_candidate_key)
+            duplicate_group_id = f"D{group_idx:03d}"
+            duplicate_group_size = len(group_members)
+            for duplicate_rank, candidate in enumerate(group_members, start=1):
+                candidate["duplicate_group_id"] = duplicate_group_id
+                candidate["duplicate_group_size"] = int(duplicate_group_size)
+                candidate["duplicate_rank"] = int(duplicate_rank)
+                candidate["selection_status"] = "rejected_duplicate" if duplicate_rank > 1 else "candidate"
+                candidate["selection_reject_reason"] = "behavior_duplicate" if duplicate_rank > 1 else ""
+                candidate["selected_rank"] = None
+                candidate["avg_pairwise_corr_to_selected"] = 0.0
+                candidate["max_pairwise_corr_to_selected"] = 0.0
+            selected_representatives[group_members[0]["curve_key"]] = group_members[0]
 
-                if corr_matrix.empty:
-                    avg_corr = 0.0
-                else:
-                    avg_corr = float(corr_matrix.loc[curve_key, selected_curve_keys].mean())
-                    if math.isnan(avg_corr):
-                        avg_corr = 0.0
+        representative_candidates = sorted(selected_representatives.values(), key=self._sort_candidate_key)
+        selected_curve_keys: List[str] = []
+        for candidate in representative_candidates:
+            curve_key = str(candidate.get("curve_key") or "")
+            perf = candidate.get("perf") or {}
+            if float(perf.get("sharpe") or 0.0) <= 0.0 or float(perf.get("cagr_pct") or 0.0) <= 0.0:
+                candidate["selection_status"] = "rejected_performance"
+                candidate["selection_reject_reason"] = "non_positive_performance"
+                continue
+            if len(selected_curve_keys) >= int(max_selected):
+                candidate["selection_status"] = "rejected_capacity"
+                candidate["selection_reject_reason"] = "selection_limit_reached"
+                continue
 
-                if avg_corr < lowest_avg_corr:
-                    lowest_avg_corr = avg_corr
-                    best_next = curve_key
+            pairwise_corrs = [
+                abs(self._corr_value(corr_matrix, curve_key, selected_key))
+                for selected_key in selected_curve_keys
+            ]
+            candidate["avg_pairwise_corr_to_selected"] = (
+                float(sum(pairwise_corrs) / len(pairwise_corrs)) if pairwise_corrs else 0.0
+            )
+            candidate["max_pairwise_corr_to_selected"] = float(max(pairwise_corrs)) if pairwise_corrs else 0.0
+            if pairwise_corrs and float(max(pairwise_corrs)) > float(corr_threshold):
+                candidate["selection_status"] = "rejected_corr"
+                candidate["selection_reject_reason"] = f"pairwise_corr>{float(corr_threshold):.4f}"
+                continue
 
-            if best_next is None or lowest_avg_corr > float(corr_threshold):
-                break
-            selected_curve_keys.append(best_next)
+            selected_curve_keys.append(curve_key)
+            candidate["selection_status"] = "selected"
+            candidate["selection_reject_reason"] = ""
+            candidate["selected_rank"] = len(selected_curve_keys)
 
         sharpe_dict = {
             curve_key: max(0.0, float((detailed_results_cache.get(curve_key) or {}).get("sharpe") or 0.0))
@@ -586,7 +721,8 @@ class HolyGrailRuntime:
 
         combined_trades: List[Dict[str, Any]] = []
         for curve_key in selected_curve_keys:
-            trades = list((detailed_results_cache.get(curve_key) or {}).get("trades_detail") or [])
+            candidate = next((item for item in candidate_records if item.get("curve_key") == curve_key), {})
+            trades = list((candidate.get("perf") or {}).get("trades_detail") or [])
             weight = float(weights.get(curve_key, 0.0))
             for trade in trades:
                 net_ret = trade.get("net_return")
@@ -596,6 +732,7 @@ class HolyGrailRuntime:
                 contribution = net_ret * weight
                 trade_row = dict(trade)
                 trade_row["strategy_key"] = curve_key
+                trade_row["direction"] = str(candidate.get("direction") or "")
                 trade_row["weight_pct"] = round(weight * 100.0, 4)
                 trade_row["strategy_return_pct"] = round(net_ret * 100.0, 6)
                 trade_row["portfolio_contribution_pct"] = round(contribution * 100.0, 6)
@@ -617,21 +754,13 @@ class HolyGrailRuntime:
         selected_portfolio: List[Dict[str, Any]] = []
         multi_payload: List[Dict[str, Any]] = []
         final_rows: List[Dict[str, Any]] = []
-        for rank, curve_key in enumerate(selected_curve_keys, start=1):
-            row_match = pool_df[pool_df["curve_key"] == curve_key]
-            if row_match.empty:
-                continue
-            row_data = row_match.iloc[0]
-            perf = detailed_results_cache.get(curve_key) or {}
-            if rank == 1 or corr_matrix.empty:
-                avg_corr = 0.0
-            else:
-                avg_corr = float(corr_matrix.loc[curve_key, selected_curve_keys[: rank - 1]].mean())
-                if math.isnan(avg_corr):
-                    avg_corr = 0.0
-
+        for candidate in sorted(candidate_records, key=self._sort_candidate_key):
+            curve_key = str(candidate.get("curve_key") or "")
+            row_data = pd.Series(candidate.get("row_data") or {})
+            perf = candidate.get("perf") or {}
+            rank = candidate.get("selected_rank")
+            direction = normalize_direction(candidate.get("direction"), default="long")
             interval = timeframe_interval_string(int(row_data.get("timeframe_min") or 15))
-            reverse_mode = str(row_data.get("param_reverse_mode", "")).strip().lower() in {"true", "1", "1.0"}
             family_params = {
                 str(key).replace("param_", "", 1): self._normalize_scalar(value)
                 for key, value in row_data.items()
@@ -641,15 +770,25 @@ class HolyGrailRuntime:
             }
 
             final_row = {
-                "rank": rank,
+                "rank": int(rank or 0),
                 "strategy_key": curve_key,
                 "family": str(row_data.get("family") or ""),
                 "symbol": str(row_data.get("symbol") or ""),
                 "timeframe_min": int(row_data.get("timeframe_min") or 0),
                 "interval": interval,
-                "direction": "short" if reverse_mode else "long",
+                "direction": direction,
                 "candidate_score": round(float(row_data.get("cand_score") or 0.0), 6),
-                "avg_corr_to_portfolio": round(avg_corr, 6),
+                "avg_corr_to_portfolio": round(float(candidate.get("avg_pairwise_corr_to_selected") or 0.0), 6),
+                "avg_pairwise_corr_to_selected": round(float(candidate.get("avg_pairwise_corr_to_selected") or 0.0), 6),
+                "max_pairwise_corr_to_selected": round(float(candidate.get("max_pairwise_corr_to_selected") or 0.0), 6),
+                "duplicate_group_id": str(candidate.get("duplicate_group_id") or ""),
+                "duplicate_group_size": int(candidate.get("duplicate_group_size") or 0),
+                "duplicate_rank": int(candidate.get("duplicate_rank") or 0),
+                "behavior_hash_type": str(candidate.get("behavior_hash_type") or ""),
+                "trade_signature_hash": str(candidate.get("trade_signature_hash") or ""),
+                "equity_signature_hash": str(candidate.get("equity_signature_hash") or ""),
+                "selection_status": str(candidate.get("selection_status") or ""),
+                "selection_reject_reason": str(candidate.get("selection_reject_reason") or ""),
                 "weight_pct": round(float(weights.get(curve_key, 0.0)) * 100.0, 6),
                 "sharpe": float(perf.get("sharpe") or 0.0),
                 "sortino": float(perf.get("sortino") or 0.0),
@@ -672,27 +811,35 @@ class HolyGrailRuntime:
                 "family_params_json": json.dumps(family_params, ensure_ascii=False),
             }
             final_rows.append(final_row)
-            selected_portfolio.append(final_row)
-
-            multi_payload.append(
-                {
-                    "strategy_id": curve_key,
-                    "family": str(row_data.get("family") or ""),
-                    "family_params": family_params,
-                    "tp_pct": float(row_data.get("param_tp") or 0.0) * 100.0,
-                    "sl_pct": float(row_data.get("param_sl") or 0.0) * 100.0,
-                    "max_hold": int(row_data.get("param_max_hold") or 0),
-                    "stake_pct": round(float(weights.get(curve_key, 0.0)) * 100.0, 4),
-                    "symbol": normalize_symbol(str(row_data.get("symbol") or "")).replace("_", ""),
-                    "interval": interval,
-                }
-            )
+            if curve_key in selected_curve_keys:
+                selected_portfolio.append(final_row)
+                multi_payload.append(
+                    {
+                        "strategy_id": curve_key,
+                        "family": str(row_data.get("family") or ""),
+                        "family_params": family_params,
+                        "direction": direction,
+                        "tp_pct": float(row_data.get("param_tp") or 0.0) * 100.0,
+                        "sl_pct": float(row_data.get("param_sl") or 0.0) * 100.0,
+                        "max_hold": int(row_data.get("param_max_hold") or 0),
+                        "stake_pct": round(float(weights.get(curve_key, 0.0)) * 100.0, 4),
+                        "symbol": normalize_symbol(str(row_data.get("symbol") or "")).replace("_", ""),
+                        "interval": interval,
+                        "sharpe": float(perf.get("sharpe") or 0.0),
+                        "avg_pairwise_corr_to_selected": round(float(candidate.get("avg_pairwise_corr_to_selected") or 0.0), 6),
+                        "max_pairwise_corr_to_selected": round(float(candidate.get("max_pairwise_corr_to_selected") or 0.0), 6),
+                        "duplicate_group_id": str(candidate.get("duplicate_group_id") or ""),
+                        "duplicate_group_size": int(candidate.get("duplicate_group_size") or 0),
+                    }
+                )
 
         summary_rows = [
             {
                 "portfolio_name": "Top 20 Holy Grail Portfolio",
                 "base_stake_pct": float(base_stake_pct),
                 "selected_strategies": len(selected_curve_keys),
+                "backtested_strategies": len(candidate_records),
+                "unique_behavior_groups": len(duplicate_groups),
                 "sharpe": round(sharpe, 6),
                 "sortino": round(sortino, 6),
                 "calmar": round(calmar, 6),
@@ -747,6 +894,7 @@ class HolyGrailRuntime:
                 "project_root": str(project_root()),
                 "selected_curve_keys": selected_curve_keys,
                 "corr_threshold": float(corr_threshold),
+                "duplicate_groups": len(duplicate_groups),
             },
         )
 

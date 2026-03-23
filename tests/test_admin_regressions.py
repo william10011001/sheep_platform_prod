@@ -453,6 +453,10 @@ def test_dashboard_start_route_workers_token_and_task_review_fields(admin_client
     assert dash["strategies_active"] == 1
     assert dash["global_strategies_active"] == 1
     assert dash["personal_review_pipeline_count"] == 3
+    assert dash["personal_runtime_portfolio_count"] == 0
+    assert dash["global_runtime_portfolio_count"] == 0
+    assert dash["personal_runtime_portfolio_items"] == []
+    assert dash["global_runtime_portfolio_items"] == []
     assert "本週期已達標" in dash["personal_review_pipeline_hint"]
 
     tasks = client.get("/tasks", headers=headers)
@@ -510,6 +514,141 @@ def test_dashboard_start_route_workers_token_and_task_review_fields(admin_client
     assert flags_worker.json()["reason"] == "run_disabled"
     assert flags_compute.json()["token_kind"] == "compute"
     assert flags_compute.json()["assignment_mode"] == "global_compute"
+
+
+def test_runtime_portfolio_sync_updates_dashboard_personal_and_global(admin_client):
+    client = admin_client["client"]
+    headers = admin_client["headers"]
+
+    payload_items = [
+        {
+            "strategy_key": "TEMA_001",
+            "family": "TEMA_Cross",
+            "symbol": "ETH_USDT",
+            "direction": "long",
+            "interval": "30m",
+            "family_params": {"fast_len": 12, "slow_len": 55},
+            "stake_pct": 35.5,
+            "sharpe": 2.1,
+            "avg_pairwise_corr_to_selected": 0.15,
+            "max_pairwise_corr_to_selected": 0.22,
+        },
+        {
+            "strategy_key": "WMA_002",
+            "family": "WMA_Cross",
+            "symbol": "BTC_USDT",
+            "direction": "short",
+            "interval": "4h",
+            "family_params": {"fast_len": 10, "slow_len": 40},
+            "stake_pct": 20.0,
+            "sharpe": 1.3,
+        },
+    ]
+
+    personal = client.post(
+        "/runtime/portfolio/sync",
+        json={
+            "scope": "personal",
+            "username": "sheep",
+            "password": "@@Wm105020",
+            "summary": {"portfolio_metrics": {"sharpe": 1.9}},
+            "items": payload_items,
+        },
+    )
+    assert personal.status_code == 200, personal.text
+    assert personal.json()["snapshot"]["strategy_count"] == 2
+
+    global_sync = client.post(
+        "/runtime/portfolio/sync",
+        headers=headers,
+        json={
+            "scope": "global",
+            "summary": {"portfolio_metrics": {"sharpe": 1.9}},
+            "items": payload_items,
+        },
+    )
+    assert global_sync.status_code == 200, global_sync.text
+
+    dashboard = client.get("/dashboard", headers=headers)
+    assert dashboard.status_code == 200, dashboard.text
+    dash = dashboard.json()
+    assert dash["personal_runtime_portfolio_count"] == 2
+    assert dash["global_runtime_portfolio_count"] == 2
+    assert dash["personal_runtime_portfolio_items"][0]["direction"] == "long"
+    assert dash["global_runtime_portfolio_items"][1]["direction"] == "short"
+    assert dash["global_runtime_portfolio_updated_at"]
+
+
+def test_admin_catalog_import_dry_run_apply_and_upsert(admin_client):
+    client = admin_client["client"]
+    headers = admin_client["headers"]
+
+    payload = {
+        "schema_version": 1,
+        "factor_pools": [
+            {
+                "key": "import_pool_eth_long_30m",
+                "name": "ETH Long 30m",
+                "family": "TEMA_Cross",
+                "symbol": "ETH_USDT",
+                "direction": "long",
+                "timeframe_min": 30,
+                "years": 3,
+                "grid_spec": {"fast_len": [12], "slow_len": [55]},
+                "risk_spec": {"max_leverage": 3},
+                "num_partitions": 6,
+                "seed": 9,
+                "active": True,
+                "auto_expand": False,
+            }
+        ],
+        "strategies": [
+            {
+                "key": "import_strategy_eth_long_30m",
+                "name": "ETH Runtime Long",
+                "family": "TEMA_Cross",
+                "symbol": "ETH_USDT",
+                "direction": "long",
+                "interval": "30m",
+                "family_params": {"fast_len": 12, "slow_len": 55},
+                "tp_pct": 1.2,
+                "sl_pct": 0.8,
+                "max_hold_bars": 48,
+                "stake_pct": 15.0,
+                "status": "active",
+                "enabled": True,
+            }
+        ],
+    }
+
+    dry_run = client.post("/admin/catalog/import?dry_run=true", headers=headers, json=payload)
+    assert dry_run.status_code == 200, dry_run.text
+    dry_body = dry_run.json()
+    assert dry_body["ok"] is True
+    assert dry_body["factor_pools"]["create"] == 1
+    assert dry_body["strategies"]["create"] == 1
+
+    apply_res = client.post("/admin/catalog/import?dry_run=false", headers=headers, json=payload)
+    assert apply_res.status_code == 200, apply_res.text
+    apply_body = apply_res.json()
+    assert apply_body["ok"] is True
+
+    pools = client.get("/admin/factor_pools", headers=headers).json()["pools"]
+    imported_pool = next((p for p in pools if p.get("external_key") == "import_pool_eth_long_30m"), None)
+    assert imported_pool is not None
+    assert imported_pool["direction"] == "long"
+    assert int(imported_pool["timeframe_min"]) == 30
+
+    strategies = client.get("/admin/strategies", headers=headers).json()["strategies"]
+    imported_strategy = next((s for s in strategies if s.get("external_key") == "import_strategy_eth_long_30m"), None)
+    assert imported_strategy is not None
+    assert imported_strategy["direction"] == "long"
+
+    payload["strategies"][0]["stake_pct"] = 22.0
+    second_apply = client.post("/admin/catalog/import?dry_run=false", headers=headers, json=payload)
+    assert second_apply.status_code == 200, second_apply.text
+    second_body = second_apply.json()
+    assert second_body["strategies"]["update"] >= 1
 
 
 def test_review_state_maintenance_repairs_legacy_tasks_and_is_idempotent(admin_client):

@@ -8,9 +8,10 @@ import html
 import base64
 import atexit
 import socket
+import hashlib
 from urllib.parse import urlparse, urlunparse
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import sys as _sys
 db = _sys.modules[__name__]
@@ -22,6 +23,13 @@ from sheep_platform_security import (
     validate_wallet_address,
     normalize_username,
     get_fernet,
+)
+from sheep_strategy_schema import (
+    direction_to_reverse,
+    normalize_direction,
+    normalize_runtime_strategy_entry,
+    parse_json_object,
+    unwrap_family_params,
 )
 # ─────────────────────────────────────────────────────────────────────────────
 # DB API (sqlite/postgres) — production: Postgres via SHEEP_DB_URL
@@ -196,6 +204,127 @@ _DEFAULT_THRESHOLD_SETTINGS: Dict[str, Any] = {
 }
 
 
+def _infer_direction(
+    *,
+    direction: Any = None,
+    params_json: Any = None,
+    risk_spec_json: Any = None,
+    default: str = "long",
+) -> str:
+    params = parse_json_object(params_json)
+    family_params = unwrap_family_params(params.get("family_params") or params)
+    risk_spec = parse_json_object(risk_spec_json)
+    return normalize_direction(
+        direction or params.get("direction") or family_params.get("direction"),
+        reverse=(
+            params.get("reverse")
+            if "reverse" in params
+            else family_params.get("reverse")
+            if "reverse" in family_params
+            else risk_spec.get("reverse_mode")
+        ),
+        default=default,
+    )
+
+
+def _normalize_risk_spec(direction: Any, risk_spec: Any) -> Dict[str, Any]:
+    spec = parse_json_object(risk_spec)
+    normalized_direction = normalize_direction(direction, reverse=spec.get("reverse_mode"), default="long")
+    spec["reverse_mode"] = bool(direction_to_reverse(normalized_direction))
+    return spec
+
+
+def _normalize_strategy_params_payload(
+    params_json: Any,
+    *,
+    direction: Any = None,
+    family: str = "",
+    symbol: str = "",
+    interval: str = "",
+) -> Dict[str, Any]:
+    params = parse_json_object(params_json)
+    wrapper = parse_json_object(params.get("family_params"))
+    family_params = unwrap_family_params(params.get("family_params") or params)
+    normalized_direction = _infer_direction(direction=direction, params_json=params, default="long")
+    payload = {
+        "family": str(family or params.get("family") or wrapper.get("family") or "").strip(),
+        "family_params": family_params,
+        "tp": params.get("tp", wrapper.get("tp")),
+        "sl": params.get("sl", wrapper.get("sl")),
+        "max_hold": params.get("max_hold", wrapper.get("max_hold")),
+        "direction": normalized_direction,
+        "symbol": str(symbol or params.get("symbol") or "").strip(),
+        "interval": str(interval or params.get("interval") or "").strip(),
+    }
+    return {key: value for key, value in payload.items() if value not in (None, "")}
+
+
+def _normalize_pool_row(row: Any) -> Dict[str, Any]:
+    data = dict(row or {})
+    direction = _infer_direction(direction=data.get("direction"), risk_spec_json=data.get("risk_spec_json"))
+    data["direction"] = direction
+    data["external_key"] = str(data.get("external_key") or "")
+    data["grid_spec"] = parse_json_object(data.get("grid_spec_json"))
+    risk_spec = _normalize_risk_spec(direction, data.get("risk_spec_json"))
+    data["risk_spec"] = risk_spec
+    data["risk_spec_json"] = json.dumps(risk_spec, ensure_ascii=False)
+    return data
+
+
+def _normalize_strategy_row(row: Any) -> Dict[str, Any]:
+    data = dict(row or {})
+    direction = _infer_direction(direction=data.get("direction"), params_json=data.get("params_json"))
+    data["direction"] = direction
+    data["external_key"] = str(data.get("external_key") or "")
+    params = _normalize_strategy_params_payload(
+        data.get("params_json"),
+        direction=direction,
+        family=str(data.get("family") or ""),
+        symbol=str(data.get("symbol") or ""),
+        interval=str(data.get("interval") or data.get("timeframe_min") or ""),
+    )
+    data["params"] = params
+    data["params_json"] = params
+    return data
+
+
+def _normalize_candidate_row(row: Any) -> Dict[str, Any]:
+    data = dict(row or {})
+    direction = _infer_direction(direction=data.get("direction"), params_json=data.get("params_json"))
+    data["direction"] = direction
+    params = parse_json_object(data.get("params_json"))
+    if params:
+        params["direction"] = direction
+    data["params_json"] = params
+    data["metrics"] = parse_json_object(data.get("metrics_json"))
+    return data
+
+
+def _runtime_snapshot_row(row: Any) -> Dict[str, Any]:
+    data = dict(row or {})
+    data["summary"] = parse_json_object(data.get("summary_json"))
+    return data
+
+
+def _runtime_item_row(row: Any) -> Dict[str, Any]:
+    data = dict(row or {})
+    data["direction"] = normalize_direction(data.get("direction"), default="long")
+    data["params"] = parse_json_object(data.get("params_json"))
+    corr_stats = parse_json_object(data.get("corr_stats_json"))
+    if not corr_stats:
+        corr_stats = {
+            "avg_pairwise_corr_to_selected": float(data.get("avg_corr") or 0.0),
+            "max_pairwise_corr_to_selected": float(data.get("max_corr") or 0.0),
+        }
+    data["corr_stats"] = corr_stats
+    return data
+
+
+def _stable_json_checksum(payload: Any) -> str:
+    normalized = json.dumps(payload or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
 def describe_db_source() -> Dict[str, Any]:
     kind = _db_kind()
     if kind == "postgres":
@@ -246,6 +375,75 @@ def ensure_default_settings(conn: Any = None) -> Dict[str, Any]:
     finally:
         if owns_conn:
             conn.close()
+
+
+def _backfill_direction_columns(conn: Any) -> None:
+    try:
+        pool_rows = conn.execute("SELECT id, direction, risk_spec_json FROM factor_pools").fetchall()
+    except Exception:
+        pool_rows = []
+
+    pool_risk_by_id: Dict[int, Dict[str, Any]] = {}
+    for row in pool_rows:
+        row = dict(row)
+        try:
+            pool_id = int(row["id"])
+        except Exception:
+            continue
+        current_direction = _infer_direction(direction=row.get("direction"), risk_spec_json=row.get("risk_spec_json"))
+        risk_spec = _normalize_risk_spec(current_direction, row.get("risk_spec_json"))
+        pool_risk_by_id[pool_id] = risk_spec
+        try:
+            conn.execute(
+                "UPDATE factor_pools SET direction = ?, risk_spec_json = ?, external_key = COALESCE(external_key, '') WHERE id = ?",
+                (current_direction, json.dumps(risk_spec, ensure_ascii=False), pool_id),
+            )
+        except Exception:
+            pass
+
+    try:
+        strategy_rows = conn.execute("SELECT id, direction, params_json, pool_id FROM strategies").fetchall()
+    except Exception:
+        strategy_rows = []
+    for row in strategy_rows:
+        row = dict(row)
+        try:
+            pool_id = int(row.get("pool_id") or 0)
+        except Exception:
+            pool_id = 0
+        current_direction = _infer_direction(
+            direction=row.get("direction"),
+            params_json=row.get("params_json"),
+            risk_spec_json=pool_risk_by_id.get(pool_id),
+        )
+        normalized_params = _normalize_strategy_params_payload(row.get("params_json"), direction=current_direction)
+        try:
+            conn.execute(
+                "UPDATE strategies SET direction = ?, params_json = ?, external_key = COALESCE(external_key, '') WHERE id = ?",
+                (current_direction, json.dumps(normalized_params, ensure_ascii=False), int(row["id"])),
+            )
+        except Exception:
+            pass
+
+    try:
+        candidate_rows = conn.execute("SELECT id, direction, params_json, pool_id FROM candidates").fetchall()
+    except Exception:
+        candidate_rows = []
+    for row in candidate_rows:
+        row = dict(row)
+        try:
+            pool_id = int(row.get("pool_id") or 0)
+        except Exception:
+            pool_id = 0
+        current_direction = _infer_direction(
+            direction=row.get("direction"),
+            params_json=row.get("params_json"),
+            risk_spec_json=pool_risk_by_id.get(pool_id),
+        )
+        try:
+            conn.execute("UPDATE candidates SET direction = ? WHERE id = ?", (current_direction, int(row["id"])))
+        except Exception:
+            pass
 
 
 class _DBResult:
@@ -660,7 +858,9 @@ def init_db() -> None:
                     id BIGSERIAL PRIMARY KEY,
                     cycle_id BIGINT,
                     name TEXT,
+                    external_key TEXT DEFAULT '',
                     symbol TEXT,
+                    direction TEXT DEFAULT 'long',
                     timeframe_min INTEGER,
                     years INTEGER,
                     family TEXT,
@@ -706,6 +906,7 @@ def init_db() -> None:
                     task_id BIGINT,
                     user_id BIGINT,
                     pool_id BIGINT,
+                    direction TEXT DEFAULT 'long',
                     params_json TEXT,
                     metrics_json TEXT,
                     score DOUBLE PRECISION,
@@ -720,6 +921,8 @@ def init_db() -> None:
                     submission_id BIGINT,
                     user_id BIGINT,
                     pool_id BIGINT,
+                    external_key TEXT DEFAULT '',
+                    direction TEXT DEFAULT 'long',
                     params_json TEXT,
                     status TEXT DEFAULT 'active',
                     allocation_pct DOUBLE PRECISION,
@@ -753,6 +956,36 @@ def init_db() -> None:
 
                 CREATE INDEX IF NOT EXISTS idx_payouts_created_at ON payouts(created_at);
 
+                CREATE TABLE IF NOT EXISTS runtime_portfolio_snapshots (
+                    id BIGSERIAL PRIMARY KEY,
+                    scope TEXT NOT NULL,
+                    user_id BIGINT,
+                    published_by BIGINT,
+                    source TEXT NOT NULL DEFAULT 'holy_grail',
+                    updated_at TEXT NOT NULL,
+                    strategy_count INTEGER NOT NULL DEFAULT 0,
+                    checksum TEXT NOT NULL DEFAULT '',
+                    summary_json TEXT NOT NULL DEFAULT '{}'
+                );
+                CREATE INDEX IF NOT EXISTS idx_runtime_portfolio_scope_user ON runtime_portfolio_snapshots(scope, user_id, updated_at);
+
+                CREATE TABLE IF NOT EXISTS runtime_portfolio_items (
+                    id BIGSERIAL PRIMARY KEY,
+                    snapshot_id BIGINT NOT NULL,
+                    strategy_key TEXT NOT NULL DEFAULT '',
+                    rank INTEGER NOT NULL DEFAULT 0,
+                    family TEXT NOT NULL DEFAULT '',
+                    symbol TEXT NOT NULL DEFAULT '',
+                    direction TEXT NOT NULL DEFAULT 'long',
+                    interval TEXT NOT NULL DEFAULT '',
+                    stake_pct DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+                    sharpe DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+                    avg_corr DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+                    max_corr DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+                    params_json TEXT NOT NULL DEFAULT '{}'
+                );
+                CREATE INDEX IF NOT EXISTS idx_runtime_portfolio_items_snapshot ON runtime_portfolio_items(snapshot_id, rank);
+
                 CREATE TABLE IF NOT EXISTS sys_monitor_events (
                     id BIGSERIAL PRIMARY KEY,
                     event_type TEXT NOT NULL,
@@ -782,6 +1015,11 @@ def init_db() -> None:
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS run_enabled INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS wallet_address TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS wallet_chain TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE factor_pools ADD COLUMN IF NOT EXISTS external_key TEXT DEFAULT ''",
+                "ALTER TABLE factor_pools ADD COLUMN IF NOT EXISTS direction TEXT DEFAULT 'long'",
+                "ALTER TABLE candidates ADD COLUMN IF NOT EXISTS direction TEXT DEFAULT 'long'",
+                "ALTER TABLE strategies ADD COLUMN IF NOT EXISTS external_key TEXT DEFAULT ''",
+                "ALTER TABLE strategies ADD COLUMN IF NOT EXISTS direction TEXT DEFAULT 'long'",
                 "ALTER TABLE mining_tasks ADD COLUMN IF NOT EXISTS lease_id TEXT",
                 "ALTER TABLE mining_tasks ADD COLUMN IF NOT EXISTS lease_worker_id TEXT",
                 "ALTER TABLE mining_tasks ADD COLUMN IF NOT EXISTS lease_expires_at TEXT",
@@ -825,6 +1063,7 @@ def init_db() -> None:
                     conn.rollback()
 
             ensure_default_settings(conn)
+            _backfill_direction_columns(conn)
             conn.commit()
             # 執行完 Postgres 的 DDL 後，直接結束函數，絕對不往下跑 SQLite 的邏圈
             return
@@ -885,7 +1124,9 @@ def init_db() -> None:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     cycle_id INTEGER,
                     name TEXT,
+                    external_key TEXT DEFAULT '',
                     symbol TEXT,
+                    direction TEXT DEFAULT 'long',
                     timeframe_min INTEGER,
                     years INTEGER,
                     family TEXT,
@@ -929,6 +1170,7 @@ def init_db() -> None:
                     task_id INTEGER,
                     user_id INTEGER,
                     pool_id INTEGER,
+                    direction TEXT DEFAULT 'long',
                     params_json TEXT,
                     metrics_json TEXT,
                     score REAL,
@@ -941,6 +1183,8 @@ def init_db() -> None:
                     submission_id INTEGER,
                     user_id INTEGER,
                     pool_id INTEGER,
+                    external_key TEXT DEFAULT '',
+                    direction TEXT DEFAULT 'long',
                     params_json TEXT,
                     status TEXT DEFAULT 'active',
                     allocation_pct REAL,
@@ -972,6 +1216,36 @@ def init_db() -> None:
                     created_at TEXT
                 );
 
+                CREATE TABLE IF NOT EXISTS runtime_portfolio_snapshots (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    scope TEXT NOT NULL,
+                    user_id INTEGER,
+                    published_by INTEGER,
+                    source TEXT NOT NULL DEFAULT 'holy_grail',
+                    updated_at TEXT NOT NULL,
+                    strategy_count INTEGER NOT NULL DEFAULT 0,
+                    checksum TEXT NOT NULL DEFAULT '',
+                    summary_json TEXT NOT NULL DEFAULT '{}'
+                );
+                CREATE INDEX IF NOT EXISTS idx_runtime_portfolio_scope_user ON runtime_portfolio_snapshots(scope, user_id, updated_at);
+
+                CREATE TABLE IF NOT EXISTS runtime_portfolio_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    snapshot_id INTEGER NOT NULL,
+                    strategy_key TEXT NOT NULL DEFAULT '',
+                    rank INTEGER NOT NULL DEFAULT 0,
+                    family TEXT NOT NULL DEFAULT '',
+                    symbol TEXT NOT NULL DEFAULT '',
+                    direction TEXT NOT NULL DEFAULT 'long',
+                    interval TEXT NOT NULL DEFAULT '',
+                    stake_pct REAL NOT NULL DEFAULT 0.0,
+                    sharpe REAL NOT NULL DEFAULT 0.0,
+                    avg_corr REAL NOT NULL DEFAULT 0.0,
+                    max_corr REAL NOT NULL DEFAULT 0.0,
+                    params_json TEXT NOT NULL DEFAULT '{}'
+                );
+                CREATE INDEX IF NOT EXISTS idx_runtime_portfolio_items_snapshot ON runtime_portfolio_items(snapshot_id, rank);
+
                 CREATE TABLE IF NOT EXISTS sys_monitor_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     event_type TEXT NOT NULL,
@@ -988,6 +1262,11 @@ def init_db() -> None:
                 "ALTER TABLE users ADD COLUMN run_enabled INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE users ADD COLUMN wallet_address TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE users ADD COLUMN wallet_chain TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE factor_pools ADD COLUMN external_key TEXT DEFAULT ''",
+                "ALTER TABLE factor_pools ADD COLUMN direction TEXT DEFAULT 'long'",
+                "ALTER TABLE candidates ADD COLUMN direction TEXT DEFAULT 'long'",
+                "ALTER TABLE strategies ADD COLUMN external_key TEXT DEFAULT ''",
+                "ALTER TABLE strategies ADD COLUMN direction TEXT DEFAULT 'long'",
                 "ALTER TABLE mining_tasks ADD COLUMN lease_id TEXT",
                 "ALTER TABLE mining_tasks ADD COLUMN lease_worker_id TEXT",
                 "ALTER TABLE mining_tasks ADD COLUMN lease_expires_at TEXT",
@@ -1039,6 +1318,7 @@ def init_db() -> None:
                     pass # SQLite 不支援 IF NOT EXISTS 的 ALTER TABLE 寫法，若報錯通常代表已存在
 
             ensure_default_settings(conn)
+            _backfill_direction_columns(conn)
             conn.commit()
 
     finally:
@@ -1584,11 +1864,11 @@ def ensure_cycle_rollover() -> None:
                 try:
                     conn.execute("""
                         INSERT INTO factor_pools (
-                            cycle_id, name, symbol, timeframe_min, years, family, 
+                            cycle_id, name, external_key, symbol, direction, timeframe_min, years, family, 
                             grid_spec_json, risk_spec_json, num_partitions, seed, 
                             active, created_at
                         )
-                        SELECT ?, name, symbol, timeframe_min, years, family, 
+                        SELECT ?, name, COALESCE(external_key, ''), symbol, COALESCE(direction, 'long'), timeframe_min, years, family, 
                                grid_spec_json, risk_spec_json, num_partitions, seed, 
                                1, ?
                         FROM factor_pools src
@@ -1661,8 +1941,8 @@ def list_factor_pools(cycle_id: int) -> list:
                         print(f"[DB MAINTENANCE] 偵測到週期 {cycle_id} 缺乏 Pool 資料，啟動從週期 {source_cid} 繼承程序...")
                         try:
                             conn.execute("""
-                                INSERT INTO factor_pools (cycle_id, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, created_at)
-                                SELECT ?, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, ?
+                                INSERT INTO factor_pools (cycle_id, name, external_key, symbol, direction, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, created_at)
+                                SELECT ?, name, COALESCE(external_key, ''), symbol, COALESCE(direction, 'long'), timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, ?
                                 FROM factor_pools WHERE cycle_id = ? AND active = 1
                             """, (cycle_id, _now_iso(), source_cid))
                             conn.commit()
@@ -1671,6 +1951,12 @@ def list_factor_pools(cycle_id: int) -> list:
                         except Exception as rescue_e:
                             import traceback
                             print(f"[FATAL DB ERROR] Pool 跨週期繼承失敗: {rescue_e}\n{traceback.format_exc()}")
+                for row in rows:
+                    direction = _infer_direction(direction=row.get("direction"), risk_spec_json=row.get("risk_spec_json"))
+                    row["direction"] = direction
+                    row["external_key"] = str(row.get("external_key") or "")
+                    risk_spec = _normalize_risk_spec(direction, row.get("risk_spec_json"))
+                    row["risk_spec_json"] = json.dumps(risk_spec, ensure_ascii=False)
                 return rows
             finally:
                 conn.close()
@@ -1793,8 +2079,8 @@ def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, m
                             log_sys_event("TASK_ASSIGN_RESCUE", user_id, f"偵測到週期 {cycle_id} 缺乏 Pool，緊急從週期 {source_cid} 繼承", {"source_cid": source_cid})
                             
                             conn.execute("""
-                                INSERT INTO factor_pools (cycle_id, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, created_at)
-                                SELECT ?, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, ?
+                                INSERT INTO factor_pools (cycle_id, name, external_key, symbol, direction, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, created_at)
+                                SELECT ?, name, COALESCE(external_key, ''), symbol, COALESCE(direction, 'long'), timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, ?
                                 FROM factor_pools WHERE cycle_id = ? AND active = 1
                             """, (cycle_id, _now_iso(), source_cid))
                             conn.commit()
@@ -2187,7 +2473,7 @@ def list_strategies(user_id: int = 0, status: str = "", limit: int = 200) -> lis
                 query += " ORDER BY s.id DESC LIMIT ?"
                 params.append(limit)
                 cur = conn.execute(query, params)
-                return [dict(row) for row in cur.fetchall()]
+                return [_normalize_strategy_row(row) for row in cur.fetchall()]
             finally:
                 conn.close()
         except Exception as e:
@@ -2245,11 +2531,7 @@ def list_candidates(task_id: int, limit: int = 50) -> list:
     conn = _conn()
     try:
         cur = conn.execute("SELECT * FROM candidates WHERE task_id = ? ORDER BY score DESC LIMIT ?", (task_id, limit))
-        rows = [dict(row) for row in cur.fetchall()]
-        for r in rows:
-            r["params_json"] = json.loads(r.get("params_json") or "{}")
-            r["metrics"] = json.loads(r.get("metrics_json") or "{}")
-        return rows
+        return [_normalize_candidate_row(row) for row in cur.fetchall()]
     except Exception as e:
         print(f"[DB ERROR] list_candidates: {e}")
         return []
@@ -2261,10 +2543,7 @@ def get_pool(pool_id: int) -> Optional[dict]:
     try:
         row = conn.execute("SELECT * FROM factor_pools WHERE id = ?", (pool_id,)).fetchone()
         if not row: return None
-        d = dict(row)
-        d["grid_spec"] = json.loads(d.get("grid_spec_json") or "{}")
-        d["risk_spec"] = json.loads(d.get("risk_spec_json") or "{}")
-        return d
+        return _normalize_pool_row(row)
     except Exception as e:
         print(f"[DB ERROR] get_pool: {e}")
         return None
@@ -2480,7 +2759,22 @@ def get_global_paid_payout_sum_usdt(cycle_id: int) -> float:
     finally:
         conn.close()
 
-def create_factor_pool(cycle_id: int, name: str, symbol: str, timeframe_min: int, years: int, family: str, grid_spec: dict, risk_spec: dict, num_partitions: int, seed: int, active: bool, auto_expand: bool = False) -> list:
+def create_factor_pool(
+    cycle_id: int,
+    name: str,
+    symbol: str,
+    timeframe_min: int,
+    years: int,
+    family: str,
+    grid_spec: dict,
+    risk_spec: dict,
+    num_partitions: int,
+    seed: int,
+    active: bool,
+    auto_expand: bool = False,
+    direction: str = "long",
+    external_key: str = "",
+) -> list:
     """專家級 Pool 建立器：支援 14 種組合自動擴展功能"""
     ids = []
     targets = [(symbol, timeframe_min)]
@@ -2490,6 +2784,8 @@ def create_factor_pool(cycle_id: int, name: str, symbol: str, timeframe_min: int
         tfs = [1, 5, 15, 30, 60, 240, 1440]
         targets = [(s, t) for s in symbols for t in tfs]
 
+    normalized_direction = normalize_direction(direction, reverse=parse_json_object(risk_spec).get("reverse_mode"), default="long")
+    normalized_risk_spec = _normalize_risk_spec(normalized_direction, risk_spec)
     conn = _conn()
     try:
         for s, t in targets:
@@ -2503,19 +2799,49 @@ def create_factor_pool(cycle_id: int, name: str, symbol: str, timeframe_min: int
             if getattr(conn, "kind", "sqlite") == "postgres":
                 row_pool = conn.execute(
                     """
-                    INSERT INTO factor_pools (cycle_id, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id
+                    INSERT INTO factor_pools (cycle_id, name, external_key, symbol, direction, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id
                     """,
-                    (cycle_id, expanded_name, s, t, int(years), family, json.dumps(grid_spec, ensure_ascii=False), json.dumps(risk_spec, ensure_ascii=False), int(num_partitions), int(seed), 1 if active else 0, _now_iso())
+                    (
+                        cycle_id,
+                        expanded_name,
+                        str(external_key or ""),
+                        s,
+                        normalized_direction,
+                        t,
+                        int(years),
+                        family,
+                        json.dumps(grid_spec, ensure_ascii=False),
+                        json.dumps(normalized_risk_spec, ensure_ascii=False),
+                        int(num_partitions),
+                        int(seed),
+                        1 if active else 0,
+                        _now_iso(),
+                    )
                 ).fetchone()
                 ids.append(int((row_pool or {}).get("id") or 0))
             else:
                 cur = conn.execute(
                     """
-                    INSERT INTO factor_pools (cycle_id, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO factor_pools (cycle_id, name, external_key, symbol, direction, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (cycle_id, expanded_name, s, t, int(years), family, json.dumps(grid_spec, ensure_ascii=False), json.dumps(risk_spec, ensure_ascii=False), int(num_partitions), int(seed), 1 if active else 0, _now_iso())
+                    (
+                        cycle_id,
+                        expanded_name,
+                        str(external_key or ""),
+                        s,
+                        normalized_direction,
+                        t,
+                        int(years),
+                        family,
+                        json.dumps(grid_spec, ensure_ascii=False),
+                        json.dumps(normalized_risk_spec, ensure_ascii=False),
+                        int(num_partitions),
+                        int(seed),
+                        1 if active else 0,
+                        _now_iso(),
+                    )
                 )
                 ids.append(int(cur.lastrowid))
         conn.commit()
@@ -2539,20 +2865,466 @@ def save_candidate_to_disk(task_id: int, user_id: int, pool_id: int, data: dict)
         print(f"[DISK STORAGE ERROR] {e}")
         return None
 
-def update_factor_pool(pool_id: int, name: str, symbol: str, timeframe_min: int, years: int, family: str, grid_spec: dict, risk_spec: dict, num_partitions: int, seed: int, active: bool) -> None:
+def update_factor_pool(
+    pool_id: int,
+    name: str,
+    symbol: str,
+    timeframe_min: int,
+    years: int,
+    family: str,
+    grid_spec: dict,
+    risk_spec: dict,
+    num_partitions: int,
+    seed: int,
+    active: bool,
+    direction: str = "long",
+    external_key: str = "",
+) -> None:
     conn = _conn()
     try:
+        normalized_direction = normalize_direction(direction, reverse=parse_json_object(risk_spec).get("reverse_mode"), default="long")
+        normalized_risk_spec = _normalize_risk_spec(normalized_direction, risk_spec)
         conn.execute(
             """
             UPDATE factor_pools
-            SET name=?, symbol=?, timeframe_min=?, years=?, family=?, grid_spec_json=?, risk_spec_json=?, num_partitions=?, seed=?, active=?
+            SET name=?, external_key=?, symbol=?, direction=?, timeframe_min=?, years=?, family=?, grid_spec_json=?, risk_spec_json=?, num_partitions=?, seed=?, active=?
             WHERE id=?
             """,
-            (name, symbol, timeframe_min, years, family, json.dumps(grid_spec, ensure_ascii=False), json.dumps(risk_spec, ensure_ascii=False), num_partitions, seed, 1 if active else 0, pool_id)
+            (
+                name,
+                str(external_key or ""),
+                symbol,
+                normalized_direction,
+                timeframe_min,
+                years,
+                family,
+                json.dumps(grid_spec, ensure_ascii=False),
+                json.dumps(normalized_risk_spec, ensure_ascii=False),
+                num_partitions,
+                seed,
+                1 if active else 0,
+                pool_id,
+            )
         )
         conn.commit()
     finally:
         conn.close()
+
+
+def _interval_to_minutes(interval: Any) -> int:
+    text = str(interval or "").strip().lower()
+    if not text:
+        return 0
+    if text.endswith("m"):
+        try:
+            return int(float(text[:-1] or 0))
+        except Exception:
+            return 0
+    if text.endswith("h"):
+        try:
+            return int(float(text[:-1] or 0) * 60)
+        except Exception:
+            return 0
+    if text.endswith("d"):
+        try:
+            return int(float(text[:-1] or 0) * 1440)
+        except Exception:
+            return 0
+    try:
+        return int(float(text))
+    except Exception:
+        return 0
+
+
+def _as_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return bool(default)
+
+
+def save_runtime_portfolio_snapshot(
+    *,
+    scope: str,
+    user_id: int = 0,
+    published_by: int = 0,
+    source: str = "holy_grail_runtime",
+    items: List[Dict[str, Any]],
+    summary: Optional[Dict[str, Any]] = None,
+    updated_at: str = "",
+    checksum: str = "",
+) -> Dict[str, Any]:
+    scope_text = "global" if str(scope or "").strip().lower() == "global" else "personal"
+    owner_user_id = int(user_id or 0) if scope_text == "personal" else 0
+    published_by_id = int(published_by or 0)
+    ts = str(updated_at or "").strip() or _now_iso()
+    normalized_items: List[Dict[str, Any]] = []
+    for idx, raw_item in enumerate(list(items or []), start=1):
+        entry = normalize_runtime_strategy_entry(
+            dict(raw_item or {}),
+            default_symbol=str((raw_item or {}).get("symbol") or ""),
+            default_interval=str((raw_item or {}).get("interval") or ""),
+        )
+        params = dict(entry.get("family_params") or {})
+        params["direction"] = entry["direction"]
+        corr_stats = {
+            "avg_pairwise_corr_to_selected": raw_item.get("avg_pairwise_corr_to_selected"),
+            "max_pairwise_corr_to_selected": raw_item.get("max_pairwise_corr_to_selected"),
+            "duplicate_group_id": raw_item.get("duplicate_group_id"),
+        }
+        normalized_items.append(
+            {
+                "rank": int(raw_item.get("rank") or raw_item.get("selected_rank") or idx),
+                "strategy_key": str(raw_item.get("strategy_key") or raw_item.get("name") or f"{entry.get('family')}_{idx}"),
+                "family": str(entry.get("family") or "").strip(),
+                "symbol": str(entry.get("symbol") or "").strip().upper(),
+                "direction": str(entry.get("direction") or "long"),
+                "interval": str(entry.get("interval") or "").strip(),
+                "stake_pct": float(raw_item.get("stake_pct") or entry.get("stake_pct") or 0.0),
+                "sharpe": float(raw_item.get("sharpe") or 0.0),
+                "avg_corr": float(raw_item.get("avg_pairwise_corr_to_selected") or 0.0),
+                "max_corr": float(raw_item.get("max_pairwise_corr_to_selected") or 0.0),
+                "params_json": params,
+                "corr_stats_json": corr_stats,
+            }
+        )
+    summary_payload = dict(summary or {})
+    summary_payload["scope"] = scope_text
+    summary_payload["strategy_count"] = len(normalized_items)
+    checksum_value = str(checksum or "").strip() or _stable_json_checksum(
+        {
+            "scope": scope_text,
+            "user_id": owner_user_id,
+            "source": source,
+            "updated_at": ts,
+            "summary": summary_payload,
+            "items": normalized_items,
+        }
+    )
+
+    conn = _conn()
+    try:
+        if getattr(conn, "kind", "sqlite") == "postgres":
+            row = conn.execute(
+                """
+                INSERT INTO runtime_portfolio_snapshots (scope, user_id, published_by, updated_at, source, strategy_count, summary_json, checksum)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                RETURNING id
+                """,
+                (
+                    scope_text,
+                    owner_user_id if owner_user_id > 0 else None,
+                    published_by_id if published_by_id > 0 else None,
+                    ts,
+                    str(source or "holy_grail_runtime"),
+                    len(normalized_items),
+                    json.dumps(summary_payload, ensure_ascii=False),
+                    checksum_value,
+                ),
+            ).fetchone()
+            snapshot_id = int((row or {}).get("id") or 0)
+        else:
+            cur = conn.execute(
+                """
+                INSERT INTO runtime_portfolio_snapshots (scope, user_id, published_by, updated_at, source, strategy_count, summary_json, checksum)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    scope_text,
+                    owner_user_id if owner_user_id > 0 else None,
+                    published_by_id if published_by_id > 0 else None,
+                    ts,
+                    str(source or "holy_grail_runtime"),
+                    len(normalized_items),
+                    json.dumps(summary_payload, ensure_ascii=False),
+                    checksum_value,
+                ),
+            )
+            snapshot_id = int(cur.lastrowid)
+
+        for item in normalized_items:
+            conn.execute(
+                """
+                INSERT INTO runtime_portfolio_items (snapshot_id, rank, strategy_key, family, symbol, direction, interval, stake_pct, sharpe, avg_corr, max_corr, params_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    snapshot_id,
+                    int(item["rank"]),
+                    item["strategy_key"],
+                    item["family"],
+                    item["symbol"],
+                    item["direction"],
+                    item["interval"],
+                    float(item["stake_pct"]),
+                    float(item["sharpe"]),
+                    float(item["avg_corr"]),
+                    float(item["max_corr"]),
+                    json.dumps(item["params_json"], ensure_ascii=False),
+                ),
+            )
+        conn.commit()
+        return {
+            "id": snapshot_id,
+            "scope": scope_text,
+            "user_id": owner_user_id,
+            "published_by": published_by_id,
+            "updated_at": ts,
+            "source": str(source or "holy_grail_runtime"),
+            "strategy_count": len(normalized_items),
+            "checksum": checksum_value,
+            "summary": summary_payload,
+            "items": normalized_items,
+        }
+    finally:
+        conn.close()
+
+
+def get_runtime_portfolio_snapshot(scope: str, user_id: int = 0) -> Optional[dict]:
+    scope_text = "global" if str(scope or "").strip().lower() == "global" else "personal"
+    owner_user_id = int(user_id or 0) if scope_text == "personal" else 0
+    conn = _conn()
+    try:
+        if scope_text == "global":
+            row = conn.execute(
+                "SELECT * FROM runtime_portfolio_snapshots WHERE scope = 'global' ORDER BY updated_at DESC, id DESC LIMIT 1"
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM runtime_portfolio_snapshots WHERE scope = 'personal' AND user_id = ? ORDER BY updated_at DESC, id DESC LIMIT 1",
+                (owner_user_id,),
+            ).fetchone()
+        if not row:
+            return None
+        snapshot = _runtime_snapshot_row(row)
+        items = conn.execute(
+            "SELECT * FROM runtime_portfolio_items WHERE snapshot_id = ? ORDER BY rank ASC, id ASC",
+            (int(snapshot["id"]),),
+        ).fetchall()
+        snapshot["items"] = [_runtime_item_row(item) for item in items]
+        return snapshot
+    finally:
+        conn.close()
+
+
+def import_admin_catalog(
+    *,
+    cycle_id: int,
+    owner_user_id: int,
+    payload: Dict[str, Any],
+    dry_run: bool = True,
+) -> Dict[str, Any]:
+    raw = dict(payload or {})
+    schema_version = int(raw.get("schema_version") or 1)
+    factor_pools = list(raw.get("factor_pools") or [])
+    strategies = list(raw.get("strategies") or [])
+    report: Dict[str, Any] = {
+        "ok": True,
+        "dry_run": bool(dry_run),
+        "schema_version": schema_version,
+        "factor_pools": {"create": 0, "update": 0, "skip": 0, "errors": []},
+        "strategies": {"create": 0, "update": 0, "skip": 0, "errors": []},
+    }
+
+    if not factor_pools and not strategies:
+        report["ok"] = False
+        report["error"] = "catalog_payload_empty"
+        return report
+
+    cycle_id = int(cycle_id or 0)
+    owner_user_id = int(owner_user_id or 0)
+    conn = _conn()
+    try:
+        pending_pool_lookup: Dict[Tuple[str, str, int, str], int] = {}
+
+        for idx, raw_pool in enumerate(factor_pools, start=1):
+            item = dict(raw_pool or {})
+            key = str(item.get("key") or "").strip()
+            name = str(item.get("name") or key).strip()
+            symbol = str(item.get("symbol") or "").strip().upper()
+            family = str(item.get("family") or "").strip()
+            direction = normalize_direction(item.get("direction"), default="")
+            timeframe_min = int(item.get("timeframe_min") or 0)
+            if not key or not name or not symbol or not family or direction not in {"long", "short"} or timeframe_min <= 0:
+                report["factor_pools"]["errors"].append({"index": idx, "key": key, "error": "missing_required_fields"})
+                continue
+            grid_spec = parse_json_object(item.get("grid_spec"))
+            risk_spec = _normalize_risk_spec(direction, item.get("risk_spec"))
+            years = int(item.get("years") or 3)
+            num_partitions = int(item.get("num_partitions") or 1)
+            seed = int(item.get("seed") or 42)
+            active = _as_bool(item.get("active"), True)
+            auto_expand = _as_bool(item.get("auto_expand"), False)
+            rows = conn.execute(
+                "SELECT id FROM factor_pools WHERE cycle_id = ? AND external_key = ? ORDER BY id ASC",
+                (cycle_id, key),
+            ).fetchall()
+            if rows:
+                if not dry_run:
+                    for row in rows:
+                        update_factor_pool(
+                            pool_id=int(row["id"]),
+                            name=name,
+                            symbol=symbol,
+                            timeframe_min=timeframe_min,
+                            years=years,
+                            family=family,
+                            grid_spec=grid_spec,
+                            risk_spec=risk_spec,
+                            num_partitions=num_partitions,
+                            seed=seed,
+                            active=active,
+                            direction=direction,
+                            external_key=key,
+                        )
+                report["factor_pools"]["update"] += len(rows)
+                pending_pool_lookup[(family, symbol, timeframe_min, direction)] = int(rows[0]["id"])
+            else:
+                if not dry_run:
+                    ids = create_factor_pool(
+                        cycle_id=cycle_id,
+                        name=name,
+                        symbol=symbol,
+                        timeframe_min=timeframe_min,
+                        years=years,
+                        family=family,
+                        grid_spec=grid_spec,
+                        risk_spec=risk_spec,
+                        num_partitions=num_partitions,
+                        seed=seed,
+                        active=active,
+                        auto_expand=auto_expand,
+                        direction=direction,
+                        external_key=key,
+                    )
+                    if ids:
+                        pending_pool_lookup[(family, symbol, timeframe_min, direction)] = int(ids[0])
+                else:
+                    pending_pool_lookup[(family, symbol, timeframe_min, direction)] = -1
+                report["factor_pools"]["create"] += 1
+
+        if not dry_run:
+            conn.close()
+            conn = _conn()
+
+        for idx, raw_strategy in enumerate(strategies, start=1):
+            item = dict(raw_strategy or {})
+            key = str(item.get("key") or "").strip()
+            name = str(item.get("name") or key).strip()
+            family = str(item.get("family") or "").strip()
+            symbol = str(item.get("symbol") or "").strip().upper()
+            direction = normalize_direction(item.get("direction"), default="")
+            interval = str(item.get("interval") or "").strip()
+            timeframe_min = _interval_to_minutes(interval)
+            if not key or not name or not family or not symbol or not interval or timeframe_min <= 0 or direction not in {"long", "short"}:
+                report["strategies"]["errors"].append({"index": idx, "key": key, "error": "missing_required_fields"})
+                continue
+            params_payload = _normalize_strategy_params_payload(
+                {
+                    "family": family,
+                    "family_params": parse_json_object(item.get("family_params")),
+                    "tp": float(item.get("tp_pct") or 0.0) / 100.0,
+                    "sl": float(item.get("sl_pct") or 0.0) / 100.0,
+                    "max_hold": int(item.get("max_hold_bars") or 0),
+                    "symbol": symbol,
+                    "interval": interval,
+                    "direction": direction,
+                },
+                direction=direction,
+                family=family,
+                symbol=symbol,
+                interval=interval,
+            )
+            params_payload["_catalog_name"] = name
+            params_payload["_catalog_enabled"] = _as_bool(item.get("enabled"), True)
+            params_payload["stake_pct"] = float(item.get("stake_pct") or 0.0)
+            strategy_status = str(item.get("status") or "active").strip().lower() or "active"
+            if not params_payload["_catalog_enabled"] and strategy_status == "active":
+                strategy_status = "disabled"
+
+            pool_row = conn.execute(
+                """
+                SELECT id FROM factor_pools
+                WHERE cycle_id = ? AND family = ? AND symbol = ? AND timeframe_min = ? AND COALESCE(direction, 'long') = ?
+                ORDER BY id DESC LIMIT 1
+                """,
+                (cycle_id, family, symbol, timeframe_min, direction),
+            ).fetchone()
+            pool_row = dict(pool_row) if pool_row else None
+            pool_id = int((pool_row or {}).get("id") or 0) if pool_row else int(pending_pool_lookup.get((family, symbol, timeframe_min, direction)) or 0)
+            if pool_id <= 0 and not (dry_run and pool_id == -1):
+                report["strategies"]["errors"].append({"index": idx, "key": key, "error": "matching_factor_pool_not_found"})
+                continue
+
+            existing = conn.execute(
+                "SELECT id FROM strategies WHERE external_key = ? ORDER BY id DESC LIMIT 1",
+                (key,),
+            ).fetchone()
+            existing = dict(existing) if existing else None
+            if existing:
+                if not dry_run:
+                    conn.execute(
+                        """
+                        UPDATE strategies
+                        SET user_id=?, pool_id=?, direction=?, params_json=?, status=?, allocation_pct=?, note=?, expires_at=?
+                        WHERE id=?
+                        """,
+                        (
+                            owner_user_id,
+                            pool_id,
+                            direction,
+                            json.dumps(params_payload, ensure_ascii=False),
+                            strategy_status,
+                            float(item.get("stake_pct") or 0.0) / 100.0 if float(item.get("stake_pct") or 0.0) > 1 else float(item.get("stake_pct") or 0.0),
+                            f"Catalog Import: {name}",
+                            "2099-12-31T23:59:59Z",
+                            int(existing["id"]),
+                        ),
+                    )
+                report["strategies"]["update"] += 1
+            else:
+                if not dry_run:
+                    conn.execute(
+                        """
+                        INSERT INTO strategies (submission_id, user_id, pool_id, external_key, direction, params_json, status, allocation_pct, note, created_at, expires_at)
+                        VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            owner_user_id,
+                            pool_id,
+                            key,
+                            direction,
+                            json.dumps(params_payload, ensure_ascii=False),
+                            strategy_status,
+                            float(item.get("stake_pct") or 0.0) / 100.0 if float(item.get("stake_pct") or 0.0) > 1 else float(item.get("stake_pct") or 0.0),
+                            f"Catalog Import: {name}",
+                            _now_iso(),
+                            "2099-12-31T23:59:59Z",
+                        ),
+                    )
+                report["strategies"]["create"] += 1
+
+        if dry_run:
+            conn.rollback()
+        else:
+            conn.commit()
+        report["ok"] = not bool(report["factor_pools"]["errors"] or report["strategies"]["errors"])
+        return report
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        report["ok"] = False
+        report["error"] = str(e)
+        return report
+    finally:
+        conn.close()
+
 
 def get_submission(sub_id: int) -> Optional[dict]:
     conn = _conn()
@@ -2579,19 +3351,43 @@ def create_strategy_from_submission(sub_id: int, allocation_pct: float, note: st
     try:
         sub = conn.execute("SELECT * FROM submissions WHERE id = ?", (sub_id,)).fetchone()
         if not sub: return 0
-        cand = conn.execute("SELECT params_json FROM candidates WHERE id = ?", (sub["candidate_id"],)).fetchone()
+        cand = conn.execute("SELECT params_json, direction FROM candidates WHERE id = ?", (sub["candidate_id"],)).fetchone()
         params = cand["params_json"] if cand else "{}"
+        direction = _infer_direction(direction=(cand or {}).get("direction"), params_json=params)
+        normalized_params = _normalize_strategy_params_payload(params, direction=direction)
         
         if getattr(conn, "kind", "sqlite") == "postgres":
             row = conn.execute(
-                "INSERT INTO strategies (submission_id, user_id, pool_id, params_json, status, allocation_pct, note, created_at, expires_at) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?) RETURNING id",
-                (sub_id, sub["user_id"], sub["pool_id"], params, allocation_pct, note, _now_iso(), "2099-12-31T23:59:59Z")
+                "INSERT INTO strategies (submission_id, user_id, pool_id, direction, params_json, status, allocation_pct, note, created_at, expires_at, external_key) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?) RETURNING id",
+                (
+                    sub_id,
+                    sub["user_id"],
+                    sub["pool_id"],
+                    direction,
+                    json.dumps(normalized_params, ensure_ascii=False),
+                    allocation_pct,
+                    note,
+                    _now_iso(),
+                    "2099-12-31T23:59:59Z",
+                    "",
+                )
             ).fetchone()
             new_id = int((row or {}).get("id") or 0)
         else:
             cur = conn.execute(
-                "INSERT INTO strategies (submission_id, user_id, pool_id, params_json, status, allocation_pct, note, created_at, expires_at) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?)",
-                (sub_id, sub["user_id"], sub["pool_id"], params, allocation_pct, note, _now_iso(), "2099-12-31T23:59:59Z")
+                "INSERT INTO strategies (submission_id, user_id, pool_id, direction, params_json, status, allocation_pct, note, created_at, expires_at, external_key) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?)",
+                (
+                    sub_id,
+                    sub["user_id"],
+                    sub["pool_id"],
+                    direction,
+                    json.dumps(normalized_params, ensure_ascii=False),
+                    allocation_pct,
+                    note,
+                    _now_iso(),
+                    "2099-12-31T23:59:59Z",
+                    "",
+                )
             )
             new_id = int(cur.lastrowid)
             
@@ -2613,9 +3409,7 @@ def get_strategy_with_params(strategy_id: int) -> Optional[dict]:
     try:
         row = conn.execute("SELECT * FROM strategies WHERE id = ?", (strategy_id,)).fetchone()
         if not row: return None
-        d = dict(row)
-        d["params_json"] = json.loads(d.get("params_json") or "{}")
-        return d
+        return _normalize_strategy_row(row)
     finally:
         conn.close()
 
@@ -2718,17 +3512,41 @@ def insert_candidate(task_id: int, user_id: int, pool_id: int, params: dict, met
         try:
             conn = _conn()
             try:
+                pool = conn.execute("SELECT direction, risk_spec_json FROM factor_pools WHERE id = ?", (int(pool_id),)).fetchone()
+                direction = _infer_direction(
+                    direction=(pool or {}).get("direction") if pool else None,
+                    params_json=params,
+                    risk_spec_json=(pool or {}).get("risk_spec_json") if pool else None,
+                )
                 if getattr(conn, "kind", "sqlite") == "postgres":
                     row = conn.execute(
-                        "INSERT INTO candidates (task_id, user_id, pool_id, params_json, metrics_json, score, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
-                        (task_id, user_id, pool_id, json.dumps(params, ensure_ascii=False), json.dumps(metrics, ensure_ascii=False), score, _now_iso())
+                        "INSERT INTO candidates (task_id, user_id, pool_id, direction, params_json, metrics_json, score, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+                        (
+                            task_id,
+                            user_id,
+                            pool_id,
+                            direction,
+                            json.dumps(params, ensure_ascii=False),
+                            json.dumps(metrics, ensure_ascii=False),
+                            score,
+                            _now_iso(),
+                        )
                     ).fetchone()
                     conn.commit()
                     return int((row or {}).get("id") or 0)
 
                 cur = conn.execute(
-                    "INSERT INTO candidates (task_id, user_id, pool_id, params_json, metrics_json, score, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (task_id, user_id, pool_id, json.dumps(params, ensure_ascii=False), json.dumps(metrics, ensure_ascii=False), score, _now_iso())
+                    "INSERT INTO candidates (task_id, user_id, pool_id, direction, params_json, metrics_json, score, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        task_id,
+                        user_id,
+                        pool_id,
+                        direction,
+                        json.dumps(params, ensure_ascii=False),
+                        json.dumps(metrics, ensure_ascii=False),
+                        score,
+                        _now_iso(),
+                    )
                 )
                 conn.commit()
                 return cur.lastrowid
@@ -3667,18 +4485,20 @@ def finish_task_with_lease(task_id: int, user_id: int, worker_id: str, lease_id:
             sc = float(c.get("score") or 0.0)
             pr = c.get("params") or c.get("params_json") or {}
             me = c.get("metrics") or {}
+            direction = _infer_direction(params_json=pr)
+            normalized_params = _normalize_strategy_params_payload(params_json=pr, direction=direction)
             
             if getattr(conn, "kind", "sqlite") == "postgres":
                 row = conn.execute(
-                    "INSERT INTO candidates (task_id, user_id, pool_id, params_json, metrics_json, score, created_at, is_submitted) VALUES (?, ?, ?, ?, ?, ?, ?, 1) RETURNING id",
-                    (tid, owner_id, pool_id, json.dumps(pr, ensure_ascii=False), json.dumps(me, ensure_ascii=False), sc, now),
+                    "INSERT INTO candidates (task_id, user_id, pool_id, direction, params_json, metrics_json, score, created_at, is_submitted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1) RETURNING id",
+                    (tid, owner_id, pool_id, direction, json.dumps(normalized_params, ensure_ascii=False), json.dumps(me, ensure_ascii=False), sc, now),
                 )
                 rid = (row.fetchone() or {}).get("id")
                 cid = int(rid or 0) if rid else None
             else:
                 row = conn.execute(
-                    "INSERT INTO candidates (task_id, user_id, pool_id, params_json, metrics_json, score, created_at, is_submitted) VALUES (?, ?, ?, ?, ?, ?, ?, 1)",
-                    (tid, owner_id, pool_id, json.dumps(pr, ensure_ascii=False), json.dumps(me, ensure_ascii=False), sc, now),
+                    "INSERT INTO candidates (task_id, user_id, pool_id, direction, params_json, metrics_json, score, created_at, is_submitted) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)",
+                    (tid, owner_id, pool_id, direction, json.dumps(normalized_params, ensure_ascii=False), json.dumps(me, ensure_ascii=False), sc, now),
                 )
                 cid = int(getattr(row, "lastrowid", 0) or 0)
 
@@ -3696,8 +4516,8 @@ def finish_task_with_lease(task_id: int, user_id: int, worker_id: str, lease_id:
                         sub_id = int((row_sub or {}).get("id") or 0)
                         if sub_id > 0:
                             conn.execute(
-                                "INSERT INTO strategies (submission_id, user_id, pool_id, params_json, status, allocation_pct, note, created_at, expires_at) VALUES (?, ?, ?, ?, 'active', 1.0, 'Auto-Deploy', ?, ?)", 
-                                (sub_id, owner_id, pool_id, json.dumps(pr, ensure_ascii=False), now, "2099-12-31T23:59:59Z")
+                                "INSERT INTO strategies (submission_id, user_id, pool_id, direction, params_json, status, allocation_pct, note, created_at, expires_at, external_key) VALUES (?, ?, ?, ?, ?, 'active', 1.0, 'Auto-Deploy', ?, ?, ?)", 
+                                (sub_id, owner_id, pool_id, direction, json.dumps(normalized_params, ensure_ascii=False), now, "2099-12-31T23:59:59Z", "")
                             )
                     else:
                         cur_sub = conn.execute(
@@ -3707,8 +4527,8 @@ def finish_task_with_lease(task_id: int, user_id: int, worker_id: str, lease_id:
                         sub_id = int(cur_sub.lastrowid)
                         if sub_id > 0:
                             conn.execute(
-                                "INSERT INTO strategies (submission_id, user_id, pool_id, params_json, status, allocation_pct, note, created_at, expires_at) VALUES (?, ?, ?, ?, 'active', 1.0, 'Auto-Deploy', ?, ?)", 
-                                (sub_id, owner_id, pool_id, json.dumps(pr, ensure_ascii=False), now, "2099-12-31T23:59:59Z")
+                                "INSERT INTO strategies (submission_id, user_id, pool_id, direction, params_json, status, allocation_pct, note, created_at, expires_at, external_key) VALUES (?, ?, ?, ?, ?, 'active', 1.0, 'Auto-Deploy', ?, ?, ?)", 
+                                (sub_id, owner_id, pool_id, direction, json.dumps(normalized_params, ensure_ascii=False), now, "2099-12-31T23:59:59Z", "")
                             )
                     log_sys_event("AUTO_DEPLOY_SUCCESS", owner_id, f"任務 {tid} 達標，已自動佈署策略上因子池", {"candidate_id": cid, "score": sc})
                 except Exception as auto_deploy_err:
@@ -3813,11 +4633,11 @@ def get_admin_active_strategies() -> list:
     conn = _conn()
     try:
         query = """
-        SELECT st.id as strategy_id, st.status, st.allocation_pct, st.created_at,
+        SELECT st.id as strategy_id, st.status, st.allocation_pct, st.created_at, st.direction, st.params_json, st.external_key,
                u.username, u.nickname,
                p.name as pool_name, p.symbol, p.timeframe_min,
                c.metrics_json, c.score,
-               t.progress_json
+                t.progress_json
         FROM strategies st
         LEFT JOIN users u ON st.user_id = u.id
         LEFT JOIN factor_pools p ON st.pool_id = p.id
@@ -3830,7 +4650,7 @@ def get_admin_active_strategies() -> list:
         rows = conn.execute(query).fetchall()
         out = []
         for r in rows:
-            d = dict(r)
+            d = _normalize_strategy_row(r)
             try: d["metrics"] = json.loads(d.get("metrics_json") or "{}")
             except Exception: d["metrics"] = {}
             try: d["progress"] = json.loads(d.get("progress_json") or "{}")

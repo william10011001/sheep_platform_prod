@@ -68,6 +68,7 @@ from sheep_runtime_paths import (
     realtime_log_path,
     realtime_state_path,
 )
+from sheep_strategy_schema import normalize_direction, normalize_runtime_strategy_entry
 
 bt, HOLY_GRAIL_IMPORT_ERROR = import_backtest_runtime(PROJECT_ROOT)
 
@@ -1802,43 +1803,26 @@ class Trader:
                 else:
                     multi_json_text = str(multi_json_raw or "").strip()
                     multi_json = [] if not multi_json_text else json.loads(multi_json_text)
-                if isinstance(multi_json, list):
-                    for i, strat in enumerate(multi_json):
-                        s_id = strat.get('strategy_id', i)
-                        sid = f"{strat.get('family', 'UNKNOWN')}_{s_id}"
-                        prm = json.loads(strat.get('family_params', "{}")) if isinstance(strat.get('family_params'), str) else strat.get('family_params', {})
-                        sym = str(strat.get("symbol", self.global_symbol)).upper()
-                        iv = str(strat.get("interval", self.global_interval))
-                        
-                        self.strategies_cfg[sid] = {
-                            "family": strat.get('family'),
-                            "params": prm,
-                            "tp_pct": float(strat.get('tp_pct', 0.1)),
-                            "sl_pct": float(strat.get('sl_pct', 0.1)),
-                            "max_hold": int(strat.get('max_hold', 300)),
-                            "stake_pct": float(strat.get('stake_pct', prm.get('stake_pct', cfg.get('TEMA_RSI', {}).get('stake_pct', 95.0)))),
-                            "symbol": sym,
-                            "interval": iv
-                        }
-                        self.active_sym_intervals.append((sym, iv))
-                elif isinstance(multi_json, dict):
-                    for sid, strat in multi_json.items():
-                        sym = str(strat.get("symbol", self.global_symbol)).upper()
-                        iv = str(strat.get("interval", self.global_interval))
-                        strat["symbol"] = sym
-                        strat["interval"] = iv
-                        strat["stake_pct"] = float(strat.get("stake_pct", strat.get("params", {}).get("stake_pct", cfg.get('TEMA_RSI', {}).get('stake_pct', 95.0))))
-                        self.strategies_cfg[sid] = strat
-                        self.active_sym_intervals.append((sym, iv))
+                self.strategies_cfg, self.active_sym_intervals = normalize_multi_strategy_entries(
+                    multi_json,
+                    self.global_symbol,
+                    self.global_interval,
+                    float(cfg.get('TEMA_RSI', {}).get('stake_pct', 95.0)),
+                )
             except Exception as e:
                 log(f"解析多策略 JSON 失敗: {e}，回退至單一模式。")
                 mode = "single"
 
         if not self.strategies_cfg or mode == "single":
             p = cfg.get("TEMA_RSI", {})
+            default_direction = normalize_direction(p.get("direction"), reverse=p.get("reverse"), default="long")
+            p = dict(p or {})
+            p["direction"] = default_direction
+            p["reverse"] = default_direction == "short"
             self.strategies_cfg["DEFAULT_STRAT"] = {
                 "family": cfg.get("single_family", "TEMA_RSI"),
                 "params": p,
+                "direction": default_direction,
                 "tp_pct": float(p.get("tp_pct_strat", 0.1)),
                 "sl_pct": float(p.get("sl_pct_strat", 0.1)),
                 "max_hold": int(p.get("max_hold_list", [300])[0] if p.get("max_hold_list") else 300),
@@ -2076,17 +2060,17 @@ class Trader:
             try:
                 prm_run = prm.copy()
                 prm_run["_ts"] = df["ts"].iloc[:eval_i+1].values
+                direction = normalize_direction(strat.get("direction"), reverse=prm_run.get("reverse"), default="long")
+                prm_run["direction"] = direction
+                prm_run["reverse"] = direction == "short"
                 
                 sig_arr = signal_from_family(fam, o_sub, h_sub, l_sub, c_sub, v_sub, prm_run)
                 if isinstance(sig_arr, tuple):
                     sig_arr = sig_arr[0]
                     
-                long_sig = bool(sig_arr[-1])
-                short_sig = False
-                
-                if prm_run.get("reverse", False):
-                    short_sig = long_sig
-                    long_sig = False
+                trigger_sig = bool(sig_arr[-1])
+                long_sig = bool(trigger_sig and direction == "long")
+                short_sig = bool(trigger_sig and direction == "short")
                     
                 ans = (long_sig, short_sig, closed_kline_ts)
                 signals[sid] = ans
@@ -2668,6 +2652,53 @@ def build_daily_equity_curve_for_backtest(trades_detail: list) -> pd.Series:
     return HolyGrailRuntime.build_daily_equity_curve(trades_detail)
 
 
+def normalize_multi_strategy_entries(raw_multi_json, default_symbol: str, default_interval: str, default_stake_pct: float):
+    strategies_cfg: Dict[str, Dict[str, Any]] = {}
+    active_sym_intervals = set()
+
+    if isinstance(raw_multi_json, dict):
+        iterable = []
+        for raw_sid, raw_entry in raw_multi_json.items():
+            entry = dict(raw_entry or {})
+            entry.setdefault("strategy_id", raw_sid)
+            iterable.append(entry)
+    elif isinstance(raw_multi_json, list):
+        iterable = list(raw_multi_json)
+    else:
+        iterable = []
+
+    for idx, raw_entry in enumerate(iterable):
+        entry = normalize_runtime_strategy_entry(
+            dict(raw_entry or {}),
+            default_symbol=default_symbol,
+            default_interval=default_interval,
+        )
+        family = str(entry.get("family") or "UNKNOWN").strip() or "UNKNOWN"
+        direction = normalize_direction(entry.get("direction"), default="long")
+        params = dict(entry.get("family_params") or {})
+        params["direction"] = direction
+        params["reverse"] = direction == "short"
+        strategy_ref = raw_entry.get("strategy_key") or raw_entry.get("strategy_id") or entry.get("strategy_id") or idx
+        sid = f"{family}_{strategy_ref}"
+        sym = str(entry.get("symbol") or default_symbol).upper()
+        iv = str(entry.get("interval") or default_interval)
+        strategies_cfg[sid] = {
+            "family": family,
+            "params": params,
+            "direction": direction,
+            "tp_pct": float(entry.get("tp_pct") or 0.0),
+            "sl_pct": float(entry.get("sl_pct") or 0.0),
+            "max_hold": int(entry.get("max_hold") or 0),
+            "stake_pct": float(entry.get("stake_pct") or default_stake_pct),
+            "symbol": sym,
+            "interval": iv,
+            "strategy_key": str(strategy_ref),
+        }
+        active_sym_intervals.add((sym, iv))
+
+    return strategies_cfg, sorted(active_sym_intervals)
+
+
 class FactorPoolUpdater:
     def __init__(self, ui_app):
         self.ui = ui_app
@@ -2704,6 +2735,49 @@ class FactorPoolUpdater:
             "factor_pool_user": _ui_value("factor_pool_user_var", "SHEEP_FACTOR_POOL_USER"),
             "factor_pool_pass": _ui_value("factor_pool_pass_var", "SHEEP_FACTOR_POOL_PASS"),
         }
+
+    def _runtime_sync_url(self, factor_pool_url: str) -> str:
+        return f"{detect_api_base(factor_pool_url).rstrip('/')}/runtime/portfolio/sync"
+
+    def _runtime_sync_payload(self, scope: str, result, runtime_kwargs: dict) -> dict:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        items = []
+        for idx, item in enumerate(list(result.multi_payload or []), start=1):
+            payload = dict(item or {})
+            payload.setdefault("rank", idx)
+            payload.setdefault("strategy_key", payload.get("strategy_key") or payload.get("name") or f"{payload.get('family', 'UNKNOWN')}_{idx}")
+            items.append(payload)
+        summary = {
+            "portfolio_metrics": dict(result.portfolio_metrics or {}),
+            "selected_count": int(result.selected_count or len(items)),
+            "candidate_count": int(result.candidate_count or 0),
+            "backtested_count": int(result.backtested_count or 0),
+            "report_paths": dict(result.report_paths or {}),
+        }
+        return {
+            "scope": scope,
+            "updated_at": now_iso,
+            "source": "holy_grail_runtime",
+            "summary": summary,
+            "items": items,
+            "username": runtime_kwargs.get("factor_pool_user", ""),
+            "password": runtime_kwargs.get("factor_pool_pass", ""),
+        }
+
+    def _sync_runtime_snapshot(self, scope: str, result, runtime_kwargs: dict):
+        sync_url = self._runtime_sync_url(runtime_kwargs.get("factor_pool_url", "https://sheep123.com"))
+        payload = self._runtime_sync_payload(scope, result, runtime_kwargs)
+        try:
+            resp = requests.post(sync_url, json=payload, timeout=20, verify=False)
+            data = resp.json() if resp.headers.get("content-type", "").lower().startswith("application/json") else {}
+            if resp.status_code != 200 or not bool(data.get("ok")):
+                detail = data.get("detail") or data.get("error") or resp.text[:300]
+                log(f"【網站同步】{scope} runtime 快照更新失敗: HTTP {resp.status_code} | {detail}")
+                return
+            snapshot = data.get("snapshot") or {}
+            log(f"【網站同步】{scope} runtime 快照已更新：{int(snapshot.get('strategy_count') or 0)} 組策略。")
+        except Exception as e:
+            log(f"【網站同步】{scope} runtime 快照同步異常: {e}")
 
     def start(self):
         if bt is None:
@@ -2767,6 +2841,8 @@ class FactorPoolUpdater:
 
         self.last_good_json = new_json_str
         self.ui.update_multi_json(new_json_str)
+        self._sync_runtime_snapshot("personal", result, runtime_kwargs)
+        self._sync_runtime_snapshot("global", result, runtime_kwargs)
 
         metrics = result.portfolio_metrics or {}
         log(
@@ -2822,28 +2898,13 @@ class AnimatedUI(tk.Tk):
                     log("【實盤熱對接】偵測到交易核心運行中，啟動無縫熱切換 (Hot Reloading)...")
                     try:
                         multi_json = json.loads(new_json_str)
-                        new_strat_cfg = {}
-                        active_sym_ivs = set()
-                        
-                        for i, strat in enumerate(multi_json):
-                            s_id = strat.get('strategy_id', i)
-                            sid = f"{strat.get('family', 'UNKNOWN')}_{s_id}"
-                            prm = strat.get('family_params', {})
-                            if isinstance(prm, str): prm = json.loads(prm)
-                            sym = str(strat.get("symbol", self.active_trader.global_symbol)).upper()
-                            iv = str(strat.get("interval", self.active_trader.global_interval))
-                            
-                            new_strat_cfg[sid] = {
-                                "family": strat.get('family'),
-                                "params": prm,
-                                "tp_pct": float(strat.get('tp_pct', 0.1)),
-                                "sl_pct": float(strat.get('sl_pct', 0.1)),
-                                "max_hold": int(strat.get('max_hold', 300)),
-                                "stake_pct": float(strat.get('stake_pct', 5.0)),
-                                "symbol": sym,
-                                "interval": iv
-                            }
-                            active_sym_ivs.add((sym, iv))
+                        new_strat_cfg, normalized_sym_ivs = normalize_multi_strategy_entries(
+                            multi_json,
+                            self.active_trader.global_symbol,
+                            self.active_trader.global_interval,
+                            5.0,
+                        )
+                        active_sym_ivs = set(normalized_sym_ivs)
                         
                         # 原子級別覆寫與狀態傳遞
                         with self.active_trader.ws_kline.lock:
