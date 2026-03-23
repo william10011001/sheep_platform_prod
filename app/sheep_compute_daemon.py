@@ -73,6 +73,7 @@ def main() -> None:
     idle_s = _env_float("SHEEP_COMPUTE_IDLE_S", 0.20)
     commit_every = _env_int("SHEEP_COMPUTE_COMMIT_EVERY", 50)
     flag_poll_s = _env_float("SHEEP_COMPUTE_FLAG_POLL_S", 1.0)
+    enable_legacy_oos = _env_str("SHEEP_COMPUTE_ENABLE_LEGACY_OOS", "false").lower() in {"1", "true", "yes", "on"}
 
     if not user or not pwd:
         raise RuntimeError("SHEEP_COMPUTE_USER or SHEEP_COMPUTE_PASS is empty")
@@ -106,6 +107,8 @@ def main() -> None:
 
             # ── [極致系統升級] 優先檢查是否有排隊中的 OOS (過擬合) 驗證任務 ──
             try:
+                if not enable_legacy_oos:
+                    raise RuntimeError("legacy_oos_disabled")
                 headers = {
                     "Authorization": f"Bearer {token}", 
                     "X-Worker-Id": worker_id, 
@@ -186,7 +189,8 @@ def main() -> None:
                     # [極致修復] 暴露潛藏的 HTTP 錯誤，不再被默默吞掉
                     print(f"[!] OOS API 異常 (HTTP {oos_res.status_code}): {oos_res.text[:200]}", flush=True)
             except Exception as e:
-                print(f"[!] 檢查 OOS 任務時發生連線異常: {e}", flush=True)
+                if str(e) != "legacy_oos_disabled":
+                    print(f"[!] 檢查 OOS 任務時發生連線異常: {e}", flush=True)
             # ────────────────────────────────────────────────────────
 
             # claim next task (compute token -> server will dispatch across all users)

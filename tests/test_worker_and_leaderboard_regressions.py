@@ -271,6 +271,104 @@ def test_factor_pool_updater_refreshes_cached_runtime_snapshot_before_rebuild(mo
     assert sync_calls[2]["json"]["items"][0]["direction"] == "long"
 
 
+def test_factor_pool_updater_runtime_payload_includes_live_position_items():
+    module = _load_live_trader_module()
+
+    class _Result:
+        multi_payload = [
+            {
+                "strategy_key": "alpha-long",
+                "family": "TEMA_RSI",
+                "symbol": "BTCUSDT",
+                "direction": "long",
+                "interval": "4h",
+                "family_params": {"fast_len": 9, "slow_len": 30},
+                "tp_pct": 1.2,
+                "sl_pct": 0.8,
+                "max_hold_bars": 36,
+                "stake_pct": 40.0,
+                "enabled": True,
+            }
+        ]
+        portfolio_metrics = {"sharpe": 2.1}
+        selected_count = 1
+        candidate_count = 3
+        backtested_count = 3
+        report_paths = {}
+
+    class _DummyContracts:
+        def get_positions(self):
+            return {
+                "data": [
+                    {
+                        "positionId": "BTCUSDT:LONG",
+                        "symbol": "BTCUSDT",
+                        "positionAmt": 0.2,
+                        "entryPrice": 100000.0,
+                        "markPrice": 101250.0,
+                        "margin": 4050.0,
+                        "liquidationPrice": 80200.0,
+                        "unrealizedPnl": 250.0,
+                    }
+                ]
+            }
+
+        def get_contract_size(self, _symbol):
+            return 1.0
+
+    class _DummyTrader:
+        def __init__(self):
+            self.c = _DummyContracts()
+            self.positions = {
+                "TEMA_RSI_alpha-long": {
+                    "in_pos": "LONG",
+                    "position_id": "BTCUSDT:LONG",
+                    "entry_qty": 0.2,
+                    "entry_avg": 100000.0,
+                    "cfg": {
+                        "strategy_key": "alpha-long",
+                        "family": "TEMA_RSI",
+                        "symbol": "BTCUSDT",
+                        "direction": "long",
+                        "interval": "4h",
+                    },
+                }
+            }
+
+        def _safe_get_mark_price(self, _symbol):
+            return 101250.0
+
+        def _safe_get_equity(self):
+            return 10000.0
+
+    class _DummyVar:
+        def __init__(self, value):
+            self._value = value
+
+        def get(self):
+            return self._value
+
+    class _DummyText:
+        def get(self, *_args):
+            return "[]"
+
+    class _DummyUI:
+        global_stake_pct_var = _DummyVar(95.0)
+        multi_json_text = _DummyText()
+        active_trader = _DummyTrader()
+
+    updater = module.FactorPoolUpdater(_DummyUI())
+    payload = updater._runtime_sync_payload("global", _Result(), {})
+
+    position_items = payload["summary"]["position_items"]
+    assert len(position_items) == 1
+    assert position_items[0]["strategy_key"] == "alpha-long"
+    assert position_items[0]["symbol"] == "BTCUSDT"
+    assert position_items[0]["direction"] == "long"
+    assert position_items[0]["position_usdt"] > 0
+    assert position_items[0]["unrealized_pnl_usdt"] > 0
+
+
 def test_live_trader_accepts_wrapped_multi_strategy_json():
     module = _load_live_trader_module()
 

@@ -20,10 +20,10 @@
     </script>
     <style>
         body { 
-            background-color: #050007; color: #f8fafc; 
+            background-color: #0b0d10; color: #f8fafc; 
             font-family: 'DIN Pro', 'Roboto', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif;
             font-variant-numeric: tabular-nums;
-            background-image: radial-gradient(circle at 50% 20%, rgba(255,0,60,0.15) 0%, transparent 60%), linear-gradient(rgba(255,0,60,0.08) 1px, transparent 1px), linear-gradient(90deg, rgba(255,0,60,0.08) 1px, transparent 1px);
+            background-image: radial-gradient(circle at 50% 20%, rgba(255,255,255,0.08) 0%, transparent 60%), linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px);
             background-size: 100% 100%, 40px 40px, 40px 40px;
         }
         .cyber-num {
@@ -33,18 +33,18 @@
             font-weight: 300 !important; /* 強制覆蓋為金融細字體 */
         }
         .cyber-card {
-            background: var(--tw-colors-cyber-card); border: 1px solid rgba(255, 0, 60, 0.3);
-            border-radius: 12px; backdrop-filter: blur(10px); box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            background: rgba(19, 23, 28, 0.84); border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 16px; backdrop-filter: blur(10px); box-shadow: 0 10px 30px rgba(0,0,0,0.28);
         }
-        .cyber-input { background: rgba(0,0,0,0.4); border: 1px solid rgba(255,0,60,0.3); color: white; transition: all 0.3s; }
-        .cyber-input:focus { outline: none; border-color: #FF003C; box-shadow: 0 0 0 2px rgba(255,0,60,0.2); }
+        .cyber-input { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.10); color: white; transition: all 0.3s; }
+        .cyber-input:focus { outline: none; border-color: rgba(255,255,255,0.20); box-shadow: 0 0 0 2px rgba(255,255,255,0.08); }
         .cyber-btn {
-            background: linear-gradient(135deg, rgba(255,0,60,0.2) 0%, rgba(138,0,32,0.4) 100%);
-            border: 1px solid #FF003C; color: #FF003C; text-shadow: 0 0 5px rgba(255,0,60,0.5); transition: all 0.3s;
+            background: rgba(255,255,255,0.92);
+            border: 1px solid rgba(255,255,255,0.08); color: #111827; text-shadow: none; transition: all 0.3s;
         }
-        .cyber-btn:hover { background: rgba(255,0,60,0.4); color: white; box-shadow: 0 0 15px rgba(255,0,60,0.5); }
+        .cyber-btn:hover { background: #ffffff; color: #111827; box-shadow: 0 8px 20px rgba(255,255,255,0.10); }
         .tab-btn { padding: 8px 16px; transition: all 0.2s; border-bottom: 2px solid transparent; }
-        .tab-active { color: #FF003C; font-weight: 800; border-bottom-color: #FF003C; }
+        .tab-active { color: #ffffff; font-weight: 800; border-bottom-color: rgba(255,255,255,0.60); }
         .tab-inactive { color: #8b949e; }
         .tab-inactive:hover { color: white; }
 
@@ -65,7 +65,9 @@
             border-width: 5px; border-style: solid; border-color: #1e293b transparent transparent transparent;
         }
         .custom-tooltip:hover .tooltip-text { visibility: visible; opacity: 1; }
-        .custom-tooltip:hover .tooltip-icon { background: #3b82f6; color: white; box-shadow: 0 0 8px rgba(59,130,246,0.6); }
+        .custom-tooltip:hover .tooltip-icon,
+        .custom-tooltip .tooltip-text.tooltip-force-open + .tooltip-icon { background: rgba(255,255,255,0.18); color: white; box-shadow: 0 0 8px rgba(255,255,255,0.12); }
+        .tooltip-force-open { visibility: visible !important; opacity: 1 !important; }
         
         /* 防裁切修飾：靠右側邊緣的提示框 */
         .custom-tooltip.tooltip-right-edge .tooltip-text {
@@ -96,6 +98,33 @@
         .captcha-slider.success { background: #10b981; border-color: #059669; color: #fff; pointer-events: none; }
         .captcha-slider.error { background: #ef4444; border-color: #b91c1c; color: #fff; transition: left 0.3s ease, background 0.3s; }
         .captcha-target-hole { position: absolute; top: 0; width: 40px; height: 100%; border: 2px dashed rgba(255, 0, 60, 0.3); background: rgba(0, 0, 0, 0.3); border-radius: 4px; z-index: 1; box-sizing: border-box; }
+        .captcha-fill { background: rgba(255, 255, 255, 0.14) !important; border-right: 1px solid rgba(255, 255, 255, 0.22) !important; }
+        .captcha-slider, .captcha-slider.active, .captcha-slider.success, .captcha-slider.error { background: rgba(255,255,255,0.16) !important; border-color: rgba(255,255,255,0.20) !important; color: #f8fafc !important; box-shadow: 0 0 12px rgba(255,255,255,0.08) !important; }
+        .captcha-target-hole { border-color: rgba(255,255,255,0.18) !important; }
+        .text-amber-400, .text-amber-300, .text-emerald-400, .text-emerald-300, .text-red-400, .text-red-300\/80, .text-red-200, .text-red-500, .text-cyan-300, .text-blue-200, .text-blue-300, .text-blue-400, .text-blue-500, .text-[#FF003C] { color: #f3f4f6 !important; }
+        .bg-emerald-600, .bg-emerald-500, .bg-amber-600, .bg-amber-500, .bg-red-600, .bg-red-500, .bg-blue-900\/30, .bg-blue-900\/20, .bg-red-900\/20, .bg-red-900\/50, .bg-emerald-900\/50 { background: rgba(255,255,255,0.06) !important; }
+        .border-blue-500, .border-blue-500\/50, .border-red-500, .border-red-500\/40, .border-red-500\/50, .border-red-500\/20, .border-emerald-500, .border-emerald-500\/40 { border-color: rgba(255,255,255,0.10) !important; }
+        .from-red-600, .from-red-500, .from-emerald-500, .from-cyan-500, .from-blue-500, .from-amber-500, .to-red-500, .to-emerald-400, .to-blue-500, .to-indigo-400, .to-orange-400 {
+            --tw-gradient-from: rgba(255,255,255,0.22) var(--tw-gradient-from-position) !important;
+            --tw-gradient-to: rgba(255,255,255,0.10) var(--tw-gradient-to-position) !important;
+            --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important;
+        }
+        .accent-emerald-500 { accent-color: #d1d5db !important; }
+        @media (max-width: 767px) {
+            .custom-tooltip .tooltip-text,
+            .custom-tooltip.tooltip-right-edge .tooltip-text {
+                left: 16px;
+                right: 16px;
+                bottom: 16px;
+                top: auto;
+                width: auto;
+                transform: none;
+                position: fixed;
+            }
+            .custom-tooltip .tooltip-text::after {
+                display: none;
+            }
+        }
     </style>
 </head>
 <body>
@@ -114,14 +143,47 @@
             {{ toastMsg }}
         </div>
 
-        <nav class="border-b border-red-900/50 bg-black/50 backdrop-blur-md sticky top-0 z-50">
+        <nav class="border-b border-white/10 bg-black/50 backdrop-blur-md sticky top-0 z-50">
             <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between h-16">
                 <div class="flex items-center gap-3">
-                    <span class="font-black text-xl tracking-wider text-white">Open<span class="text-[#FF003C]">Node</span></span>
+                    <span class="font-black text-xl tracking-wider text-white">Open<span class="text-slate-300">Node</span></span>
                 </div>
-                <div class="flex items-center gap-4" v-if="user">
-                    <span class="text-sm text-gray-400">{{ user.username }}</span>
-                    <button @click="logout" class="text-xs px-3 py-1 border border-gray-600 rounded hover:bg-gray-800">登出</button>
+                <div class="flex items-center gap-3" v-if="user">
+                    <details class="relative">
+                        <summary class="list-none cursor-pointer">
+                            <div class="flex items-center gap-3 rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1.5">
+                                <img :src="user.avatar_url" alt="" class="h-8 w-8 rounded-full border border-white/10 object-cover bg-slate-800">
+                                <div class="hidden text-left sm:block">
+                                    <div class="text-sm text-white">{{ user.display_name || user.nickname || user.username }}</div>
+                                    <div class="text-[11px] text-slate-500">@{{ user.username }}</div>
+                                </div>
+                            </div>
+                        </summary>
+                        <div class="absolute right-0 mt-3 w-[300px] rounded-2xl border border-white/10 bg-slate-950/95 p-4 shadow-2xl">
+                            <div class="flex items-center gap-3">
+                                <img :src="profileForm.avatar_url || user.avatar_url" alt="" class="h-14 w-14 rounded-full border border-white/10 object-cover bg-slate-800">
+                                <div class="min-w-0">
+                                    <div class="text-sm font-semibold text-white truncate">{{ user.display_name || user.nickname || user.username }}</div>
+                                    <div class="mt-1 text-xs text-slate-400 truncate">@{{ user.username }}</div>
+                                </div>
+                            </div>
+                            <div class="mt-4 space-y-3">
+                                <div>
+                                    <label class="mb-1 block text-[11px] text-slate-500">暱稱</label>
+                                    <input v-model.trim="profileForm.nickname" type="text" maxlength="16" class="cyber-input w-full rounded-xl px-3 py-2 text-sm" placeholder="請輸入你的暱稱">
+                                </div>
+                                <div>
+                                    <label class="mb-1 block text-[11px] text-slate-500">大頭貼</label>
+                                    <input type="file" accept="image/*" @change="handleProfileAvatarChange" class="cyber-input w-full rounded-xl px-3 py-2 text-xs">
+                                    <div class="mt-2 flex items-center justify-between gap-2">
+                                        <button @click.prevent="clearProfileAvatar" class="rounded-xl border border-white/10 px-3 py-1.5 text-xs text-slate-300 hover:bg-white/5">改用預設頭像</button>
+                                        <button @click.prevent="saveProfile" class="cyber-btn rounded-xl px-3 py-1.5 text-xs font-semibold">儲存帳戶設定</button>
+                                    </div>
+                                </div>
+                                <button @click.prevent="logout" class="w-full rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 hover:bg-white/5">登出</button>
+                            </div>
+                        </div>
+                    </details>
                 </div>
             </div>
         </nav>
@@ -131,7 +193,12 @@
                 <h2 class="text-2xl font-black mb-6 text-white">{{ isLoginMode ? '登入' : '註冊' }}</h2>
                 <form @submit.prevent="handleAuth" class="space-y-4">
                     <div><input v-model="authForm.username" type="text" placeholder="帳號" required class="cyber-input w-full px-4 py-2 rounded-md"></div>
+                    <div v-if="!isLoginMode"><input v-model.trim="authForm.nickname" type="text" placeholder="暱稱（必填）" required class="cyber-input w-full px-4 py-2 rounded-md"></div>
                     <div><input v-model="authForm.password" type="password" placeholder="密碼" required class="cyber-input w-full px-4 py-2 rounded-md"></div>
+                    <div v-if="!isLoginMode" class="space-y-2">
+                        <div class="text-xs text-slate-400">大頭貼可略過，未設定時會使用系統預設頭像。</div>
+                        <input type="file" accept="image/*" @change="handleRegisterAvatarChange" class="cyber-input w-full px-4 py-2 rounded-md text-xs">
+                    </div>
                     
                     <div v-show="showCaptchaPanel" class="w-full mt-4 transition-all duration-500">
                         <div class="flex items-center justify-between gap-3 mb-2">
@@ -163,7 +230,7 @@
                     <button type="submit" :disabled="!captchaCanSubmit" class="cyber-btn w-full py-2.5 rounded-md font-bold mt-4 disabled:opacity-50 disabled:cursor-not-allowed" :title="!captchaCanSubmit ? '請先完成上方滑動驗證' : ''">{{ isLoginMode ? '登入' : '註冊' }}</button>
                     
                     <div class="text-center pt-2">
-                        <button type="button" @click="isLoginMode = !isLoginMode; errorMsg = ''; authForm.password = ''; resetCaptcha();" class="text-sm text-gray-400 hover:text-white transition-colors">
+                        <button type="button" @click="isLoginMode = !isLoginMode; errorMsg = ''; authForm.nickname = ''; authForm.password = ''; registerAvatarDataUrl = ''; resetCaptcha();" class="text-sm text-gray-400 hover:text-white transition-colors">
                             {{ isLoginMode ? '還沒有帳號？點此註冊' : '已有帳號？返回登入' }}
                         </button>
                     </div>
@@ -177,14 +244,14 @@
                     <button @click="currentTab = 'rewards'" :class="currentTab === 'rewards' ? 'tab-active' : 'tab-inactive'" class="tab-btn">獎勵結算</button>
                     <button @click="currentTab = 'rating'" :class="currentTab === 'rating' ? 'tab-active' : 'tab-inactive'" class="tab-btn">評分專區</button>
                     <button @click="currentTab = 'leaderboard'" :class="currentTab === 'leaderboard' ? 'tab-active' : 'tab-inactive'" class="tab-btn">排行榜</button>
-                    <button v-if="user && user.role === 'admin'" @click="currentTab = 'admin'; loadAdminData();" :class="currentTab === 'admin' ? 'tab-active border-emerald-500 text-emerald-400' : 'tab-inactive'" class="tab-btn"> 管理員面板</button>
+                    <button v-if="user && user.role === 'admin'" @click="currentTab = 'admin'; loadAdminData();" :class="currentTab === 'admin' ? 'tab-active border-white/40 text-white' : 'tab-inactive'" class="tab-btn"> 管理員面板</button>
                 </div>
                 <div v-if="currentTab === 'tasks'" class="space-y-6 animate-fade-in">
                     <div class="cyber-card p-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                         <div class="flex-1 w-full sm:w-auto">
                             <h3 class="text-xl font-bold text-white mb-2">控制面板</h3>
                             <p class="text-sm text-gray-400 mb-4">目前參數搜尋狀態: 
-                                <span :class="tasksData.run_enabled ? 'text-emerald-400 font-bold' : 'text-amber-400 font-bold'">
+                                <span :class="tasksData.run_enabled ? 'text-slate-100 font-bold' : 'text-slate-300 font-bold'">
                                     {{ tasksData.run_enabled ? '授權中' : '待命中' }}
                                 </span>
                             </p>
@@ -193,7 +260,7 @@
                                 <div class="text-xs text-gray-500 mb-2">
                                     複製下方 Token 並貼至 OpenNode 即可啟動運算。
                                     <template v-if="manifest.worker_download_url">
-                                        <a :href="manifest.worker_download_url" target="_blank" rel="noopener noreferrer" class="text-[#FF003C] hover:text-white underline transition-colors">下載 OpenNode</a>
+                                        <a :href="manifest.worker_download_url" target="_blank" rel="noopener noreferrer" class="text-slate-200 hover:text-white underline transition-colors">下載 OpenNode</a>
                                         <span class="text-slate-500">({{ manifest.worker_bundle_kind || 'onedir' }})</span>
                                     </template>
                                     <template v-else>
@@ -204,14 +271,14 @@
                                     SHA256: {{ manifest.worker_download_sha256 }}
                                 </div>
                                 <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-                                    <input type="text" readonly :value="userToken" class="cyber-input w-full px-2 py-1.5 rounded text-xs text-emerald-400 font-mono bg-black/80 border-white/10" @focus="$event.target.select()">
+                                    <input type="text" readonly :value="userToken" class="cyber-input w-full px-2 py-1.5 rounded text-xs text-slate-100 font-mono bg-black/80 border-white/10" @focus="$event.target.select()">
                                     <button @click="copyToken" class="cyber-btn px-4 py-1.5 rounded font-bold text-xs whitespace-nowrap">一鍵複製</button>
                                     <button @click="refreshWorkerToken" class="px-4 py-1.5 rounded font-bold text-xs whitespace-nowrap border border-white/15 hover:bg-white/10">重新產生</button>
                                 </div>
                             </div>
                         </div>
                         <div class="flex gap-3 mt-4 sm:mt-0">
-                            <button v-if="!tasksData.run_enabled" @click="startMining" class="cyber-btn px-6 py-2 rounded-md font-bold text-white bg-red-600 hover:bg-red-500">開始挖礦</button>
+                            <button v-if="!tasksData.run_enabled" @click="startMining" class="cyber-btn px-6 py-2 rounded-md font-bold">開始挖礦</button>
                             <button v-else @click="stopMining" class="px-6 py-2 rounded-md font-bold text-gray-300 border border-gray-600 hover:bg-gray-800">結束挖礦</button>
                         </div>
                     </div>
@@ -333,100 +400,185 @@
                 </div>
 
                 <div v-if="currentTab === 'dashboard'" class="space-y-6 animate-fade-in">
-                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-4">
-                        <div class="cyber-card p-4 flex flex-col justify-center items-center">
-                            <div class="text-xs text-white mb-1">已完成任務</div>
-                            <div class="text-3xl text-white cyber-num">{{ dashData.tasks_count || 0 }}</div>
+                    <div v-if="activeHelpKey" class="fixed inset-x-4 bottom-4 z-[9998] rounded-2xl border border-white/10 bg-slate-950/95 p-4 shadow-2xl md:hidden">
+                        <div class="flex items-start justify-between gap-3">
+                            <div class="text-sm leading-6 text-slate-200">{{ dashboardHelpText(activeHelpKey) }}</div>
+                            <button @click="closeHelp" class="rounded-full border border-white/10 px-2 py-1 text-xs text-slate-300">關閉</button>
                         </div>
-                        <div class="cyber-card p-4 flex flex-col justify-center items-center">
-                            <div class="text-xs text-white mb-1">{{ dashData.personal_live_strategies_reviewed_label || '個人審核上線策略' }}</div>
-                            <div class="text-3xl text-white cyber-num">{{ dashData.personal_live_strategies_active || dashData.strategies_active || 0 }}</div>
-                        </div>
-                        <div class="cyber-card p-4 flex flex-col justify-center items-center text-center">
-                            <div class="text-xs text-white mb-1">個人達標策略</div>
-                            <div class="text-3xl text-white cyber-num">{{ dashData.personal_review_pipeline_count || 0 }}</div>
-                            <div class="mt-2 text-[11px] leading-5 text-slate-400">{{ dashData.personal_review_pipeline_hint || '已達標並由系統持續追蹤的任務數量' }}</div>
-                        </div>
-                        <div class="cyber-card p-4 flex flex-col justify-center items-center text-center">
-                            <div class="text-xs text-white mb-1">目前實盤載入策略</div>
-                            <div class="text-3xl text-white cyber-num">{{ dashData.personal_runtime_portfolio_count || 0 }}</div>
-                            <div class="mt-2 text-[11px] leading-5 text-slate-400">{{ formatDate(dashData.personal_runtime_portfolio_updated_at) }}</div>
-                            <div v-if="dashData.personal_runtime_portfolio_stale" class="mt-1 text-[11px] text-amber-400">超過 10 分鐘未同步</div>
-                        </div>
-                        <div class="cyber-card p-4 flex flex-col justify-center items-center text-center">
-                            <div class="text-xs text-white mb-1">{{ dashData.global_live_strategies_reviewed_label || '全網審核上線策略' }}</div>
-                            <div class="text-3xl text-white cyber-num">{{ dashData.global_strategies_active || 0 }}</div>
-                        </div>
-                        <div class="cyber-card p-4 flex flex-col justify-center items-center text-center">
-                            <div class="text-xs text-white mb-1">全域已上線策略</div>
-                            <div class="text-3xl text-white cyber-num">{{ dashData.global_runtime_portfolio_count || 0 }}</div>
-                            <div class="mt-2 text-[11px] leading-5 text-slate-400">最近系統自動更新時間</div>
-                            <div class="text-[11px] leading-5 text-slate-300">{{ formatDate(dashData.global_runtime_portfolio_updated_at) }}</div>
-                            <div v-if="dashData.global_runtime_portfolio_stale" class="mt-1 text-[11px] text-amber-400">超過 10 分鐘未同步</div>
-                            <div v-if="dashData.runtime_sync && dashData.runtime_sync.global_active_strategy_mismatch" class="mt-1 text-[11px] text-red-400">網站上線數與 runtime 載入數不一致</div>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
+                        <div v-for="card in dashboardSummaryCards" :key="card.key" class="cyber-card p-4 text-center">
+                            <div class="flex items-center justify-center gap-2">
+                                <div class="text-xs text-slate-200">{{ card.title }}</div>
+                                <div class="custom-tooltip">
+                                    <button type="button" class="tooltip-icon" @click.stop="toggleHelp(card.key)">?</button>
+                                    <div class="tooltip-text" :class="{ 'tooltip-force-open': activeHelpKey === card.key }">{{ dashboardHelpText(card.key) }}</div>
+                                </div>
+                            </div>
+                            <div class="mt-3 text-3xl text-white cyber-num">{{ card.value }}</div>
+                            <div v-if="card.meta" class="mt-2 text-[11px] leading-5 text-slate-400">{{ card.meta }}</div>
+                            <div v-if="card.warning" class="mt-2 text-[11px] leading-5 text-slate-300">{{ card.warning }}</div>
                         </div>
                     </div>
 
                     <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                        <div class="cyber-card p-4 sm:p-5 space-y-3">
-                            <div class="flex items-center justify-between gap-3">
+                        <div class="cyber-card p-4 sm:p-5 space-y-4">
+                            <div class="flex items-start justify-between gap-3">
                                 <div>
-                                    <h3 class="text-lg font-bold text-white">目前實盤載入策略</h3>
-                                    <div class="text-xs text-slate-400 mt-1">由本機實盤程式同步中的最新實盤策略。</div>
+                                    <h3 class="text-lg font-bold text-white">全域上線策略</h3>
+                                    <div class="text-xs text-slate-400 mt-1">目前全站最新發布的可用策略組合，會顯示來源暱稱、權重、總報酬與最大回撤。</div>
                                 </div>
-                                <div class="flex flex-wrap items-center justify-end gap-2 text-xs">
-                                    <span v-if="dashData.personal_runtime_portfolio_stale" class="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-amber-300">超過 10 分鐘未更新</span>
-                                    <span class="text-slate-400">{{ formatDate(dashData.personal_runtime_portfolio_updated_at) }}</span>
+                                <div class="text-right text-xs text-slate-400">
+                                    <div>最近同步</div>
+                                    <div class="mt-1 text-slate-200">{{ formatDate(dashData.global_runtime_portfolio_updated_at) }}</div>
+                                    <div v-if="dashData.global_runtime_portfolio_stale" class="mt-1 text-[11px] text-slate-300">超過 10 分鐘未更新</div>
                                 </div>
                             </div>
                             <div class="space-y-3">
-                                <div v-for="item in dashData.personal_runtime_portfolio_items || []" :key="`personal-runtime-${item.strategy_key || item.rank}`" class="rounded-xl border border-white/10 bg-black/30 p-4">
+                                <div v-for="item in dashData.global_runtime_portfolio_items || []" :key="`global-runtime-${item.strategy_key || item.rank}`" class="rounded-2xl border border-white/10 bg-black/25 p-4">
                                     <div class="flex items-start justify-between gap-3">
-                                        <div>
-                                            <div class="text-sm text-white font-semibold">{{ item.family }} · {{ item.symbol }}</div>
-                                            <div class="text-xs text-slate-400 mt-1">{{ item.interval }} · {{ (item.direction || 'long').toUpperCase() }}</div>
+                                        <div class="min-w-0">
+                                            <div class="flex items-center gap-3">
+                                                <img :src="item.owner_avatar_url || user.avatar_url" alt="" class="h-10 w-10 rounded-full border border-white/10 object-cover bg-slate-800">
+                                                <div class="min-w-0">
+                                                    <div class="text-sm font-semibold text-white truncate">#{{ item.rank || '-' }} · {{ item.family }} · {{ item.symbol }}</div>
+                                                    <div class="mt-1 text-xs text-slate-400 truncate">{{ item.owner_nickname || item.owner_username || '系統策略' }} · {{ item.display_interval || item.interval || '-' }} · {{ (item.direction || 'long').toUpperCase() }}</div>
+                                                </div>
+                                            </div>
                                         </div>
-                                        <div class="text-right">
-                                            <div class="text-xs text-slate-400">權重</div>
-                                            <div class="text-sm text-cyan-300 cyber-num">{{ Number(item.stake_pct || 0).toFixed(2) }}%</div>
+                                        <div class="text-right shrink-0">
+                                            <div class="text-xs text-slate-400">權重 / Sharpe</div>
+                                            <div class="mt-1 text-sm text-white cyber-num">{{ Number(item.stake_pct || 0).toFixed(2) }}% / {{ Number(item.sharpe || item.score || 0).toFixed(2) }}</div>
                                         </div>
                                     </div>
-                                </div>
-                                <div v-if="!dashData.personal_runtime_portfolio_items || dashData.personal_runtime_portfolio_items.length === 0" class="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-sm text-slate-500">
-                                    目前尚未同步任何個人實盤組合。
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="cyber-card p-4 sm:p-5 space-y-3">
-                            <div class="flex items-center justify-between gap-3">
-                                <div>
-                                    <h3 class="text-lg font-bold text-white">全域已上線策略</h3>
-                                    <div class="text-xs text-slate-400 mt-1">目前全站最新發布的全域策略組合。</div>
-                                </div>
-                                <div class="flex flex-wrap items-center justify-end gap-2 text-xs">
-                                    <span v-if="dashData.runtime_sync && dashData.runtime_sync.global_active_strategy_mismatch" class="rounded-full border border-red-500/40 bg-red-500/10 px-2 py-1 text-red-300">數量待核對</span>
-                                    <span v-if="dashData.global_runtime_portfolio_stale" class="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-amber-300">超過 10 分鐘未更新</span>
-                                    <span class="text-slate-400">{{ formatDate(dashData.global_runtime_portfolio_updated_at) }}</span>
-                                </div>
-                            </div>
-                            <div class="space-y-3">
-                                <div v-for="item in dashData.global_runtime_portfolio_items || []" :key="`global-runtime-${item.strategy_key || item.rank}`" class="rounded-xl border border-white/10 bg-black/30 p-4">
-                                    <div class="flex items-start justify-between gap-3">
-                                        <div>
-                                            <div class="text-sm text-white font-semibold">#{{ item.rank || '-' }} · {{ item.family }} · {{ item.symbol }}</div>
-                                            <div class="text-xs text-slate-400 mt-1">{{ item.interval }} · {{ (item.direction || 'long').toUpperCase() }}</div>
+                                    <div class="mt-4 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
+                                        <div class="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2">
+                                            <div class="text-slate-500">總報酬</div>
+                                            <div class="mt-1 text-slate-100 cyber-num">{{ formatPct(item.total_return_pct) }}</div>
                                         </div>
-                                        <div class="text-right">
-                                            <div class="text-xs text-slate-400">權重 / Sharpe</div>
-                                            <div class="text-sm text-amber-300 cyber-num">{{ Number(item.stake_pct || 0).toFixed(2) }}% / {{ Number(item.sharpe || 0).toFixed(2) }}</div>
+                                        <div class="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2">
+                                            <div class="text-slate-500">最大回撤</div>
+                                            <div class="mt-1 text-slate-100 cyber-num">{{ formatPct(item.max_drawdown_pct) }}</div>
+                                        </div>
+                                        <div class="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2">
+                                            <div class="text-slate-500">策略編號</div>
+                                            <div class="mt-1 text-slate-100 cyber-num">{{ item.strategy_id || '-' }}</div>
+                                        </div>
+                                        <div class="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2">
+                                            <div class="text-slate-500">外部鍵</div>
+                                            <div class="mt-1 truncate text-slate-100">{{ item.external_key || item.strategy_key || '-' }}</div>
                                         </div>
                                     </div>
                                 </div>
                                 <div v-if="!dashData.global_runtime_portfolio_items || dashData.global_runtime_portfolio_items.length === 0" class="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-sm text-slate-500">
-                                    目前尚未同步任何全域實盤組合。
+                                    目前尚未同步任何全域上線策略。
                                 </div>
                             </div>
+                        </div>
+
+                        <div class="space-y-4">
+                            <div class="cyber-card p-4 sm:p-5 space-y-4">
+                                <div class="flex items-start justify-between gap-3">
+                                    <div>
+                                        <h3 class="text-lg font-bold text-white">個人上線策略</h3>
+                                        <div class="text-xs text-slate-400 mt-1">顯示你目前被系統選入全域上線組合的策略，不再誤把本機實盤同步卡片當成每個人都會有。</div>
+                                    </div>
+                                    <div class="text-right text-xs text-slate-400">
+                                        <div>目前上線</div>
+                                        <div class="mt-1 text-slate-200 cyber-num">{{ dashData.personal_live_strategy_count || 0 }}</div>
+                                    </div>
+                                </div>
+                                <div class="space-y-3">
+                                    <div v-for="item in dashData.personal_live_strategy_items || []" :key="`personal-live-${item.strategy_key || item.rank}`" class="rounded-2xl border border-white/10 bg-black/25 p-4">
+                                        <div class="flex items-center justify-between gap-3">
+                                            <div class="min-w-0">
+                                                <div class="text-sm font-semibold text-white truncate">{{ item.family }} · {{ item.symbol }}</div>
+                                                <div class="mt-1 text-xs text-slate-400 truncate">{{ item.display_interval || item.interval || '-' }} · {{ (item.direction || 'long').toUpperCase() }}</div>
+                                            </div>
+                                            <div class="text-right shrink-0">
+                                                <div class="text-xs text-slate-400">總報酬 / 回撤</div>
+                                                <div class="mt-1 text-sm text-white cyber-num">{{ formatPct(item.total_return_pct) }} / {{ formatPct(item.max_drawdown_pct) }}</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div v-if="!dashData.personal_live_strategy_items || dashData.personal_live_strategy_items.length === 0" class="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-sm text-slate-500">
+                                        你目前尚未有策略被系統選入全域上線組合。
+                                    </div>
+                                </div>
+                            </div>
+
+                            <details class="cyber-card p-4 sm:p-5">
+                                <summary class="cursor-pointer list-none">
+                                    <div class="flex items-center justify-between gap-3">
+                                        <div>
+                                            <h3 class="text-lg font-bold text-white">因子池交易倉位即時顯示</h3>
+                                            <div class="text-xs text-slate-400 mt-1">折疊顯示目前實盤程式同步中的持倉資料；若尚未同步或目前無倉位，會顯示空狀態。</div>
+                                        </div>
+                                        <div class="text-xs text-slate-400">點擊展開</div>
+                                    </div>
+                                </summary>
+                                <div class="mt-4 space-y-3">
+                                    <div v-for="item in dashData.runtime_position_items || []" :key="`runtime-pos-${item.strategy_key || item.position_key || item.rank}`" class="rounded-2xl border border-white/10 bg-black/25 p-4">
+                                        <div class="flex items-start justify-between gap-3">
+                                            <div class="flex items-center gap-3 min-w-0">
+                                                <img :src="item.owner_avatar_url || user.avatar_url" alt="" class="h-10 w-10 rounded-full border border-white/10 object-cover bg-slate-800">
+                                                <div class="min-w-0">
+                                                    <div class="text-sm font-semibold text-white truncate">{{ item.symbol || '-' }} · {{ (item.direction || 'long').toUpperCase() }}</div>
+                                                    <div class="mt-1 text-xs text-slate-400 truncate">{{ item.owner_nickname || item.owner_username || '系統策略' }} · {{ item.family || '-' }}</div>
+                                                </div>
+                                            </div>
+                                            <div class="text-right text-xs text-slate-400 shrink-0">
+                                                <div>未實現盈虧</div>
+                                                <div class="mt-1 text-sm text-white cyber-num">{{ formatPct(item.unrealized_pnl_pct, false) }} / {{ formatNumber(item.unrealized_pnl_usdt) }} USDT</div>
+                                            </div>
+                                        </div>
+                                        <div class="mt-4 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
+                                            <div class="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2"><div class="text-slate-500">持倉數量</div><div class="mt-1 text-slate-100 cyber-num">{{ formatNumber(item.position_usdt) }} USDT</div></div>
+                                            <div class="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2"><div class="text-slate-500">保證金</div><div class="mt-1 text-slate-100 cyber-num">{{ formatNumber(item.margin_usdt) }} USDT</div></div>
+                                            <div class="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2"><div class="text-slate-500">保證金比率</div><div class="mt-1 text-slate-100 cyber-num">{{ formatPct(item.margin_ratio_pct) }}</div></div>
+                                            <div class="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2"><div class="text-slate-500">持倉均價 / 強平價</div><div class="mt-1 text-slate-100 cyber-num">{{ formatNumber(item.entry_price) }} / {{ formatNumber(item.liquidation_price) }}</div></div>
+                                        </div>
+                                    </div>
+                                    <div v-if="!dashData.runtime_position_items || dashData.runtime_position_items.length === 0" class="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-sm text-slate-500">
+                                        目前因子池尚未持倉。
+                                    </div>
+                                </div>
+                            </details>
+
+                            <details class="cyber-card p-4 sm:p-5">
+                                <summary class="cursor-pointer list-none">
+                                    <div class="flex items-center justify-between gap-3">
+                                        <div>
+                                            <h3 class="text-lg font-bold text-white">本機實盤同步資訊</h3>
+                                            <div class="text-xs text-slate-400 mt-1">這裡保留本機 `實盤因子池下單程式.py` 的同步診斷，不再把它當成所有用戶共用的主卡片。</div>
+                                        </div>
+                                        <div class="text-xs text-slate-400">{{ formatDate(dashData.personal_runtime_portfolio_updated_at) }}</div>
+                                    </div>
+                                </summary>
+                                <div class="mt-4 space-y-3">
+                                    <div class="rounded-xl border border-white/10 bg-black/25 p-4 text-sm text-slate-300">
+                                        <div>目前同步筆數：<span class="cyber-num text-white">{{ dashData.personal_runtime_portfolio_count || 0 }}</span></div>
+                                        <div class="mt-2">最後同步時間：<span class="text-white">{{ formatDate(dashData.personal_runtime_portfolio_updated_at) }}</span></div>
+                                        <div v-if="dashData.personal_runtime_portfolio_stale" class="mt-2 text-slate-300">本機實盤同步超過 10 分鐘未更新。</div>
+                                    </div>
+                                    <div v-for="item in dashData.personal_runtime_portfolio_items || []" :key="`personal-runtime-${item.strategy_key || item.rank}`" class="rounded-xl border border-white/10 bg-black/25 p-4">
+                                        <div class="flex items-center justify-between gap-3">
+                                            <div>
+                                                <div class="text-sm font-semibold text-white">{{ item.family }} · {{ item.symbol }}</div>
+                                                <div class="mt-1 text-xs text-slate-400">{{ item.interval }} · {{ (item.direction || 'long').toUpperCase() }}</div>
+                                            </div>
+                                            <div class="text-right">
+                                                <div class="text-xs text-slate-400">權重</div>
+                                                <div class="mt-1 text-sm text-white cyber-num">{{ Number(item.stake_pct || 0).toFixed(2) }}%</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div v-if="!dashData.personal_runtime_portfolio_items || dashData.personal_runtime_portfolio_items.length === 0" class="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-sm text-slate-500">
+                                        目前尚未同步任何本機實盤策略資料。
+                                    </div>
+                                </div>
+                            </details>
                         </div>
                     </div>
                 </div>
@@ -593,7 +745,7 @@
 
                 <div v-if="currentTab === 'leaderboard'" class="cyber-card p-4 sm:p-6 animate-fade-in space-y-4">
                     <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-                        <h3 class="text-xl font-bold text-white">排行榜 ▪ 3月</h3>
+                        <h3 class="text-xl font-bold text-white">排行榜</h3>
                         <div class="text-xs text-slate-400">展示算力貢獻、積分收益、最高分、挖礦總時長與個人達標策略，資料會隨最新統計自動更新。</div>
                     </div>
                     <div class="overflow-x-auto pb-1">
@@ -628,15 +780,23 @@
                                     <thead>
                                         <tr class="border-b border-white/10 text-gray-400 text-sm">
                                             <th class="py-3 px-4">排名</th>
-                                            <th class="py-3 px-4">暱稱</th>
+                                            <th class="py-3 px-4">用戶</th>
                                             <th class="py-3 px-4 text-right">數值</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         <tr v-for="(item, idx) in activeLeaderboardSection.rows" :key="`${activeLeaderboardSection.key}-${idx}`" class="border-b border-white/5 hover:bg-white/5">
-                                            <td class="py-3 px-4 text-amber-400 cyber-num text-lg">#{{ idx + 1 }}</td>
-                                            <td class="py-3 px-4 text-gray-200">{{ item.nickname || item.username }}</td>
-                                            <td class="py-3 px-4 text-right text-emerald-400 cyber-num text-[15px]">{{ formatLeaderboardValue(activeLeaderboardSection.key, item) }}</td>
+                                            <td class="py-3 px-4 text-slate-100 cyber-num text-lg">#{{ idx + 1 }}</td>
+                                            <td class="py-3 px-4">
+                                                <div class="flex items-center gap-3">
+                                                    <img :src="item.avatar_url || user.avatar_url" alt="" class="h-9 w-9 rounded-full border border-white/10 object-cover bg-slate-800">
+                                                    <div>
+                                                        <div class="text-gray-100">{{ item.nickname || item.username }}</div>
+                                                        <div class="text-[11px] text-slate-500">@{{ item.username }}</div>
+                                                    </div>
+                                                </div>
+                                            </td>
+                                            <td class="py-3 px-4 text-right text-slate-100 cyber-num text-[15px]">{{ formatLeaderboardValue(activeLeaderboardSection.key, item) }}</td>
                                         </tr>
                                         <tr v-if="!activeLeaderboardSection.rows || activeLeaderboardSection.rows.length === 0">
                                             <td colspan="3" class="py-8 px-4 text-center text-sm text-slate-500">{{ leaderboardEmptyStateText }}</td>
@@ -647,16 +807,20 @@
                             <div class="sm:hidden space-y-2">
                                 <div v-for="(item, idx) in activeLeaderboardSection.rows" :key="`mobile-${activeLeaderboardSection.key}-${idx}`" class="rounded-lg border border-white/10 bg-black/30 px-3 py-3">
                                     <div class="flex items-center justify-between gap-3">
-                                        <div>
-                                            <div class="text-xs text-slate-400">排名</div>
-                                            <div class="text-base text-amber-400 cyber-num">#{{ idx + 1 }}</div>
+                                        <div class="flex items-center gap-3 min-w-0">
+                                            <img :src="item.avatar_url || user.avatar_url" alt="" class="h-10 w-10 rounded-full border border-white/10 object-cover bg-slate-800">
+                                            <div class="min-w-0">
+                                                <div class="text-xs text-slate-400">排名</div>
+                                                <div class="text-base text-slate-100 cyber-num">#{{ idx + 1 }}</div>
+                                            </div>
                                         </div>
                                         <div class="text-right">
                                             <div class="text-xs text-slate-400">數值</div>
-                                            <div class="text-sm text-emerald-400 font-semibold cyber-num">{{ formatLeaderboardValue(activeLeaderboardSection.key, item) }}</div>
+                                            <div class="text-sm text-slate-100 font-semibold cyber-num">{{ formatLeaderboardValue(activeLeaderboardSection.key, item) }}</div>
                                         </div>
                                     </div>
                                     <div class="mt-2 text-sm text-gray-200">{{ item.nickname || item.username }}</div>
+                                    <div class="text-[11px] text-slate-500">@{{ item.username }}</div>
                                 </div>
                                 <div v-if="!activeLeaderboardSection.rows || activeLeaderboardSection.rows.length === 0" class="rounded-lg border border-dashed border-white/10 px-3 py-6 text-center text-sm text-slate-500">
                                     {{ leaderboardEmptyStateText }}
@@ -668,15 +832,15 @@
                 <div v-if="currentTab === 'admin'" class="animate-fade-in space-y-6">
                     <div class="cyber-card p-6">
                         <h3 class="text-xl font-bold text-white mb-4 border-b border-white/10 pb-2"> 系統核心控制台 (全自動因子池)</h3>
-                        <div class="bg-blue-900/30 border border-blue-500/50 text-blue-200 text-sm p-3 rounded mb-6">
-                             提示：OOS 審計已全面自動化。只要礦工算力產出的參數達標，將會自動發布至實盤因子池供交易程式使用。
+                        <div class="bg-white/[0.04] border border-white/10 text-slate-300 text-sm p-3 rounded mb-6">
+                             提示：只要節點算出的參數達標，系統就會自動接手後續審核與同步流程。
                         </div>
                         
                         <div class="flex gap-4 border-b border-white/10 mb-6 overflow-x-auto">
-                            <button @click="adminSubTab = 'thresholds'" :class="adminSubTab === 'thresholds' ? 'text-emerald-400 border-b-2 border-emerald-400 font-bold' : 'text-gray-400 hover:text-white'" class="pb-2 whitespace-nowrap">達標門檻設定</button>
-                            <button @click="adminSubTab = 'pools'" :class="adminSubTab === 'pools' ? 'text-emerald-400 border-b-2 border-emerald-400 font-bold' : 'text-gray-400 hover:text-white'" class="pb-2 whitespace-nowrap">策略池參數修改</button>
-                            <button @click="adminSubTab = 'livestrats'" :class="adminSubTab === 'livestrats' ? 'text-emerald-400 border-b-2 border-emerald-400 font-bold' : 'text-gray-400 hover:text-white'" class="pb-2 whitespace-nowrap">實盤因子池狀態</button>
-                            <button @click="adminSubTab = 'catalogImport'" :class="adminSubTab === 'catalogImport' ? 'text-emerald-400 border-b-2 border-emerald-400 font-bold' : 'text-gray-400 hover:text-white'" class="pb-2 whitespace-nowrap">批次 JSON 匯入</button>
+                            <button @click="adminSubTab = 'thresholds'" :class="adminSubTab === 'thresholds' ? 'text-white border-b-2 border-white/40 font-bold' : 'text-gray-400 hover:text-white'" class="pb-2 whitespace-nowrap">達標門檻設定</button>
+                            <button @click="adminSubTab = 'pools'" :class="adminSubTab === 'pools' ? 'text-white border-b-2 border-white/40 font-bold' : 'text-gray-400 hover:text-white'" class="pb-2 whitespace-nowrap">策略池參數修改</button>
+                            <button @click="adminSubTab = 'livestrats'" :class="adminSubTab === 'livestrats' ? 'text-white border-b-2 border-white/40 font-bold' : 'text-gray-400 hover:text-white'" class="pb-2 whitespace-nowrap">實盤因子池狀態</button>
+                            <button @click="adminSubTab = 'catalogImport'" :class="adminSubTab === 'catalogImport' ? 'text-white border-b-2 border-white/40 font-bold' : 'text-gray-400 hover:text-white'" class="pb-2 whitespace-nowrap">批次 JSON 匯入</button>
                         </div>
 
                         <div v-if="adminError" class="mb-4 rounded-md border border-red-500/40 bg-red-900/20 px-4 py-3 text-sm text-red-200">
@@ -691,7 +855,22 @@
                                 <div><label class="block text-xs text-gray-400 mb-1">最小夏普指標 (Sharpe)</label><input v-model.number="adminThresholds.min_sharpe" type="number" step="0.01" class="cyber-input w-full px-3 py-2 rounded"></div>
                                 <div><label class="block text-xs text-gray-400 mb-1">單次任務最多保留候選數</label><input v-model.number="adminThresholds.candidate_keep_top_n" type="number" class="cyber-input w-full px-3 py-2 rounded"></div>
                             </div>
-                            <button @click="saveThresholds" class="mt-4 px-6 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded transition-colors">覆寫並儲存全域門檻</button>
+                            <button @click="saveThresholds" class="mt-4 rounded-xl border border-white/10 px-6 py-2 text-sm font-semibold text-slate-100 hover:bg-white/5">覆寫並儲存全域門檻</button>
+
+                            <div class="rounded-2xl border border-white/10 bg-black/25 p-4 space-y-3">
+                                <div class="flex items-center gap-3">
+                                    <img :src="adminDefaultAvatar.avatar_url || user.avatar_url" alt="" class="h-14 w-14 rounded-full border border-white/10 object-cover bg-slate-800">
+                                    <div>
+                                        <div class="text-sm font-semibold text-white">所有人的預設大頭貼</div>
+                                        <div class="mt-1 text-xs text-slate-400">未設定個人頭像的用戶會使用這張預設圖。</div>
+                                    </div>
+                                </div>
+                                <input type="file" accept="image/*" @change="handleDefaultAvatarChange" class="cyber-input w-full rounded-xl px-3 py-2 text-xs">
+                                <div class="flex flex-wrap gap-2">
+                                    <button @click="saveDefaultAvatar" class="rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-100 hover:bg-white/5">設定所有人的預設大頭貼</button>
+                                    <button @click="clearDefaultAvatar" class="rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-300 hover:bg-white/5">清除自訂預設頭像</button>
+                                </div>
+                            </div>
                         </div>
 
                         <div v-if="adminSubTab === 'pools'" class="space-y-6">
@@ -929,16 +1108,26 @@
                     }
                 };
                 
-                const authForm = reactive({ username: '', password: '' });
+                const authForm = reactive({ username: '', nickname: '', password: '' });
+                const registerAvatarDataUrl = ref('');
+                const profileForm = reactive({ nickname: '', avatar_url: '', clear_avatar: false });
+                const adminDefaultAvatar = reactive({ avatar_url: '' });
+                const activeHelpKey = ref('');
                 const dashData = reactive({
                     tasks_count: 0,
                     strategies_active: 0,
                     personal_live_strategies_active: 0,
-                    personal_live_strategies_reviewed_label: '個人審核上線策略',
+                    personal_live_strategies_reviewed_label: '個人過審策略',
+                    personal_reviewed_strategy_count: 0,
+                    personal_live_strategy_count: 0,
+                    personal_live_strategy_items: [],
+                    personal_active_strategy_count: 0,
                     personal_review_pipeline_count: 0,
                     personal_review_pipeline_hint: '',
                     global_strategies_active: 0,
-                    global_live_strategies_reviewed_label: '全網審核上線策略',
+                    global_live_strategies_reviewed_label: '全域過審策略',
+                    global_reviewed_strategy_count: 0,
+                    global_live_strategy_count: 0,
                     personal_runtime_portfolio_count: 0,
                     personal_runtime_portfolio_updated_at: '',
                     personal_runtime_portfolio_items: [],
@@ -949,6 +1138,7 @@
                     global_runtime_portfolio_items: [],
                     global_runtime_portfolio_stale: false,
                     global_runtime_portfolio_age_seconds: 0,
+                    runtime_position_items: [],
                     runtime_sync: null,
                     payouts_unpaid: 0,
                     strategies: [],
@@ -1131,6 +1321,13 @@
                 const tasksData = reactive({ tasks: [], run_enabled: false, pending_task_count: 0, active_cycle_id: 0 });
                 const leaderboard = reactive({ combos: [], score: [], time: [], points: [], qualified_strategies: [] });
                 const leaderboardState = reactive({ phase: 'idle', hasLoaded: false, lastError: '', consecutiveFailures: 0, lastLoadedAt: '' });
+                const dashboardHelpTexts = {
+                    completed_tasks: '你已完成的個人挖礦任務總數，用來反映累積運算產出。',
+                    personal_reviewed: '你挖出的策略中，已通過平台審核的總數。',
+                    personal_live: '你已過審的策略中，目前真的被系統選入全域上線組合的數量。',
+                    global_reviewed: '所有用戶已通過平台審核的策略總數。',
+                    global_live: '目前全站最新發布並實際投入使用的全域策略數量。',
+                };
 
                 // 管理員專屬狀態
                 const adminSubTab = ref('thresholds');
@@ -1147,6 +1344,145 @@
                 const adminStratHasNext = ref(false);
                 const catalogImportText = ref('');
                 const catalogImportResult = ref(null);
+
+                const closeHelp = () => { activeHelpKey.value = ''; };
+                const toggleHelp = (key) => {
+                    activeHelpKey.value = activeHelpKey.value === key ? '' : key;
+                };
+                const dashboardHelpText = (key) => dashboardHelpTexts[key] || '';
+                const formatPct = (value, appendUnit = true) => {
+                    const num = Number(value);
+                    if (!Number.isFinite(num)) return '-';
+                    return `${num.toFixed(2)}${appendUnit ? '%' : ''}`;
+                };
+                const formatNumber = (value) => {
+                    const num = Number(value);
+                    if (!Number.isFinite(num)) return '-';
+                    return num.toFixed(Math.abs(num) >= 100 ? 0 : 2);
+                };
+                const dashboardSummaryCards = computed(() => ([
+                    {
+                        key: 'completed_tasks',
+                        title: '已完成任務',
+                        value: dashData.tasks_count || 0,
+                        meta: '個人挖礦跑好的任務總數',
+                        warning: '',
+                    },
+                    {
+                        key: 'personal_reviewed',
+                        title: '個人過審策略',
+                        value: dashData.personal_reviewed_strategy_count || 0,
+                        meta: '你挖出後已通過審核的策略',
+                        warning: '',
+                    },
+                    {
+                        key: 'personal_live',
+                        title: '個人上線策略',
+                        value: dashData.personal_live_strategy_count || 0,
+                        meta: '你的策略中，已被系統選入全域上線組合',
+                        warning: '',
+                    },
+                    {
+                        key: 'global_reviewed',
+                        title: '全域過審策略',
+                        value: dashData.global_reviewed_strategy_count || 0,
+                        meta: '所有用戶已通過審核的策略總數',
+                        warning: '',
+                    },
+                    {
+                        key: 'global_live',
+                        title: '全域上線策略',
+                        value: dashData.global_live_strategy_count || 0,
+                        meta: formatDate(dashData.global_runtime_portfolio_updated_at) || '等待同步',
+                        warning: dashData.global_runtime_portfolio_stale ? '最近同步已超過 10 分鐘' : '',
+                    },
+                ]));
+
+                const fileToDataUrl = (file, maxBytes = 260 * 1024) => new Promise((resolve, reject) => {
+                    if (!file) {
+                        resolve('');
+                        return;
+                    }
+                    if (file.size > maxBytes) {
+                        reject(new Error('圖片過大，請改用 260KB 以內的圖片'));
+                        return;
+                    }
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(String(reader.result || ''));
+                    reader.onerror = () => reject(new Error('圖片讀取失敗'));
+                    reader.readAsDataURL(file);
+                });
+
+                const handleRegisterAvatarChange = async (event) => {
+                    try {
+                        registerAvatarDataUrl.value = await fileToDataUrl(event?.target?.files?.[0]);
+                    } catch (e) {
+                        registerAvatarDataUrl.value = '';
+                        showToast(e.message, 'error', 4000);
+                    }
+                };
+
+                const handleProfileAvatarChange = async (event) => {
+                    try {
+                        profileForm.avatar_url = await fileToDataUrl(event?.target?.files?.[0]);
+                        profileForm.clear_avatar = false;
+                    } catch (e) {
+                        showToast(e.message, 'error', 4000);
+                    }
+                };
+
+                const clearProfileAvatar = () => {
+                    profileForm.avatar_url = '';
+                    profileForm.clear_avatar = true;
+                };
+
+                const saveProfile = async () => {
+                    try {
+                        const res = await fetchApi('/user/profile', {
+                            method: 'PATCH',
+                            body: JSON.stringify({
+                                nickname: profileForm.nickname,
+                                avatar_url: profileForm.avatar_url || '',
+                                clear_avatar: !!profileForm.clear_avatar,
+                            }),
+                        });
+                        user.value = res.user || user.value;
+                        profileForm.nickname = user.value?.nickname || user.value?.display_name || user.value?.username || '';
+                        profileForm.avatar_url = user.value?.avatar_url || '';
+                        profileForm.clear_avatar = false;
+                        showToast('帳戶設定已更新', 'success', 3000);
+                        await loadLeaderboardData({ silent: true, preserveExisting: true });
+                        await loadDashboardData();
+                    } catch (e) {
+                        showToast(`更新帳戶設定失敗: ${e.message}`, 'error', 4000);
+                    }
+                };
+
+                const handleDefaultAvatarChange = async (event) => {
+                    try {
+                        adminDefaultAvatar.avatar_url = await fileToDataUrl(event?.target?.files?.[0], 320 * 1024);
+                    } catch (e) {
+                        showToast(e.message, 'error', 4000);
+                    }
+                };
+
+                const saveDefaultAvatar = async () => {
+                    try {
+                        const res = await fetchApi('/admin/default-avatar', {
+                            method: 'POST',
+                            body: JSON.stringify({ avatar_url: adminDefaultAvatar.avatar_url || '' }),
+                        });
+                        adminDefaultAvatar.avatar_url = res.avatar_url || '';
+                        showToast('已更新所有人的預設頭像', 'success', 3000);
+                    } catch (e) {
+                        showToast(`更新預設頭像失敗: ${e.message}`, 'error', 4000);
+                    }
+                };
+
+                const clearDefaultAvatar = async () => {
+                    adminDefaultAvatar.avatar_url = '';
+                    await saveDefaultAvatar();
+                };
 
                 const normalizeAdminThresholds = (data = {}) => ({
                     min_trades: Number(data.min_trades ?? 30),
@@ -1240,11 +1576,13 @@
                     try {
                         showToast('正在獲取管理員資料...', 'info', 1000);
                         adminError.value = '';
-                        const [thRes, pRes] = await Promise.all([
+                        const [thRes, pRes, avatarRes] = await Promise.all([
                             fetchApi('/settings/thresholds'),
                             fetchApi('/admin/factor_pools'),
+                            fetchApi('/admin/default-avatar'),
                         ]);
                         Object.assign(adminThresholds, normalizeAdminThresholds(thRes));
+                        adminDefaultAvatar.avatar_url = avatarRes.avatar_url || '';
                         adminPools.value = (pRes.pools || []).map(p => ({
                             ...p,
                             direction: p.direction || 'long',
@@ -1594,18 +1932,42 @@
 
                 const applyLeaderboardData = (payload = {}) => {
                     const data = payload?.data || {};
-                    leaderboard.combos = data.combos || [];
-                    leaderboard.score = data.score || [];
-                    leaderboard.time = data.time || [];
-                    leaderboard.points = data.points || [];
-                    leaderboard.qualified_strategies = data.qualified_strategies || [];
-                    leaderboardState.phase = 'ready';
+                    const keys = ['combos', 'score', 'time', 'points', 'qualified_strategies'];
+                    const nextRows = {
+                        combos: Array.isArray(data.combos) ? data.combos : [],
+                        score: Array.isArray(data.score) ? data.score : [],
+                        time: Array.isArray(data.time) ? data.time : [],
+                        points: Array.isArray(data.points) ? data.points : [],
+                        qualified_strategies: Array.isArray(data.qualified_strategies) ? data.qualified_strategies : [],
+                    };
+                    const incomingHasRows = Object.values(nextRows).some(rows => Array.isArray(rows) && rows.length > 0);
+                    const existingHasRows = Object.values(leaderboard).some(rows => Array.isArray(rows) && rows.length > 0);
+                    const preservedKeys = keys.filter(key => nextRows[key].length === 0 && Array.isArray(leaderboard[key]) && leaderboard[key].length > 0);
+                    if (!incomingHasRows && existingHasRows) {
+                        leaderboardState.phase = 'error';
+                        leaderboardState.lastError = '本輪排行榜統計暫時為空，已保留上一版資料並自動重試。';
+                        leaderboardState.consecutiveFailures += 1;
+                        if (payload?.leaderboard_version) {
+                            liveVersions.leaderboard_version = payload.leaderboard_version;
+                        }
+                        scheduleLeaderboardRetry();
+                        return;
+                    }
+                    keys.forEach(key => {
+                        leaderboard[key] = nextRows[key].length > 0 ? nextRows[key] : (Array.isArray(leaderboard[key]) ? leaderboard[key] : []);
+                    });
+                    leaderboardState.phase = preservedKeys.length > 0 ? 'error' : 'ready';
                     leaderboardState.hasLoaded = true;
-                    leaderboardState.lastError = '';
-                    leaderboardState.consecutiveFailures = 0;
-                    leaderboardState.lastLoadedAt = new Date().toISOString();
+                    leaderboardState.lastError = preservedKeys.length > 0 ? '部分排行榜暫時為空，已保留上一版資料並持續補抓。' : '';
+                    leaderboardState.consecutiveFailures = preservedKeys.length > 0 ? leaderboardState.consecutiveFailures + 1 : 0;
+                    leaderboardState.lastLoadedAt = payload?.generated_at || new Date().toISOString();
                     if (payload?.leaderboard_version) {
                         liveVersions.leaderboard_version = payload.leaderboard_version;
+                    }
+                    if (preservedKeys.length > 0) {
+                        scheduleLeaderboardRetry();
+                    } else {
+                        clearLeaderboardRetry();
                     }
                 };
 
@@ -1644,7 +2006,9 @@
                     try {
                         const res = await fetchApi('/leaderboard?period_hours=720');
                         applyLeaderboardData(res || {});
-                        clearLeaderboardRetry();
+                        if (leaderboardState.phase === 'ready') {
+                            clearLeaderboardRetry();
+                        }
                         return res;
                     } catch (e) {
                         leaderboardState.phase = 'error';
@@ -1771,6 +2135,9 @@
                         const storedToken = localStorage.getItem('sheep_token');
                         if (!storedToken) throw new Error('No token');
                         user.value = await fetchApi('/user/me');
+                        profileForm.nickname = user.value?.nickname || user.value?.display_name || user.value?.username || '';
+                        profileForm.avatar_url = user.value?.avatar_url || '';
+                        profileForm.clear_avatar = false;
                         await issueWorkerToken(false, false);
                         await loadAllData();
                         startLiveVersionPolling();
@@ -1781,6 +2148,9 @@
                     } catch (e) { 
                         user.value = null; 
                         userToken.value = '';
+                        profileForm.nickname = '';
+                        profileForm.avatar_url = '';
+                        profileForm.clear_avatar = false;
                         clearLeaderboardRetry();
                         stopLiveVersionPolling();
                         localStorage.removeItem('sheep_token');
@@ -1849,7 +2219,7 @@
                                 captcha_token: captchaState.token, captcha_offset: captchaState.currentX, captcha_tracks: captchaState.tracks
                               }
                             : { 
-                                username: authForm.username, password: authForm.password, tos_ok: true,
+                                username: authForm.username, password: authForm.password, nickname: authForm.nickname, avatar_url: registerAvatarDataUrl.value || '', tos_ok: true,
                                 captcha_token: captchaState.token, captcha_offset: captchaState.currentX, captcha_tracks: captchaState.tracks
                               };
                             
@@ -1869,6 +2239,7 @@
                             if(detail === 'user_exists') throw new Error('註冊失敗：該帳號已被其他人註冊');
                             if(detail === 'password_too_short') throw new Error('註冊失敗：密碼至少需要6個字元');
                             if(detail === 'invalid_username') throw new Error('註冊失敗：帳號格式無效');
+                            if(detail === 'nickname_required') throw new Error('註冊失敗：請先設定暱稱');
                             // [專家級修復] 針對 401 狀態碼翻譯，提供使用者友善的白話文錯誤
                             if(detail === 'bad_credentials') throw new Error('登入失敗：帳號或密碼錯誤，請重新確認');
                             if(detail === 'user_disabled') throw new Error('登入失敗：此帳號已被系統停用');
@@ -1980,7 +2351,9 @@
                     // [專家級修復] 登出時徹底清空帳密表單，並重新載入全新的驗證碼狀態
                     // 這樣畫面會因為 authForm 變空而自動隱藏驗證碼區域，直到下一次輸入
                     authForm.username = '';
+                    authForm.nickname = '';
                     authForm.password = '';
+                    registerAvatarDataUrl.value = '';
                     clearCaptchaState();
                 };
 
@@ -2229,17 +2602,19 @@
 
                 // 👉 修復：確保 return 內輸出的函數名稱與上面定義的完全一致，不包含多餘殘留變數
                 return { 
-                    user, isLoading, isLoginMode, currentTab, authForm, errorMsg, handleAuth, logout, 
+                    user, isLoading, isLoginMode, currentTab, authForm, registerAvatarDataUrl, errorMsg, handleAuth, logout, 
+                    profileForm, handleRegisterAvatarChange, handleProfileAvatarChange, clearProfileAvatar, saveProfile,
                     userToken, copyToken, refreshWorkerToken, // 導出 Token 顯示與複製方法
                     captchaContainer, captchaState, showCaptchaPanel, captchaCanSubmit, onSliderDown, resetCaptcha, loadCaptcha, // 導出驗證碼狀態與事件 
                     toastMsg, toastType, // 導出供 UI 使用
                     manifest, dashData, tasksData, leaderboard, devtoolsTripped, pingMs, startMining, stopMining, 
                     getStatusText, getPhaseText, getProgressState, getScore, getScoreNumber,
-                    loadTasks, getShortPoolName, getScoreColorClass, formatDate,
+                    loadTasks, getShortPoolName, getScoreColorClass, formatDate, formatPct, formatNumber,
+                    activeHelpKey, toggleHelp, closeHelp, dashboardSummaryCards, dashboardHelpText,
                     activeTasks, activeTaskEmptyStateText, ratingView, setRatingView, paginatedRatingTasks, activeRatingPage, totalRatingPages, changeRatingPage,
                     qualifiedTasks, rejectedArchiveTasks, leaderboardSections, activeLeaderboardKey, activeLeaderboardSection, leaderboardState, leaderboardEmptyStateText, leaderboardStatusText, manualRefreshLeaderboard, formatLeaderboardValue,
                     getReviewStatus, getReviewStatusMeta, getReviewDetail,
-                    adminSubTab, adminThresholds, adminPools, adminStrats, adminError, adminDiagnostics, adminStratSummary, adminStratFilters, adminStratPage, adminStratPageSize, adminStratTotal, adminStratHasNext, adminStratTotalPages, loadAdminData, refreshAdminStrategies, resetAdminStrategyFilters, changeAdminStratPage, downloadAdminErrors, saveThresholds, savePool,
+                    adminSubTab, adminThresholds, adminPools, adminStrats, adminError, adminDiagnostics, adminStratSummary, adminStratFilters, adminStratPage, adminStratPageSize, adminStratTotal, adminStratHasNext, adminStratTotalPages, adminDefaultAvatar, loadAdminData, refreshAdminStrategies, resetAdminStrategyFilters, changeAdminStratPage, downloadAdminErrors, saveThresholds, savePool, handleDefaultAvatarChange, saveDefaultAvatar, clearDefaultAvatar,
                     catalogImportText, catalogImportResult, handleCatalogFileChange, runCatalogImport
                 };
             }

@@ -201,7 +201,85 @@ _DEFAULT_THRESHOLD_SETTINGS: Dict[str, Any] = {
     "max_drawdown_pct": 25.0,
     "min_sharpe": 0.6,
     "candidate_keep_top_n": 30,
+    "default_avatar_data_url": "",
 }
+
+_PROFILE_NICKNAME_MAX_LEN = 16
+_AVATAR_DATA_URL_MAX_LEN = 350000
+
+
+def _sanitize_nickname_text(value: Any, fallback: str = "") -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        raw = str(fallback or "").strip()
+    if not raw:
+        raw = "未命名用戶"
+    return html.escape(raw[:_PROFILE_NICKNAME_MAX_LEN])
+
+
+def _avatar_initials(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "羊"
+    ascii_only = re.sub(r"[^A-Za-z0-9]", "", text)
+    if ascii_only:
+        return ascii_only[:2].upper()
+    return text[:1]
+
+
+def _build_default_avatar_data_url(label: str) -> str:
+    initials = html.escape(_avatar_initials(label))
+    svg = (
+        "<svg xmlns='http://www.w3.org/2000/svg' width='128' height='128' viewBox='0 0 128 128' fill='none'>"
+        "<rect width='128' height='128' rx='64' fill='#2B3036'/>"
+        "<circle cx='64' cy='64' r='52' fill='#3B4148'/>"
+        "<text x='64' y='74' text-anchor='middle' font-family='Segoe UI, Arial, sans-serif' "
+        "font-size='40' font-weight='700' fill='#F4F4F5'>"
+        f"{initials}</text></svg>"
+    )
+    encoded = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+    return f"data:image/svg+xml;base64,{encoded}"
+
+
+def _sanitize_avatar_url(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    lower = text.lower()
+    if lower.startswith("data:image/") and len(text) <= _AVATAR_DATA_URL_MAX_LEN:
+        return text
+    if lower.startswith("https://") or lower.startswith("http://"):
+        return text
+    return ""
+
+
+def _default_avatar_url_from_conn(conn: Any = None) -> str:
+    owns_conn = not bool(getattr(conn, "_is_db_conn", False))
+    if owns_conn:
+        conn = _conn()
+    try:
+        custom = _sanitize_avatar_url(get_setting(conn, "default_avatar_data_url", ""))
+        if custom:
+            return custom
+    except Exception:
+        pass
+    finally:
+        if owns_conn:
+            conn.close()
+    return _build_default_avatar_data_url("SHEEP")
+
+
+def _decorate_user_row(row: Any, *, default_avatar_url: str = "") -> Dict[str, Any]:
+    data = dict(row or {})
+    username = str(data.get("username") or "").strip()
+    nickname = _sanitize_nickname_text(data.get("nickname"), username)
+    avatar_url = _sanitize_avatar_url(data.get("avatar_url"))
+    if not avatar_url:
+        avatar_url = str(default_avatar_url or "").strip() or _build_default_avatar_data_url(nickname or username or "S")
+    data["nickname"] = nickname
+    data["display_name"] = nickname
+    data["avatar_url"] = avatar_url
+    return data
 
 
 def _infer_direction(
@@ -815,12 +893,14 @@ def init_db() -> None:
                     password_hash TEXT NOT NULL,
                     role TEXT NOT NULL DEFAULT 'user',
                     nickname TEXT DEFAULT '',
+                    avatar_url TEXT DEFAULT '',
                     disabled INTEGER NOT NULL DEFAULT 0,
                     run_enabled INTEGER NOT NULL DEFAULT 0,
                     wallet_address TEXT NOT NULL DEFAULT '',
                     wallet_chain TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
-                    last_login_at TEXT
+                    last_login_at TEXT,
+                    profile_updated_at TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS settings (
@@ -1011,10 +1091,12 @@ def init_db() -> None:
                 "CREATE UNIQUE INDEX IF NOT EXISTS users_username_norm_uq ON users(username_norm)",
                 "CREATE INDEX IF NOT EXISTS users_username_norm_idx ON users(username_norm)",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS nickname TEXT DEFAULT ''",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT DEFAULT ''",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS run_enabled INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS wallet_address TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS wallet_chain TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_updated_at TEXT",
                 "ALTER TABLE factor_pools ADD COLUMN IF NOT EXISTS external_key TEXT DEFAULT ''",
                 "ALTER TABLE factor_pools ADD COLUMN IF NOT EXISTS direction TEXT DEFAULT 'long'",
                 "ALTER TABLE candidates ADD COLUMN IF NOT EXISTS direction TEXT DEFAULT 'long'",
@@ -1081,12 +1163,14 @@ def init_db() -> None:
                     password_hash TEXT NOT NULL,
                     role TEXT NOT NULL DEFAULT 'user',
                     nickname TEXT DEFAULT '',
+                    avatar_url TEXT DEFAULT '',
                     disabled INTEGER NOT NULL DEFAULT 0,
                     run_enabled INTEGER NOT NULL DEFAULT 0,
                     wallet_address TEXT NOT NULL DEFAULT '',
                     wallet_chain TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
-                    last_login_at TEXT
+                    last_login_at TEXT,
+                    profile_updated_at TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS settings (
@@ -1259,9 +1343,12 @@ def init_db() -> None:
             )
             
             statements_sqlite = [
+                "ALTER TABLE users ADD COLUMN nickname TEXT DEFAULT ''",
+                "ALTER TABLE users ADD COLUMN avatar_url TEXT DEFAULT ''",
                 "ALTER TABLE users ADD COLUMN run_enabled INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE users ADD COLUMN wallet_address TEXT NOT NULL DEFAULT ''",
                 "ALTER TABLE users ADD COLUMN wallet_chain TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE users ADD COLUMN profile_updated_at TEXT",
                 "ALTER TABLE factor_pools ADD COLUMN external_key TEXT DEFAULT ''",
                 "ALTER TABLE factor_pools ADD COLUMN direction TEXT DEFAULT 'long'",
                 "ALTER TABLE candidates ADD COLUMN direction TEXT DEFAULT 'long'",
@@ -1349,7 +1436,7 @@ def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
         try:
             row = conn.execute("SELECT * FROM users WHERE username_norm = ? LIMIT 1", (uname_norm,)).fetchone()
             if row:
-                row_dict = dict(row)
+                row_dict = _decorate_user_row(row, default_avatar_url=_default_avatar_url_from_conn(conn))
                 log_sys_event("AUTH_LOGIN_TRACE_4", None, "SQL 查詢成功並找到用戶", {"id": row_dict.get("id")})
                 return row_dict
         except Exception as e:
@@ -1361,7 +1448,7 @@ def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
             row2 = conn.execute("SELECT * FROM users WHERE lower(username) = ? OR username = ? LIMIT 1", (uname_norm, raw.strip())).fetchone()
             if row2:
                 log_sys_event("AUTH_LOGIN_TRACE_6", None, "2階查詢成功", {})
-                return dict(row2)
+                return _decorate_user_row(row2, default_avatar_url=_default_avatar_url_from_conn(conn))
         except Exception:
             conn.rollback()
             
@@ -1370,7 +1457,7 @@ def get_user_by_username(username: str) -> Optional[Dict[str, Any]]:
             for r in rows:
                 if str(r.get("username", "")).lower() == uname_norm or str(r.get("username_norm", "")) == uname_norm:
                     log_sys_event("AUTH_LOGIN_TRACE_7", None, "3階全表掃描成功", {})
-                    return dict(r)
+                    return _decorate_user_row(r, default_avatar_url=_default_avatar_url_from_conn(conn))
         except Exception:
             conn.rollback()
 
@@ -1391,7 +1478,7 @@ def get_user_by_id(user_id: int) -> Optional[Dict[str, Any]]:
             conn = _conn()
             try:
                 row = conn.execute("SELECT * FROM users WHERE id = ? LIMIT 1", (uid,)).fetchone()
-                return dict(row) if row else None
+                return _decorate_user_row(row, default_avatar_url=_default_avatar_url_from_conn(conn)) if row else None
             finally:
                 conn.close()
         except Exception:
@@ -1407,6 +1494,8 @@ def create_user(
     role: str = "user",
     wallet_address: str = "",
     wallet_chain: str = "",
+    nickname: str = "",
+    avatar_url: str = "",
 ) -> int:
     log_sys_event("AUTH_REG_TRACE_1", None, "成功進入 create_user 函數第一行", {"input_username": username})
     try:
@@ -1415,7 +1504,8 @@ def create_user(
         if not uname_norm:
             log_sys_event("AUTH_REG_ERROR", None, "無效的註冊名稱", {})
             raise ValueError("invalid username")
-            
+        safe_nickname = _sanitize_nickname_text(nickname, uname)
+        safe_avatar_url = _sanitize_avatar_url(avatar_url)
         pw_str = password_hash.decode("utf-8") if isinstance(password_hash, bytes) else str(password_hash or "")
     except Exception as e:
         log_sys_event("AUTH_REG_CRASH", None, f"註冊前置變數處理失敗: {e}", {})
@@ -1432,8 +1522,8 @@ def create_user(
     try:
         if getattr(conn, "kind", "sqlite") == "postgres":
             row = conn.execute(
-                "INSERT INTO users (username, username_norm, password_hash, role, disabled, run_enabled, wallet_address, wallet_chain, created_at) VALUES (?, ?, ?, ?, 0, 0, ?, ?, ?) RETURNING id",
-                (uname, uname_norm, pw_str, str(role or "user"), str(wallet_address or ""), str(wallet_chain or ""), _now_iso())
+                "INSERT INTO users (username, username_norm, password_hash, role, nickname, avatar_url, disabled, run_enabled, wallet_address, wallet_chain, created_at, profile_updated_at) VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?) RETURNING id",
+                (uname, uname_norm, pw_str, str(role or "user"), safe_nickname, safe_avatar_url, str(wallet_address or ""), str(wallet_chain or ""), _now_iso(), _now_iso())
             ).fetchone()
             conn.commit()
             new_id = int((row or {}).get("id") or 0)
@@ -1441,8 +1531,8 @@ def create_user(
             return new_id
 
         cur = conn.execute(
-            "INSERT INTO users (username, username_norm, password_hash, role, disabled, run_enabled, wallet_address, wallet_chain, created_at) VALUES (?, ?, ?, ?, 0, 0, ?, ?, ?)",
-            (uname, uname_norm, pw_str, str(role or "user"), str(wallet_address or ""), str(wallet_chain or ""), _now_iso())
+            "INSERT INTO users (username, username_norm, password_hash, role, nickname, avatar_url, disabled, run_enabled, wallet_address, wallet_chain, created_at, profile_updated_at) VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?)",
+            (uname, uname_norm, pw_str, str(role or "user"), safe_nickname, safe_avatar_url, str(wallet_address or ""), str(wallet_chain or ""), _now_iso(), _now_iso())
         )
         conn.commit()
         new_id = int(cur.lastrowid)
@@ -1460,7 +1550,8 @@ def list_users(limit: int = 500) -> List[Dict[str, Any]]:
     conn = _conn()
     try:
         rows = conn.execute("SELECT * FROM users ORDER BY id DESC LIMIT ?", (int(limit),)).fetchall()
-        return [dict(r) for r in rows]
+        default_avatar_url = _default_avatar_url_from_conn(conn)
+        return [_decorate_user_row(r, default_avatar_url=default_avatar_url) for r in rows]
     finally:
         conn.close()
 
@@ -2462,7 +2553,7 @@ def list_strategies(user_id: int = 0, status: str = "", limit: int = 200) -> lis
         try:
             conn = _conn()
             try:
-                query = "SELECT s.*, u.username, p.name as pool_name, p.symbol, p.timeframe_min, p.family FROM strategies s LEFT JOIN users u ON s.user_id = u.id LEFT JOIN factor_pools p ON s.pool_id = p.id WHERE 1=1"
+                query = "SELECT s.*, u.username, u.nickname, u.avatar_url, p.name as pool_name, p.symbol, p.timeframe_min, p.family FROM strategies s LEFT JOIN users u ON s.user_id = u.id LEFT JOIN factor_pools p ON s.pool_id = p.id WHERE 1=1"
                 params = []
                 if user_id > 0:
                     query += " AND s.user_id = ?"
@@ -2503,6 +2594,53 @@ def count_strategies(user_id: int = 0, status: str = "") -> int:
             return int(row["c"] or 0)
         except Exception:
             return int(row[0] or 0)
+    finally:
+        conn.close()
+
+
+def count_submissions(user_id: int = 0, status: str = "") -> int:
+    conn = _conn()
+    try:
+        query = "SELECT COUNT(*) AS c FROM submissions WHERE 1=1"
+        params: List[Any] = []
+        if int(user_id or 0) > 0:
+            query += " AND user_id = ?"
+            params.append(int(user_id))
+        if str(status or "").strip():
+            query += " AND status = ?"
+            params.append(str(status))
+        row = conn.execute(query, params).fetchone()
+        if row is None:
+            return 0
+        try:
+            return int((dict(row) if not isinstance(row, dict) else row).get("c") or 0)
+        except Exception:
+            try:
+                return int(row["c"] or 0)
+            except Exception:
+                return int(row[0] or 0)
+    finally:
+        conn.close()
+
+
+def count_review_ready_tasks(user_id: int = 0) -> int:
+    from sheep_review import normalize_review_fields
+
+    conn = _conn()
+    try:
+        query = "SELECT progress_json, status FROM mining_tasks WHERE status = 'completed'"
+        params: List[Any] = []
+        if int(user_id or 0) > 0:
+            query += " AND user_id = ?"
+            params.append(int(user_id))
+        rows = conn.execute(query, params).fetchall()
+        total = 0
+        for row in rows:
+            entry = dict(row or {})
+            review = normalize_review_fields(entry.get("progress_json"), str(entry.get("status") or ""))
+            if str(review.get("review_status") or "").strip().lower() == "auto_managed":
+                total += 1
+        return int(total)
     finally:
         conn.close()
 
@@ -3962,10 +4100,13 @@ def update_user_nickname(user_id: int, nickname: str) -> None:
     """
     conn = _conn()
     try:
-        raw = str(nickname or "").strip()
-        safe_nick = html.escape(raw[:10])
-        
-        conn.execute("UPDATE users SET nickname = ? WHERE id = ?", (safe_nick, int(user_id)))
+        row = conn.execute("SELECT username FROM users WHERE id = ? LIMIT 1", (int(user_id),)).fetchone()
+        fallback_username = str((dict(row) if row else {}).get("username") or "")
+        safe_nick = _sanitize_nickname_text(nickname, fallback_username)
+        conn.execute(
+            "UPDATE users SET nickname = ?, profile_updated_at = ? WHERE id = ?",
+            (safe_nick, _now_iso(), int(user_id)),
+        )
         conn.commit()
     except Exception as e:
         print(f"[DB ERROR] update_user_nickname: {e}")
@@ -3973,89 +4114,167 @@ def update_user_nickname(user_id: int, nickname: str) -> None:
     finally:
         conn.close()
 
+
+def update_user_profile(user_id: int, *, nickname: Optional[str] = None, avatar_url: Optional[str] = None, clear_avatar: bool = False) -> Dict[str, Any]:
+    conn = _conn()
+    try:
+        row = conn.execute("SELECT * FROM users WHERE id = ? LIMIT 1", (int(user_id),)).fetchone()
+        if not row:
+            raise ValueError("user_not_found")
+        current = dict(row)
+        next_nickname = _sanitize_nickname_text(
+            current.get("nickname") if nickname is None else nickname,
+            current.get("username"),
+        )
+        next_avatar_url = "" if clear_avatar else _sanitize_avatar_url(current.get("avatar_url") if avatar_url is None else avatar_url)
+        conn.execute(
+            "UPDATE users SET nickname = ?, avatar_url = ?, profile_updated_at = ? WHERE id = ?",
+            (next_nickname, next_avatar_url, _now_iso(), int(user_id)),
+        )
+        conn.commit()
+        fresh = conn.execute("SELECT * FROM users WHERE id = ? LIMIT 1", (int(user_id),)).fetchone()
+        return _decorate_user_row(fresh, default_avatar_url=_default_avatar_url_from_conn(conn)) if fresh else {}
+    finally:
+        conn.close()
+
+
+def set_default_avatar_url(avatar_url: str) -> str:
+    safe_avatar = _sanitize_avatar_url(avatar_url)
+    set_setting("default_avatar_data_url", safe_avatar)
+    return safe_avatar
+
+
+def get_default_avatar_url() -> str:
+    return _default_avatar_url_from_conn()
+
+def _leaderboard_python_fallback(conn: Any, cutoff_iso: str, window_end_iso: str) -> Dict[str, List[Dict[str, Any]]]:
+    def _parse_iso(value: Any) -> Optional[datetime]:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    default_avatar_url = _default_avatar_url_from_conn(conn)
+    rows = conn.execute(
+        """
+        SELECT t.id, t.progress_json, t.status, t.created_at,
+               COALESCE(t.last_heartbeat, t.updated_at, t.created_at) as activity_at,
+               u.id as user_id, u.username, u.nickname, u.avatar_url
+        FROM mining_tasks t
+        JOIN users u ON t.user_id = u.id
+        WHERE COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
+          AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <= ?
+          AND t.status IN ('assigned', 'queued', 'running', 'completed')
+        ORDER BY activity_at DESC, t.id DESC
+        LIMIT 200000
+        """,
+        (cutoff_iso, window_end_iso),
+    ).fetchall()
+    combos_map: Dict[int, Dict[str, Any]] = {}
+    time_map: Dict[int, Dict[str, Any]] = {}
+    for row in rows:
+        entry = dict(row or {})
+        user_bits = _decorate_user_row(entry, default_avatar_url=default_avatar_url)
+        try:
+            progress = json.loads(entry.get("progress_json") or "{}")
+        except Exception:
+            progress = {}
+        combos_done = 0.0
+        elapsed_s = 0.0
+        try:
+            combos_done = max(0.0, float(progress.get("combos_done") or progress.get("done") or 0.0))
+        except Exception:
+            combos_done = 0.0
+        if combos_done <= 0:
+            try:
+                combos_done = max(0.0, float(progress.get("combos_total") or progress.get("total") or 0.0))
+            except Exception:
+                combos_done = 0.0
+        try:
+            elapsed_s = max(0.0, float(progress.get("elapsed_s") or progress.get("elapsed") or 0.0))
+        except Exception:
+            elapsed_s = 0.0
+        if elapsed_s <= 0:
+            activity_dt = _parse_iso(entry.get("activity_at"))
+            created_dt = _parse_iso(entry.get("created_at"))
+            if activity_dt is not None and created_dt is not None:
+                try:
+                    elapsed_s = max(
+                        0.0,
+                        float((activity_dt.astimezone(timezone.utc) - created_dt.astimezone(timezone.utc)).total_seconds()),
+                    )
+                except Exception:
+                    elapsed_s = 0.0
+        uid = int(entry.get("user_id") or 0)
+        if uid <= 0:
+            continue
+        if combos_done > 0:
+            rec = combos_map.setdefault(
+                uid,
+                {
+                    "username": user_bits.get("username"),
+                    "nickname": user_bits.get("nickname"),
+                    "avatar_url": user_bits.get("avatar_url"),
+                    "task_count": 0,
+                    "total_done": 0.0,
+                },
+            )
+            rec["task_count"] = int(rec.get("task_count") or 0) + 1
+            rec["total_done"] = float(rec.get("total_done") or 0.0) + float(combos_done)
+        if elapsed_s > 0:
+            rec = time_map.setdefault(
+                uid,
+                {
+                    "username": user_bits.get("username"),
+                    "nickname": user_bits.get("nickname"),
+                    "avatar_url": user_bits.get("avatar_url"),
+                    "total_seconds": 0.0,
+                },
+            )
+            rec["total_seconds"] = float(rec.get("total_seconds") or 0.0) + float(elapsed_s)
+    combos_rows = sorted(combos_map.values(), key=lambda item: (-float(item.get("total_done") or 0.0), str(item.get("username") or "")))[:300]
+    time_rows = sorted(time_map.values(), key=lambda item: (-float(item.get("total_seconds") or 0.0), str(item.get("username") or "")))[:300]
+    return {"combos": combos_rows, "time": time_rows}
+
+
 def get_leaderboard_stats(period_hours: int = 720) -> dict:
     """
-    專家級聚合查詢：一次性撈取 排行榜所需的所有維度數據。
+    專家級聚合查詢：一次性撈取排行榜所需的所有維度數據。
     period_hours: 1 (1h), 24 (24h), 720 (30d)
     """
     conn = _conn()
     try:
-        # 計算時間視窗
         now_dt = datetime.now(timezone.utc)
         cutoff_dt = now_dt - timedelta(hours=period_hours)
         cutoff_iso = cutoff_dt.isoformat()
+        window_end_iso = _now_iso()
+        default_avatar_url = _default_avatar_url_from_conn(conn)
 
         results = {
-            "combos": [],   # 貢獻組合數 (勤勞度)
-            "score": [],    # 最高分 (運氣/實力)
-            "time": [],     # 貢獻時長 (掛機時間)
-            "points": [],   # 積分 (已獲利)
-            "qualified_strategies": [],  # 目前已審核上線策略數
+            "combos": [],
+            "score": [],
+            "time": [],
+            "points": [],
+            "qualified_strategies": [],
         }
 
         db_kind = _db_kind()
-        window_end_iso = _now_iso()
-
-        # 1. 總已跑組合數 (Total Combos Done)
-        # 解析 progress_json 消耗較大，改用 SQL 內的簡單字串擷取或假設應用層已寫入 (這裡使用近似統計以保效能)
-        # 正規做法應在 mining_tasks 增加 done 欄位，這裡使用應用層相容做法：
-        # 統計該時段內 updated_at 的任務，並累加 combos_done
-        # 為了效能，我們只統計 status='completed' 或 'running'
-        # 注意：SQLite JSON 函數需 json1 extension，大部分環境有。若無則退回計數。
-        
         if db_kind == "postgres":
             sql_combos = """
-                SELECT u.username, u.nickname, COUNT(t.id) as task_count,
+                SELECT u.username, u.nickname, u.avatar_url, COUNT(t.id) as task_count,
                        SUM(COALESCE((t.progress_json::jsonb->>'combos_done')::bigint, 0)) as total_done
                 FROM mining_tasks t
                 JOIN users u ON t.user_id = u.id
                 WHERE COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
                   AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <= ?
                   AND t.status IN ('assigned', 'queued', 'running', 'completed')
-                GROUP BY u.id, u.username, u.nickname
+                GROUP BY u.id, u.username, u.nickname, u.avatar_url
                 ORDER BY total_done DESC
                 LIMIT 300
             """
-        else:
-            sql_combos = """
-                SELECT u.username, u.nickname, COUNT(t.id) as task_count, 
-                       SUM(COALESCE(CAST(json_extract(t.progress_json, '$.combos_done') AS INTEGER), 0)) as total_done
-                FROM mining_tasks t
-                JOIN users u ON t.user_id = u.id
-                WHERE COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
-                  AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <= ?
-                  AND t.status IN ('assigned', 'queued', 'running', 'completed')
-                GROUP BY u.id
-                ORDER BY total_done DESC
-                LIMIT 300
-            """
-        
-        try:
-            rows = conn.execute(sql_combos, (cutoff_iso, window_end_iso)).fetchall()
-            # [專家修復] 強制轉型，避免 None 導致比較錯誤
-            results["combos"] = [dict(r) for r in rows if r["total_done"] is not None and int(r["total_done"]) > 0]
-        except Exception as e:
-            print(f"[DB WARN] Leaderboard combos query failed: {e}")
-            results["combos"] = []
-
-        # 2. 最高分 (Highest Score) - 從 candidates 表
-        sql_score = """
-            SELECT u.username, u.nickname, MAX(c.score) as max_score
-            FROM candidates c
-            JOIN users u ON c.user_id = u.id
-            WHERE c.created_at >= ?
-            GROUP BY u.id
-            ORDER BY max_score DESC
-            LIMIT 300
-        """
-        try:
-            rows = conn.execute(sql_score, (cutoff_iso,)).fetchall()
-            results["score"] = [dict(r) for r in rows if r["max_score"] is not None]
-        except Exception:
-            results["score"] = []
-
-        # 3. 總挖礦時長 (Mining Time) - 近似值：SUM(elapsed_s)
-        if db_kind == "postgres":
             sql_time = """
                 WITH task_elapsed AS (
                     SELECT
@@ -4064,17 +4283,30 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
                         GREATEST(COALESCE(NULLIF((t.progress_json::jsonb->>'elapsed_s'), '')::double precision, 0.0), 0.0) as elapsed_s
                     FROM mining_tasks t
                     WHERE COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
+                      AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <= ?
                       AND t.status IN ('assigned', 'queued', 'running', 'completed')
                 )
-                SELECT u.username, u.nickname,
+                SELECT u.username, u.nickname, u.avatar_url,
                        SUM(te.elapsed_s) as total_seconds
                 FROM task_elapsed te
                 JOIN users u ON te.user_id = u.id
-                GROUP BY u.id, u.username, u.nickname
+                GROUP BY u.id, u.username, u.nickname, u.avatar_url
                 ORDER BY total_seconds DESC
                 LIMIT 300
             """
         else:
+            sql_combos = """
+                SELECT u.username, u.nickname, u.avatar_url, COUNT(t.id) as task_count,
+                       SUM(COALESCE(CAST(json_extract(t.progress_json, '$.combos_done') AS INTEGER), 0)) as total_done
+                FROM mining_tasks t
+                JOIN users u ON t.user_id = u.id
+                WHERE COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
+                  AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <= ?
+                  AND t.status IN ('assigned', 'queued', 'running', 'completed')
+                GROUP BY u.id, u.username, u.nickname, u.avatar_url
+                ORDER BY total_done DESC
+                LIMIT 300
+            """
             sql_time = """
                 WITH task_elapsed AS (
                     SELECT
@@ -4083,39 +4315,86 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
                         MAX(COALESCE(CAST(json_extract(t.progress_json, '$.elapsed_s') AS REAL), 0.0)) as elapsed_s
                     FROM mining_tasks t
                     WHERE COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
+                      AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <= ?
                       AND t.status IN ('assigned', 'queued', 'running', 'completed')
                     GROUP BY t.id, t.user_id
                 )
-                SELECT u.username, u.nickname,
+                SELECT u.username, u.nickname, u.avatar_url,
                        SUM(te.elapsed_s) as total_seconds
                 FROM task_elapsed te
                 JOIN users u ON te.user_id = u.id
-                GROUP BY u.id
+                GROUP BY u.id, u.username, u.nickname, u.avatar_url
                 ORDER BY total_seconds DESC
                 LIMIT 300
             """
+
         try:
-            rows = conn.execute(sql_time, (cutoff_iso,)).fetchall()
-            # [專家修復] 強制轉型 check
-            results["time"] = [dict(r) for r in rows if r["total_seconds"] is not None and float(r["total_seconds"]) > 0]
+            rows = conn.execute(sql_combos, (cutoff_iso, window_end_iso)).fetchall()
+            results["combos"] = [
+                _decorate_user_row(dict(r), default_avatar_url=default_avatar_url)
+                for r in rows
+                if r["total_done"] is not None and float(r["total_done"]) > 0
+            ]
+        except Exception as e:
+            print(f"[DB WARN] Leaderboard combos query failed: {e}")
+            results["combos"] = []
+
+        sql_score = """
+            SELECT u.username, u.nickname, u.avatar_url, MAX(c.score) as max_score
+            FROM candidates c
+            JOIN users u ON c.user_id = u.id
+            WHERE c.created_at >= ?
+            GROUP BY u.id, u.username, u.nickname, u.avatar_url
+            ORDER BY max_score DESC
+            LIMIT 300
+        """
+        try:
+            rows = conn.execute(sql_score, (cutoff_iso,)).fetchall()
+            results["score"] = [
+                _decorate_user_row(dict(r), default_avatar_url=default_avatar_url)
+                for r in rows
+                if r["max_score"] is not None
+            ]
+        except Exception:
+            results["score"] = []
+
+        try:
+            rows = conn.execute(sql_time, (cutoff_iso, window_end_iso)).fetchall()
+            results["time"] = [
+                _decorate_user_row(dict(r), default_avatar_url=default_avatar_url)
+                for r in rows
+                if r["total_seconds"] is not None and float(r["total_seconds"]) > 0
+            ]
         except Exception as e:
             print(f"[DB WARN] Leaderboard time query failed: {e}")
             results["time"] = []
 
-        # 4. 積分 (Points/USDT) - 從 payouts 表
-        # 注意：payouts 通常是週結，短週期可能無數據
+        if not results["combos"] or not results["time"]:
+            try:
+                fallback = _leaderboard_python_fallback(conn, cutoff_iso, window_end_iso)
+                if not results["combos"]:
+                    results["combos"] = fallback.get("combos") or []
+                if not results["time"]:
+                    results["time"] = fallback.get("time") or []
+            except Exception as e:
+                print(f"[DB WARN] Leaderboard python fallback failed: {e}")
+
         sql_points = """
-            SELECT u.username, u.nickname, SUM(p.amount_usdt) as total_usdt
+            SELECT u.username, u.nickname, u.avatar_url, SUM(p.amount_usdt) as total_usdt
             FROM payouts p
             JOIN users u ON p.user_id = u.id
             WHERE p.created_at >= ?
-            GROUP BY u.id
+            GROUP BY u.id, u.username, u.nickname, u.avatar_url
             ORDER BY total_usdt DESC
             LIMIT 300
         """
         try:
             rows = conn.execute(sql_points, (cutoff_iso,)).fetchall()
-            results["points"] = [dict(r) for r in rows if r["total_usdt"] is not None and float(r["total_usdt"]) > 0]
+            results["points"] = [
+                _decorate_user_row(dict(r), default_avatar_url=default_avatar_url)
+                for r in rows
+                if r["total_usdt"] is not None and float(r["total_usdt"]) > 0
+            ]
         except Exception as e:
             print(f"[DB WARN] Leaderboard points query failed: {e}")
             results["points"] = []
@@ -4125,20 +4404,20 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
             payout_rate = float(get_setting(conn, "payout_rate", 0.0) or 0.0)
             if capital_usdt > 0.0 and payout_rate > 0.0:
                 sql_points_fallback = """
-                    SELECT u.username, u.nickname,
+                    SELECT u.username, u.nickname, u.avatar_url,
                            SUM((COALESCE(wc.return_pct, 0.0) / 100.0) * (COALESCE(st.allocation_pct, 0.0) / 100.0) * ? * ?) as total_usdt
                     FROM weekly_checks wc
                     JOIN strategies st ON wc.strategy_id = st.id
                     JOIN users u ON st.user_id = u.id
                     WHERE wc.checked_at >= ? AND COALESCE(wc.eligible, 0) = 1
-                    GROUP BY u.id, u.username, u.nickname
+                    GROUP BY u.id, u.username, u.nickname, u.avatar_url
                     ORDER BY total_usdt DESC
                     LIMIT 300
                 """
                 try:
                     rows = conn.execute(sql_points_fallback, (capital_usdt, payout_rate, cutoff_iso)).fetchall()
                     results["points"] = [
-                        dict(r)
+                        _decorate_user_row(dict(r), default_avatar_url=default_avatar_url)
                         for r in rows
                         if r["total_usdt"] is not None and float(r["total_usdt"]) > 0
                     ]
@@ -4146,18 +4425,18 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
                     print(f"[DB WARN] Leaderboard points fallback query failed: {e}")
 
         sql_qualified_strategies = """
-            SELECT u.username, u.nickname, COUNT(st.id) as active_strategy_count
+            SELECT u.username, u.nickname, u.avatar_url, COUNT(st.id) as active_strategy_count
             FROM strategies st
             JOIN users u ON st.user_id = u.id
             WHERE COALESCE(st.status, '') = 'active'
-            GROUP BY u.id, u.username, u.nickname
+            GROUP BY u.id, u.username, u.nickname, u.avatar_url
             ORDER BY active_strategy_count DESC, u.id ASC
             LIMIT 300
         """
         try:
             rows = conn.execute(sql_qualified_strategies).fetchall()
             results["qualified_strategies"] = [
-                dict(r)
+                _decorate_user_row(dict(r), default_avatar_url=default_avatar_url)
                 for r in rows
                 if r["active_strategy_count"] is not None and int(r["active_strategy_count"]) > 0
             ]
@@ -4676,7 +4955,7 @@ def get_admin_active_strategies() -> list:
     try:
         query = """
         SELECT st.id as strategy_id, st.status, st.allocation_pct, st.created_at, st.direction, st.params_json, st.external_key,
-               u.username, u.nickname,
+               u.username, u.nickname, u.avatar_url,
                p.name as pool_name, p.symbol, p.timeframe_min,
                c.metrics_json, c.score,
                 t.progress_json
@@ -4761,7 +5040,7 @@ def get_admin_active_strategies_page(
         rows = conn.execute(
             f"""
             SELECT st.id as strategy_id, st.status, st.allocation_pct, st.created_at, st.direction, st.params_json, st.external_key,
-                   u.id as owner_user_id, u.username, u.nickname,
+                   u.id as owner_user_id, u.username, u.nickname, u.avatar_url,
                    p.name as pool_name, p.symbol, p.timeframe_min,
                    c.metrics_json, c.score,
                    t.progress_json
@@ -4796,6 +5075,51 @@ def get_admin_active_strategies_page(
             "page_size": size,
             "has_next": offset + len(items) < total,
         }
+    finally:
+        conn.close()
+
+
+def list_active_strategy_runtime_rows(limit: int = 20000) -> list:
+    conn = _conn()
+    try:
+        rows = conn.execute(
+            """
+            SELECT st.id as strategy_id, st.status, st.allocation_pct, st.created_at, st.direction, st.params_json, st.external_key,
+                   u.id as owner_user_id, u.username, u.nickname, u.avatar_url,
+                   p.id as pool_id, p.name as pool_name, p.symbol, p.timeframe_min, p.family,
+                   c.metrics_json, c.score
+            FROM strategies st
+            LEFT JOIN users u ON st.user_id = u.id
+            LEFT JOIN factor_pools p ON st.pool_id = p.id
+            LEFT JOIN submissions su ON st.submission_id = su.id
+            LEFT JOIN candidates c ON su.candidate_id = c.id
+            WHERE st.status = 'active'
+            ORDER BY COALESCE(c.score, 0) DESC, st.created_at DESC, st.id DESC
+            LIMIT ?
+            """,
+            (int(limit or 20000),),
+        ).fetchall()
+        default_avatar_url = _default_avatar_url_from_conn(conn)
+        out = []
+        for row in rows:
+            item = _normalize_strategy_row(row)
+            try:
+                item["metrics"] = json.loads(item.get("metrics_json") or "{}")
+            except Exception:
+                item["metrics"] = {}
+            user_bits = _decorate_user_row(
+                {
+                    "username": item.get("username"),
+                    "nickname": item.get("nickname"),
+                    "avatar_url": item.get("avatar_url"),
+                },
+                default_avatar_url=default_avatar_url,
+            )
+            item["nickname"] = user_bits.get("nickname")
+            item["avatar_url"] = user_bits.get("avatar_url")
+            item["display_name"] = user_bits.get("display_name")
+            out.append(item)
+        return out
     finally:
         conn.close()
 

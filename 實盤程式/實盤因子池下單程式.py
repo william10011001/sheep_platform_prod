@@ -407,7 +407,14 @@ class BitmartClient:
                 "positionSide": side,
                 "positionId": f"{sym}:{side}",
                 "positionAmt": amt if side == "LONG" else -amt,
-                "entryPrice": safe_float(p.get("open_avg_price"), 0)
+                "entryPrice": safe_float(p.get("open_avg_price"), 0),
+                "markPrice": safe_float(p.get("mark_price") or p.get("fair_price") or p.get("last_price"), 0),
+                "unrealizedPnl": safe_float(p.get("unrealized_profit") or p.get("unrealized_pnl") or p.get("unrealised_pnl"), 0),
+                "positionValue": safe_float(p.get("position_value") or p.get("hold_value") or p.get("position_margin_value"), 0),
+                "margin": safe_float(p.get("position_margin") or p.get("margin") or p.get("hold_margin"), 0),
+                "marginRatePct": safe_float(p.get("margin_rate") or p.get("margin_ratio") or p.get("risk_rate"), 0) * 100.0,
+                "liquidationPrice": safe_float(p.get("liquidation_price") or p.get("liq_price") or p.get("force_close_price"), 0),
+                "raw": dict(p or {}),
             })
         return {"code": "0", "data": out}
 
@@ -2742,6 +2749,105 @@ class FactorPoolUpdater:
     def _runtime_sync_url(self, factor_pool_url: str) -> str:
         return f"{detect_api_base(factor_pool_url).rstrip('/')}/runtime/portfolio/sync"
 
+    def _collect_runtime_position_items(self):
+        trader = getattr(self.ui, "active_trader", None)
+        if trader is None:
+            return []
+
+        try:
+            raw_positions = list((trader.c.get_positions() or {}).get("data") or [])
+        except Exception as exc:
+            log(f"【網站同步】持倉快照讀取失敗: {exc}")
+            return []
+
+        raw_by_id = {}
+        for row in raw_positions:
+            try:
+                raw_by_id[str(row.get("positionId") or "")] = dict(row or {})
+            except Exception:
+                continue
+
+        try:
+            account_equity = float(trader._safe_get_equity() or 0.0)
+        except Exception:
+            account_equity = 0.0
+
+        items = []
+        for strat_id, pos_data in list(getattr(trader, "positions", {}).items()):
+            cfg = dict((pos_data or {}).get("cfg") or {})
+            position_id = str((pos_data or {}).get("position_id") or "")
+            in_pos = (pos_data or {}).get("in_pos")
+            raw = raw_by_id.get(position_id) or {}
+            if not position_id and raw:
+                position_id = str(raw.get("positionId") or "")
+            if not position_id and not raw:
+                continue
+            if in_pos is None and not raw:
+                continue
+
+            symbol = str(cfg.get("symbol") or raw.get("symbol") or "").replace("-", "").replace("_", "").upper()
+            if not symbol:
+                continue
+            direction = normalize_direction(cfg.get("direction") or raw.get("positionSide"), default="long")
+            entry_price = safe_float(raw.get("entryPrice") or pos_data.get("entry_avg"), 0.0)
+            mark_price = safe_float(raw.get("markPrice"), 0.0)
+            if mark_price <= 0:
+                try:
+                    mark_price = safe_float(trader._safe_get_mark_price(symbol), 0.0)
+                except Exception:
+                    mark_price = 0.0
+            qty = safe_float(pos_data.get("entry_qty"), 0.0)
+            if qty <= 0:
+                qty = abs(safe_float(raw.get("positionAmt"), 0.0))
+                if qty > 0:
+                    try:
+                        contract_size = safe_float(trader.c.get_contract_size(symbol), 0.0)
+                    except Exception:
+                        contract_size = 0.0
+                    if contract_size > 0:
+                        qty *= contract_size
+            position_usdt = safe_float(raw.get("positionValue"), 0.0)
+            if position_usdt <= 0 and qty > 0 and mark_price > 0:
+                position_usdt = abs(qty) * mark_price
+            margin_usdt = safe_float(raw.get("margin"), 0.0)
+            if margin_usdt <= 0 and position_usdt > 0:
+                margin_usdt = position_usdt / 5.0
+            unrealized_pnl_usdt = safe_float(raw.get("unrealizedPnl"), 0.0)
+            if abs(unrealized_pnl_usdt) <= 0 and qty > 0 and entry_price > 0 and mark_price > 0:
+                price_delta = mark_price - entry_price if direction == "long" else entry_price - mark_price
+                unrealized_pnl_usdt = price_delta * abs(qty)
+            liquidation_price = safe_float(raw.get("liquidationPrice"), 0.0)
+            margin_ratio_pct = safe_float(raw.get("marginRatePct"), 0.0)
+            if margin_ratio_pct <= 0 and account_equity > 0 and margin_usdt > 0:
+                margin_ratio_pct = (margin_usdt / account_equity) * 100.0
+            unrealized_pnl_pct = 0.0
+            if margin_usdt > 0:
+                unrealized_pnl_pct = (unrealized_pnl_usdt / margin_usdt) * 100.0
+
+            items.append(
+                {
+                    "position_key": position_id or str(cfg.get("strategy_key") or strat_id),
+                    "position_id": position_id,
+                    "strategy_key": str(cfg.get("strategy_key") or strat_id),
+                    "family": str(cfg.get("family") or ""),
+                    "symbol": symbol,
+                    "direction": direction,
+                    "interval": str(cfg.get("interval") or ""),
+                    "entry_price": entry_price,
+                    "mark_price": mark_price,
+                    "liquidation_price": liquidation_price,
+                    "position_qty": abs(qty),
+                    "position_usdt": position_usdt,
+                    "margin_usdt": margin_usdt,
+                    "margin_ratio_pct": margin_ratio_pct,
+                    "unrealized_pnl_usdt": unrealized_pnl_usdt,
+                    "unrealized_pnl_pct": unrealized_pnl_pct,
+                }
+            )
+
+        items.sort(key=lambda item: (-safe_float(item.get("position_usdt"), 0.0), str(item.get("symbol") or "")))
+        return items
+
     def _runtime_sync_payload(self, scope: str, result, runtime_kwargs: dict) -> dict:
         now_iso = datetime.now(timezone.utc).isoformat()
         items = []
@@ -2756,6 +2862,7 @@ class FactorPoolUpdater:
             "candidate_count": int(result.candidate_count or 0),
             "backtested_count": int(result.backtested_count or 0),
             "report_paths": dict(result.report_paths or {}),
+            "position_items": self._collect_runtime_position_items(),
         }
         return {
             "scope": scope,
@@ -2855,6 +2962,7 @@ class FactorPoolUpdater:
                 "candidate_count": len(items),
                 "backtested_count": len(items),
                 "fallback_reason": reason,
+                "position_items": self._collect_runtime_position_items(),
             },
             "items": items,
         }

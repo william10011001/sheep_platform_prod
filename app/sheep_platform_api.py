@@ -176,6 +176,9 @@ _live_cache: Dict[str, Dict[str, Dict[str, Any]]] = {
     "dashboard": {},
     "leaderboard": {},
 }
+_live_last_nonempty: Dict[str, Dict[str, Dict[str, Any]]] = {
+    "leaderboard": {},
+}
 _http_error_telemetry_cache: Dict[str, float] = {}
 
 
@@ -249,6 +252,16 @@ def _invalidate_live_state(*channels: str) -> None:
         _live_versions["leaderboard"] = now_iso
     if "runtime" in requested:
         _live_versions["runtime"] = now_iso
+
+
+def _leaderboard_has_rows(payload: Dict[str, Any]) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    for key in ("combos", "score", "time", "points", "qualified_strategies"):
+        rows = payload.get(key)
+        if isinstance(rows, list) and rows:
+            return True
+    return False
 
 
 def _should_log_http_error(request: Request, exc: StarletteHTTPException) -> bool:
@@ -433,6 +446,110 @@ def _runtime_snapshot_signatures(snapshot: Dict[str, Any]) -> set[Tuple[str, str
         except Exception:
             continue
     return out
+
+
+def _active_strategy_runtime_lookup(limit: int = 20000) -> Dict[Tuple[str, str, str, str, str], Dict[str, Any]]:
+    lookup: Dict[Tuple[str, str, str, str, str], Dict[str, Any]] = {}
+    for row in db.list_active_strategy_runtime_rows(limit=limit):
+        item = dict(row or {})
+        try:
+            signature = _runtime_match_signature(item)
+        except Exception:
+            continue
+        score = float(item.get("score") or (item.get("metrics") or {}).get("sharpe") or 0.0)
+        current = lookup.get(signature)
+        current_score = float((current or {}).get("score") or ((current or {}).get("metrics") or {}).get("sharpe") or 0.0)
+        if current is None or score >= current_score:
+            lookup[signature] = item
+    return lookup
+
+
+def _as_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+def _enrich_runtime_items(items: List[Dict[str, Any]], *, strategy_lookup: Optional[Dict[Tuple[str, str, str, str, str], Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+    lookup = strategy_lookup or {}
+    enriched: List[Dict[str, Any]] = []
+    for raw in list(items or []):
+        item = dict(raw or {})
+        match = lookup.get(_runtime_match_signature(item), {})
+        metrics = dict(match.get("metrics") or {})
+        item["owner_user_id"] = int(match.get("owner_user_id") or 0)
+        item["owner_username"] = str(match.get("username") or "")
+        item["owner_nickname"] = str(match.get("display_name") or match.get("nickname") or match.get("username") or "")
+        item["owner_avatar_url"] = str(match.get("avatar_url") or "")
+        item["strategy_id"] = int(match.get("strategy_id") or 0)
+        item["external_key"] = str(match.get("external_key") or item.get("strategy_key") or "")
+        item["total_return_pct"] = float(metrics.get("total_return_pct") or 0.0)
+        item["max_drawdown_pct"] = float(metrics.get("max_drawdown_pct") or 0.0)
+        item["score"] = float(match.get("score") or metrics.get("sharpe") or item.get("sharpe") or 0.0)
+        item["display_interval"] = str(item.get("interval") or match.get("timeframe_min") or "")
+        enriched.append(item)
+    return enriched
+
+
+def _find_runtime_strategy_match(
+    item: Dict[str, Any],
+    strategy_lookup: Dict[Tuple[str, str, str, str, str], Dict[str, Any]],
+) -> Dict[str, Any]:
+    strategy_key = str(item.get("strategy_key") or item.get("external_key") or "").strip()
+    if strategy_key:
+        for candidate in strategy_lookup.values():
+            candidate_key = str(candidate.get("external_key") or "").strip()
+            if candidate_key and candidate_key == strategy_key:
+                return candidate
+    try:
+        return strategy_lookup.get(_runtime_match_signature(item), {}) or {}
+    except Exception:
+        return {}
+
+
+def _enrich_runtime_position_items(
+    items: List[Dict[str, Any]],
+    *,
+    strategy_lookup: Optional[Dict[Tuple[str, str, str, str, str], Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
+    lookup = strategy_lookup or {}
+    enriched: List[Dict[str, Any]] = []
+    for raw in list(items or []):
+        item = dict(raw or {})
+        match = _find_runtime_strategy_match(item, lookup)
+        metrics = dict(match.get("metrics") or {})
+        item["position_key"] = str(item.get("position_key") or item.get("position_id") or item.get("strategy_key") or "")
+        item["owner_user_id"] = int(match.get("owner_user_id") or 0)
+        item["owner_username"] = str(match.get("username") or "")
+        item["owner_nickname"] = str(match.get("display_name") or match.get("nickname") or match.get("username") or "")
+        item["owner_avatar_url"] = str(match.get("avatar_url") or "")
+        item["strategy_id"] = int(match.get("strategy_id") or 0)
+        item["external_key"] = str(match.get("external_key") or item.get("strategy_key") or "")
+        item["family"] = str(item.get("family") or match.get("family") or "")
+        item["symbol"] = str(item.get("symbol") or match.get("symbol") or "").upper()
+        item["direction"] = normalize_direction(item.get("direction") or match.get("direction"), default="long")
+        item["interval"] = str(item.get("interval") or match.get("timeframe_min") or "")
+        item["display_interval"] = str(item.get("interval") or match.get("timeframe_min") or "")
+        item["score"] = _as_float(item.get("score") or match.get("score") or metrics.get("sharpe") or 0.0)
+        item["entry_price"] = _as_float(item.get("entry_price") or item.get("entryPrice") or 0.0)
+        item["mark_price"] = _as_float(item.get("mark_price") or item.get("markPrice") or 0.0)
+        item["liquidation_price"] = _as_float(item.get("liquidation_price") or item.get("liq_price") or item.get("liquidationPrice") or item.get("liqPrice") or 0.0)
+        item["position_qty"] = _as_float(item.get("position_qty") or item.get("qty") or item.get("positionAmt") or 0.0)
+        item["position_usdt"] = _as_float(item.get("position_usdt") or item.get("position_value") or item.get("positionValue") or 0.0)
+        item["margin_usdt"] = _as_float(item.get("margin_usdt") or item.get("margin") or item.get("marginValue") or 0.0)
+        item["margin_ratio_pct"] = _as_float(item.get("margin_ratio_pct") or item.get("marginRatePct") or item.get("margin_rate_pct") or 0.0)
+        item["unrealized_pnl_usdt"] = _as_float(item.get("unrealized_pnl_usdt") or item.get("unrealizedPnl") or item.get("unrealized_pnl") or 0.0)
+        item["unrealized_pnl_pct"] = _as_float(item.get("unrealized_pnl_pct") or item.get("unrealizedPnlPct") or item.get("estimated_pnl_pct") or 0.0)
+        enriched.append(item)
+    enriched.sort(
+        key=lambda row: (
+            -abs(_as_float(row.get("position_usdt") or 0.0)),
+            str(row.get("symbol") or ""),
+            str(row.get("direction") or ""),
+        )
+    )
+    return enriched
 
 
 def _get_settings_cached() -> Dict[str, Any]:
@@ -882,10 +999,22 @@ class RuntimeSyncTokenIssueIn(BaseModel):
 class WebRegisterIn(BaseModel):
     username: str
     password: str
+    nickname: str
     tos_ok: bool
+    avatar_url: str = ""
     captcha_token: str = ""
     captcha_offset: float = 0.0
     captcha_tracks: List[Dict[str, Any]] = []
+
+
+class UserProfileUpdateIn(BaseModel):
+    nickname: str
+    avatar_url: str = ""
+    clear_avatar: bool = False
+
+
+class DefaultAvatarUpdateIn(BaseModel):
+    avatar_url: str = ""
 
 class CaptchaOut(BaseModel):
     token: str
@@ -2177,10 +2306,14 @@ def web_register(req: Request, body: WebRegisterIn):
 
         from sheep_platform_security import normalize_username, hash_password
         uname = normalize_username(body.username)
+        nickname = str(body.nickname or "").strip()
         
         if not uname or len(uname) > 64:
             db.log_sys_event("REGISTER_FAIL", None, "帳號無效或過長", {"username": body.username, "ip": ip})
             raise HTTPException(status_code=400, detail="invalid_username")
+        if not nickname:
+            db.log_sys_event("REGISTER_FAIL", None, "暱稱未填寫", {"username": body.username, "ip": ip})
+            raise HTTPException(status_code=400, detail="nickname_required")
         if not body.tos_ok:
             db.log_sys_event("REGISTER_FAIL", None, "未同意服務條款", {"username": body.username, "ip": ip})
             raise HTTPException(status_code=400, detail="must_accept_tos")
@@ -2195,7 +2328,15 @@ def web_register(req: Request, body: WebRegisterIn):
         try:
             pw_hashed = hash_password(body.password)
             pw_hash_str = pw_hashed.decode('utf-8') if isinstance(pw_hashed, bytes) else str(pw_hashed)
-            uid = db.create_user(username=uname, password_hash=pw_hash_str, role="user", wallet_address="", wallet_chain="TRC20")
+            uid = db.create_user(
+                username=uname,
+                password_hash=pw_hash_str,
+                role="user",
+                wallet_address="",
+                wallet_chain="TRC20",
+                nickname=nickname,
+                avatar_url=str(body.avatar_url or ""),
+            )
             
             try:
                 cycle = db.get_active_cycle()
@@ -2233,6 +2374,9 @@ def web_get_me(request: Request, authorization: Optional[str] = Header(None)):
     return {
         "id": fresh_user["id"],
         "username": fresh_user["username"],
+        "nickname": fresh_user.get("nickname") or fresh_user.get("username") or "",
+        "display_name": fresh_user.get("display_name") or fresh_user.get("nickname") or fresh_user.get("username") or "",
+        "avatar_url": fresh_user.get("avatar_url") or db.get_default_avatar_url(),
         "role": fresh_user.get("role", "user"),
         "wallet_address": fresh_user.get("wallet_address", ""),
         "wallet_chain": fresh_user.get("wallet_chain", "TRC20"),
@@ -2242,15 +2386,76 @@ def web_get_me(request: Request, authorization: Optional[str] = Header(None)):
         "token_name": str((ctx.get("token") or {}).get("name") or ""),
     }
 
+
+@app.post("/user/profile")
+@app.patch("/user/profile")
+def web_update_profile(request: Request, body: UserProfileUpdateIn, authorization: Optional[str] = Header(None)):
+    ctx = _auth_ctx(request, authorization)
+    uid = int(ctx["user"]["id"])
+    try:
+        user = db.update_user_profile(
+            uid,
+            nickname=str(body.nickname or ""),
+            avatar_url=str(body.avatar_url or ""),
+            clear_avatar=bool(body.clear_avatar),
+        )
+        db.write_audit_log(uid, "update_profile", {"clear_avatar": bool(body.clear_avatar)})
+        return {"ok": True, "user": user}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/admin/default-avatar")
+def admin_get_default_avatar(request: Request, authorization: Optional[str] = Header(None)):
+    ctx = _auth_ctx(request, authorization)
+    if not _is_admin_ctx(ctx):
+        raise HTTPException(status_code=403, detail="admin_required")
+    return {"ok": True, "avatar_url": db.get_default_avatar_url()}
+
+
+@app.post("/admin/default-avatar")
+def admin_set_default_avatar(request: Request, body: DefaultAvatarUpdateIn, authorization: Optional[str] = Header(None)):
+    ctx = _auth_ctx(request, authorization)
+    if not _is_admin_ctx(ctx):
+        raise HTTPException(status_code=403, detail="admin_required")
+    avatar_url = db.set_default_avatar_url(str(body.avatar_url or ""))
+    db.write_audit_log(int(ctx["user"]["id"]), "set_default_avatar", {"has_avatar": bool(avatar_url)})
+    return {"ok": True, "avatar_url": db.get_default_avatar_url()}
+
 @app.get("/leaderboard")
 def web_leaderboard(period_hours: int = 9999999):
     try:
+        cache_key = _live_cache_key("period_hours", int(period_hours or 0))
+
+        def _load_leaderboard() -> Dict[str, Any]:
+            stats = dict(db.get_leaderboard_stats(period_hours) or {})
+            preserved = dict((_live_last_nonempty.get("leaderboard") or {}).get(cache_key) or {})
+            if preserved:
+                preserved_any = False
+                for key in ("combos", "score", "time", "points", "qualified_strategies"):
+                    if not isinstance(stats.get(key), list) or stats.get(key):
+                        continue
+                    fallback_rows = preserved.get(key)
+                    if isinstance(fallback_rows, list) and fallback_rows:
+                        stats[key] = list(fallback_rows)
+                        preserved_any = True
+                if preserved_any:
+                    stats["_preserved_last_nonempty"] = True
+            if _leaderboard_has_rows(stats):
+                clean_stats = {k: v for k, v in stats.items() if not str(k).startswith("_")}
+                _live_last_nonempty.setdefault("leaderboard", {})[cache_key] = dict(clean_stats)
+                return stats
+            if preserved:
+                preserved["_preserved_last_nonempty"] = True
+                return preserved
+            return stats
+
         stats = _cached_live_payload(
             "leaderboard",
-            _live_cache_key("period_hours", int(period_hours or 0)),
-            lambda: db.get_leaderboard_stats(period_hours),
+            cache_key,
+            _load_leaderboard,
         )
-        return {"ok": True, "data": stats, "leaderboard_version": _live_versions["leaderboard"]}
+        return {"ok": True, "data": stats, "leaderboard_version": _live_versions["leaderboard"], "generated_at": _utc_iso()}
     except Exception as e:
         logger.error(f"Leaderboard error: {e}")
         raise HTTPException(status_code=500, detail="fetch_leaderboard_failed")
@@ -2273,39 +2478,57 @@ def web_dashboard(request: Request, authorization: Optional[str] = Header(None))
             conn.close()
 
         completed_tasks = [t for t in all_tasks if str(t.get("status") or "") == "completed"]
-        personal_live_strategies_active = int(db.count_strategies(user_id=uid, status="active"))
-        global_strategies_active = int(db.count_strategies(status="active"))
+        personal_active_strategy_count = int(db.count_strategies(user_id=uid, status="active"))
+        personal_reviewed_strategy_count = int(db.count_review_ready_tasks(user_id=uid))
+        global_reviewed_strategy_count = int(db.count_review_ready_tasks())
         personal_review_pipeline_count = count_review_pipeline_tasks(tasks)
         personal_runtime_snapshot = db.get_runtime_portfolio_snapshot("personal", user_id=uid) or {}
         global_runtime_snapshot = db.get_runtime_portfolio_snapshot("global") or {}
         personal_runtime_items = list(personal_runtime_snapshot.get("items") or [])
         global_runtime_items = list(global_runtime_snapshot.get("items") or [])
+        runtime_position_items_raw = list((global_runtime_snapshot.get("summary") or {}).get("position_items") or [])
+        runtime_lookup = _active_strategy_runtime_lookup(limit=25000) if (global_runtime_items or runtime_position_items_raw) else {}
+        enriched_global_runtime_items = _enrich_runtime_items(global_runtime_items, strategy_lookup=runtime_lookup)
+        runtime_position_items = _enrich_runtime_position_items(
+            runtime_position_items_raw,
+            strategy_lookup=runtime_lookup,
+        )
+        personal_live_strategy_items = [item for item in enriched_global_runtime_items if int(item.get("owner_user_id") or 0) == uid]
         personal_runtime_updated_at = str(personal_runtime_snapshot.get("updated_at") or "")
         global_runtime_updated_at = str(global_runtime_snapshot.get("updated_at") or "")
         personal_runtime_status = _runtime_snapshot_status(personal_runtime_snapshot)
         global_runtime_status = _runtime_snapshot_status(global_runtime_snapshot)
+        global_live_strategy_count = int(global_runtime_snapshot.get("strategy_count") or len(global_runtime_items))
+        personal_live_strategy_count = len(personal_live_strategy_items)
 
         return {
             "ok": True,
             "cycle_id": cycle_id,
             "tasks_count": len(completed_tasks),
-            "strategies_active": personal_live_strategies_active,
-            "personal_live_strategies_active": personal_live_strategies_active,
-            "personal_live_strategies_reviewed_label": "個人審核上線策略",
+            "strategies_active": personal_active_strategy_count,
+            "personal_live_strategies_active": personal_active_strategy_count,
+            "personal_live_strategies_reviewed_label": "個人過審策略",
+            "personal_reviewed_strategy_count": personal_reviewed_strategy_count,
+            "personal_live_strategy_count": personal_live_strategy_count,
+            "personal_live_strategy_items": personal_live_strategy_items[:20],
+            "personal_active_strategy_count": personal_active_strategy_count,
             "personal_review_pipeline_count": int(personal_review_pipeline_count),
-            "personal_review_pipeline_hint": "已達標並由系統持續追蹤的任務數量",
-            "global_strategies_active": global_strategies_active,
-            "global_live_strategies_reviewed_label": "全網審核上線策略",
+            "personal_review_pipeline_hint": "已達標並由系統持續追蹤的任務會優先顯示；未達標或異常結果可在歷史紀錄查看。",
+            "global_strategies_active": global_reviewed_strategy_count,
+            "global_live_strategies_reviewed_label": "全域過審策略",
+            "global_reviewed_strategy_count": global_reviewed_strategy_count,
+            "global_live_strategy_count": global_live_strategy_count,
             "personal_runtime_portfolio_count": int(personal_runtime_snapshot.get("strategy_count") or len(personal_runtime_items)),
             "personal_runtime_portfolio_updated_at": personal_runtime_updated_at,
             "personal_runtime_portfolio_items": personal_runtime_items,
             "personal_runtime_portfolio_stale": bool(personal_runtime_status.get("stale")),
             "personal_runtime_portfolio_age_seconds": personal_runtime_status.get("age_seconds"),
-            "global_runtime_portfolio_count": int(global_runtime_snapshot.get("strategy_count") or len(global_runtime_items)),
+            "global_runtime_portfolio_count": global_live_strategy_count,
             "global_runtime_portfolio_updated_at": global_runtime_updated_at,
-            "global_runtime_portfolio_items": global_runtime_items[:20],
+            "global_runtime_portfolio_items": enriched_global_runtime_items[:20],
             "global_runtime_portfolio_stale": bool(global_runtime_status.get("stale")),
             "global_runtime_portfolio_age_seconds": global_runtime_status.get("age_seconds"),
+            "runtime_position_items": runtime_position_items[:50],
             "runtime_sync": {
                 "personal": {**personal_runtime_status, **_runtime_sync_event_detail("personal", uid)},
                 "global": {**global_runtime_status, **_runtime_sync_event_detail("global")},
@@ -3026,6 +3249,30 @@ def get_task(task_id: int, request: Request, authorization: Optional[str] = Head
     if not task:
         raise HTTPException(status_code=404, detail="not_found")
     return enrich_task_row(dict(task))
+
+
+@app.post("/tasks/oos/claim")
+def legacy_oos_claim(request: Request, authorization: Optional[str] = Header(None)):
+    ctx = _auth_ctx(request, authorization)
+    db.log_sys_event(
+        "LEGACY_OOS_CLAIM",
+        int((ctx.get("user") or {}).get("id") or 0) or None,
+        "Legacy OOS claim endpoint hit; returning empty task for compatibility",
+        {"ip": _client_ip(request)},
+    )
+    return {"ok": True, "deprecated": True, "task": None}
+
+
+@app.post("/tasks/oos/{task_id}/finish")
+def legacy_oos_finish(task_id: int, request: Request, authorization: Optional[str] = Header(None)):
+    ctx = _auth_ctx(request, authorization)
+    db.log_sys_event(
+        "LEGACY_OOS_FINISH",
+        int((ctx.get("user") or {}).get("id") or 0) or None,
+        f"Legacy OOS finish endpoint hit for task {task_id}",
+        {"task_id": int(task_id), "ip": _client_ip(request)},
+    )
+    return {"ok": True, "deprecated": True, "task_id": int(task_id)}
 
 from fastapi.responses import JSONResponse
 
