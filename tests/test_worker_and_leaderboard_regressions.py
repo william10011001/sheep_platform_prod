@@ -594,3 +594,95 @@ def test_leaderboard_points_fallback_uses_all_time_weekly_checks(monkeypatch, tm
 
     assert stats["points"], stats
     assert round(float(stats["points"][0]["total_usdt"]), 4) == 250.0
+
+
+def test_leaderboard_task_fallback_scans_multiple_pages(monkeypatch, tmp_path):
+    db_path = tmp_path / "leaderboard-multipage-regression.sqlite3"
+    monkeypatch.setenv("SHEEP_DB_URL", "")
+    monkeypatch.setenv("SHEEP_DB_PATH", str(db_path))
+    monkeypatch.setenv("SHEEP_LEADERBOARD_TASK_SCAN_LIMIT", "500")
+    monkeypatch.setenv("SHEEP_LEADERBOARD_TASK_SCAN_MAX_ROWS", "2000")
+    _reset_db_module()
+    import sheep_platform_db as db
+
+    db.init_db()
+    db.ensure_cycle_rollover()
+    cycle = db.get_active_cycle()
+    user_a = db.get_user_by_username("sheep")
+    if user_a is None:
+        db.create_user("sheep", "test-hash", role="user")
+        user_a = db.get_user_by_username("sheep")
+    user_b = db.get_user_by_username("beta")
+    if user_b is None:
+        db.create_user("beta", "test-hash", role="user", nickname="Beta Miner")
+        user_b = db.get_user_by_username("beta")
+    assert cycle is not None and user_a is not None and user_b is not None
+
+    pool_id = db.create_factor_pool(
+        cycle_id=int(cycle["id"]),
+        name="Leaderboard MultiPage Pool",
+        symbol="BTC_USDT",
+        timeframe_min=60,
+        years=2,
+        family="trend",
+        grid_spec={"alpha": [1, 2]},
+        risk_spec={"max_leverage": 2},
+        num_partitions=4,
+        seed=17,
+        active=True,
+    )[0]
+
+    now = db._now_iso()
+    conn = db._conn()
+    try:
+        for _ in range(505):
+            conn.execute(
+                """
+                INSERT INTO mining_tasks (
+                    user_id, pool_id, cycle_id, partition_idx, num_partitions,
+                    status, progress_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(user_a["id"]),
+                    int(pool_id),
+                    int(cycle["id"]),
+                    0,
+                    4,
+                    "completed",
+                    json.dumps({"combos_done": 10, "elapsed_s": 60}),
+                    now,
+                    now,
+                ),
+            )
+        conn.execute(
+            """
+            INSERT INTO mining_tasks (
+                user_id, pool_id, cycle_id, partition_idx, num_partitions,
+                status, progress_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(user_b["id"]),
+                int(pool_id),
+                int(cycle["id"]),
+                1,
+                4,
+                "completed",
+                json.dumps({"combos_done": 77, "elapsed_s": 3600}),
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    stats = db.get_leaderboard_stats(period_hours=720)
+
+    combos_users = {str(item.get("username") or "") for item in stats["combos"]}
+    time_users = {str(item.get("username") or "") for item in stats["time"]}
+    assert "sheep" in combos_users
+    assert "beta" in combos_users
+    assert "sheep" in time_users
+    assert "beta" in time_users

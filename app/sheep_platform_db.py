@@ -4492,6 +4492,14 @@ def _leaderboard_task_scan_limit() -> int:
     return max(500, min(20000, value))
 
 
+def _leaderboard_task_scan_max_rows() -> int:
+    try:
+        value = int(os.environ.get("SHEEP_LEADERBOARD_TASK_SCAN_MAX_ROWS", "80000") or "80000")
+    except Exception:
+        value = 80000
+    return max(_leaderboard_task_scan_limit(), min(200000, value))
+
+
 def _leaderboard_python_fallback(conn: Any, cutoff_iso: str, window_end_iso: str) -> Dict[str, List[Dict[str, Any]]]:
     def _parse_iso(value: Any) -> Optional[datetime]:
         text = str(value or "").strip()
@@ -4505,79 +4513,111 @@ def _leaderboard_python_fallback(conn: Any, cutoff_iso: str, window_end_iso: str
     default_avatar_url = _default_avatar_url_from_conn(conn)
     cutoff_dt = _parse_iso(cutoff_iso)
     window_end_dt = _parse_iso(window_end_iso)
-    query = """
-        SELECT recent.id, recent.progress_json, recent.created_at, recent.activity_at,
-               u.id as user_id, u.username, u.nickname, u.avatar_url
-        FROM (
-            SELECT t.id, t.user_id, t.progress_json, t.created_at,
-                   COALESCE(t.last_heartbeat, t.updated_at, t.created_at) as activity_at
-            FROM mining_tasks t
-            WHERE t.status IN ('running', 'completed')
-            ORDER BY t.id DESC
-            LIMIT ?
-        ) recent
-        JOIN users u ON recent.user_id = u.id
-        ORDER BY recent.id DESC
-    """
-    rows = conn.execute(query, (int(_leaderboard_task_scan_limit()),)).fetchall()
     combos_map: Dict[int, Dict[str, Any]] = {}
     time_map: Dict[int, Dict[str, Any]] = {}
-    for row in rows:
-        entry = dict(row or {})
-        user_bits = _decorate_user_row(entry, default_avatar_url=default_avatar_url)
-        progress = parse_json_object(entry.get("progress_json"))
-        activity_dt = _parse_iso(entry.get("activity_at")) or _parse_iso(entry.get("created_at"))
-        if activity_dt is None:
-            continue
-        if cutoff_dt is not None and activity_dt.astimezone(timezone.utc) < cutoff_dt.astimezone(timezone.utc):
-            continue
-        if window_end_dt is not None and activity_dt.astimezone(timezone.utc) > window_end_dt.astimezone(timezone.utc):
-            continue
-        try:
-            combos_done = max(0.0, float(progress.get("combos_done") or progress.get("done") or progress.get("combos_total") or progress.get("total") or 0.0))
-        except Exception:
-            combos_done = 0.0
-        try:
-            elapsed_s = max(0.0, float(progress.get("elapsed_s") or progress.get("elapsed") or 0.0))
-        except Exception:
-            elapsed_s = 0.0
-        if elapsed_s <= 0:
-            created_dt = _parse_iso(entry.get("created_at"))
-            if activity_dt is not None and created_dt is not None:
-                try:
-                    elapsed_s = max(
-                        0.0,
-                        float((activity_dt.astimezone(timezone.utc) - created_dt.astimezone(timezone.utc)).total_seconds()),
-                    )
-                except Exception:
-                    elapsed_s = 0.0
-        uid = int(entry.get("user_id") or 0)
-        if uid <= 0:
-            continue
-        if combos_done > 0:
-            rec = combos_map.setdefault(
-                uid,
-                {
-                    "username": user_bits.get("username"),
-                    "nickname": user_bits.get("nickname"),
-                    "avatar_url": user_bits.get("avatar_url"),
-                    "task_count": 0,
-                    "total_done": 0.0,
-                },
-            )
-            rec["task_count"] = int(rec.get("task_count") or 0) + 1
-            rec["total_done"] = float(rec.get("total_done") or 0.0) + float(combos_done)
-        if elapsed_s > 0:
-            rec = time_map.setdefault(
-                uid,
-                {
-                    "username": user_bits.get("username"),
-                    "nickname": user_bits.get("nickname"),
-                    "avatar_url": user_bits.get("avatar_url"),
-                    "total_seconds": 0.0,
-                },
-            )
-            rec["total_seconds"] = float(rec.get("total_seconds") or 0.0) + float(elapsed_s)
+    page_size = int(_leaderboard_task_scan_limit())
+    max_rows = int(_leaderboard_task_scan_max_rows())
+    scanned_rows = 0
+    before_id = 0
+
+    while scanned_rows < max_rows:
+        if before_id > 0:
+            query = """
+                SELECT recent.id, recent.progress_json, recent.created_at, recent.activity_at,
+                       u.id as user_id, u.username, u.nickname, u.avatar_url
+                FROM (
+                    SELECT t.id, t.user_id, t.progress_json, t.created_at,
+                           COALESCE(t.last_heartbeat, t.updated_at, t.created_at) as activity_at
+                    FROM mining_tasks t
+                    WHERE t.status IN ('running', 'completed') AND t.id < ?
+                    ORDER BY t.id DESC
+                    LIMIT ?
+                ) recent
+                JOIN users u ON recent.user_id = u.id
+                ORDER BY recent.id DESC
+            """
+            rows = conn.execute(query, (before_id, page_size)).fetchall()
+        else:
+            query = """
+                SELECT recent.id, recent.progress_json, recent.created_at, recent.activity_at,
+                       u.id as user_id, u.username, u.nickname, u.avatar_url
+                FROM (
+                    SELECT t.id, t.user_id, t.progress_json, t.created_at,
+                           COALESCE(t.last_heartbeat, t.updated_at, t.created_at) as activity_at
+                    FROM mining_tasks t
+                    WHERE t.status IN ('running', 'completed')
+                    ORDER BY t.id DESC
+                    LIMIT ?
+                ) recent
+                JOIN users u ON recent.user_id = u.id
+                ORDER BY recent.id DESC
+            """
+            rows = conn.execute(query, (page_size,)).fetchall()
+        if not rows:
+            break
+
+        scanned_rows += len(rows)
+        before_id = int(rows[-1]["id"] or 0)
+
+        for row in rows:
+            entry = dict(row or {})
+            user_bits = _decorate_user_row(entry, default_avatar_url=default_avatar_url)
+            progress = parse_json_object(entry.get("progress_json"))
+            activity_dt = _parse_iso(entry.get("activity_at")) or _parse_iso(entry.get("created_at"))
+            if activity_dt is None:
+                continue
+            if cutoff_dt is not None and activity_dt.astimezone(timezone.utc) < cutoff_dt.astimezone(timezone.utc):
+                continue
+            if window_end_dt is not None and activity_dt.astimezone(timezone.utc) > window_end_dt.astimezone(timezone.utc):
+                continue
+            try:
+                combos_done = max(0.0, float(progress.get("combos_done") or progress.get("done") or progress.get("combos_total") or progress.get("total") or 0.0))
+            except Exception:
+                combos_done = 0.0
+            try:
+                elapsed_s = max(0.0, float(progress.get("elapsed_s") or progress.get("elapsed") or 0.0))
+            except Exception:
+                elapsed_s = 0.0
+            if elapsed_s <= 0:
+                created_dt = _parse_iso(entry.get("created_at"))
+                if activity_dt is not None and created_dt is not None:
+                    try:
+                        elapsed_s = max(
+                            0.0,
+                            float((activity_dt.astimezone(timezone.utc) - created_dt.astimezone(timezone.utc)).total_seconds()),
+                        )
+                    except Exception:
+                        elapsed_s = 0.0
+            uid = int(entry.get("user_id") or 0)
+            if uid <= 0:
+                continue
+            if combos_done > 0:
+                rec = combos_map.setdefault(
+                    uid,
+                    {
+                        "username": user_bits.get("username"),
+                        "nickname": user_bits.get("nickname"),
+                        "avatar_url": user_bits.get("avatar_url"),
+                        "task_count": 0,
+                        "total_done": 0.0,
+                    },
+                )
+                rec["task_count"] = int(rec.get("task_count") or 0) + 1
+                rec["total_done"] = float(rec.get("total_done") or 0.0) + float(combos_done)
+            if elapsed_s > 0:
+                rec = time_map.setdefault(
+                    uid,
+                    {
+                        "username": user_bits.get("username"),
+                        "nickname": user_bits.get("nickname"),
+                        "avatar_url": user_bits.get("avatar_url"),
+                        "total_seconds": 0.0,
+                    },
+                )
+                rec["total_seconds"] = float(rec.get("total_seconds") or 0.0) + float(elapsed_s)
+
+        if len(rows) < page_size or before_id <= 0:
+            break
     combos_rows = sorted(combos_map.values(), key=lambda item: (-float(item.get("total_done") or 0.0), str(item.get("username") or "")))[:300]
     time_rows = sorted(time_map.values(), key=lambda item: (-float(item.get("total_seconds") or 0.0), str(item.get("username") or "")))[:300]
     return {"combos": combos_rows, "time": time_rows}
