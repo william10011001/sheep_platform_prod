@@ -1945,6 +1945,41 @@ def landing() -> HTMLResponse:
                             <i class="fas fa-plus mr-1"></i>新增策略池
                         </button>
                     </div>
+                    <div class="mb-4 rounded-lg border border-gray-700 bg-gray-800/60 p-4">
+                        <div class="flex flex-col gap-3">
+                            <div class="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                                <div>
+                                    <h3 class="text-base font-bold text-white">Batch JSON Import</h3>
+                                    <p class="text-xs text-gray-400">Paste catalog JSON or load a local file, then run dry-run before applying.</p>
+                                </div>
+                                <div class="flex flex-wrap gap-2">
+                                    <label class="cursor-pointer rounded border border-gray-600 bg-gray-700 px-3 py-2 text-sm text-gray-100 hover:bg-gray-600">
+                                        <input type="file" accept=".json,application/json" class="hidden" @change="loadCatalogFile">
+                                        Load JSON File
+                                    </label>
+                                    <button @click="runCatalogImport(true)" class="rounded bg-amber-600 px-3 py-2 text-sm font-bold text-white hover:bg-amber-700" :disabled="loading || catalogImporting">
+                                        <i class="fas fa-vial mr-1"></i>Dry Run
+                                    </button>
+                                    <button @click="runCatalogImport(false)" class="rounded bg-emerald-600 px-3 py-2 text-sm font-bold text-white hover:bg-emerald-700" :disabled="loading || catalogImporting">
+                                        <i class="fas fa-file-import mr-1"></i>Apply Import
+                                    </button>
+                                </div>
+                            </div>
+                            <textarea
+                                v-model="catalogJson"
+                                rows="10"
+                                class="w-full rounded input-bg p-3 font-mono text-xs leading-relaxed"
+                                placeholder='{{"schema_version":1,"factor_pools":[],"strategies":[]}}'
+                            ></textarea>
+                            <div v-if="catalogImporting" class="text-sm text-blue-300">
+                                <i class="fas fa-spinner fa-spin mr-1"></i>Importing catalog...
+                            </div>
+                            <div v-if="catalogReportText" class="rounded border border-gray-700 bg-gray-900/70 p-3">
+                                <div class="mb-2 text-sm font-semibold text-gray-200">Import Report</div>
+                                <pre class="max-h-72 overflow-auto whitespace-pre-wrap text-xs text-gray-300">{{{{ catalogReportText }}}}</pre>
+                            </div>
+                        </div>
+                    </div>
                     <div class="overflow-x-auto rounded-lg border border-gray-700">
                         <table class="w-full text-sm text-left">
                             <thead class="text-xs uppercase bg-gray-800 text-gray-300 border-b border-gray-700">
@@ -1994,12 +2029,23 @@ def landing() -> HTMLResponse:
                             <input v-model="editingPool.name" type="text" class="w-full p-2 rounded input-bg" required>
                         </div>
                         <div class="mb-2">
+                            <label class="block text-sm font-medium mb-1 text-gray-300">External Key</label>
+                            <input v-model="editingPool.external_key" type="text" class="w-full p-2 rounded input-bg font-mono text-sm">
+                        </div>
+                        <div class="mb-2">
                             <label class="block text-sm font-medium mb-1 text-gray-300">策略家族 (Family)</label>
                             <input v-model="editingPool.family" type="text" class="w-full p-2 rounded input-bg" required>
                         </div>
                         <div class="mb-2">
                             <label class="block text-sm font-medium mb-1 text-gray-300">交易對 (Symbol)</label>
                             <input v-model="editingPool.symbol" type="text" class="w-full p-2 rounded input-bg" required>
+                        </div>
+                        <div class="mb-2">
+                            <label class="block text-sm font-medium mb-1 text-gray-300">Direction</label>
+                            <select v-model="editingPool.direction" class="w-full rounded input-bg p-2">
+                                <option value="long">long</option>
+                                <option value="short">short</option>
+                            </select>
                         </div>
                         <div class="mb-2">
                             <label class="block text-sm font-medium mb-1 text-gray-300">週期 分鐘 (Timeframe)</label>
@@ -2069,6 +2115,29 @@ def landing() -> HTMLResponse:
                 const factorPools = ref([]);
                 const showPoolModal = ref(false);
                 const editingPool = ref({{}});
+                const catalogJson = ref('');
+                const catalogImporting = ref(false);
+                const catalogReport = ref(null);
+                const catalogReportText = ref('');
+
+                const blankPool = () => ({{
+                    id: 0,
+                    name: '',
+                    external_key: '',
+                    symbol: 'BTC_USDT',
+                    direction: 'long',
+                    timeframe_min: 60,
+                    years: 3,
+                    family: 'TEMA_Cross',
+                    num_partitions: 8,
+                    seed: 42,
+                    active: true,
+                    auto_expand: false,
+                    grid_spec: {{}},
+                    risk_spec: {{}},
+                    grid_spec_str: '{{}}',
+                    risk_spec_str: '{{}}',
+                }});
 
                 const req = async (url, options = {{}}) => {{
                     if(!options.headers) options.headers = {{}};
@@ -2111,6 +2180,10 @@ def landing() -> HTMLResponse:
                     username.value = '';
                     password.value = '';
                     strategies.value = [];
+                    factorPools.value = [];
+                    catalogJson.value = '';
+                    catalogReport.value = null;
+                    catalogReportText.value = '';
                     message.value = '已安全登出。';
                 }};
 
@@ -2118,26 +2191,131 @@ def landing() -> HTMLResponse:
                     loading.value = true;
                     error.value = '';
                     try {{
-                        // [專家優化] 拆分請求，避免單一請求失敗導致整個面板掛起
-                        try {{
-                            const sData = await req('/settings/snapshot');
-                            if(sData && sData.thresholds) settings.value = sData.thresholds;
-                        }} catch (se) {{ console.error("Snapshot fail:", se); }}
-
-                        const stData = await req('/admin/strategies');
+                        const [sData, stData, poolData] = await Promise.all([
+                            req('/settings/snapshot').catch((se) => {{
+                                console.error('Snapshot fail:', se);
+                                return null;
+                            }}),
+                            req('/admin/strategies'),
+                            req('/admin/factor_pools'),
+                        ]);
+                        if (sData && sData.thresholds) settings.value = sData.thresholds;
                         if (stData && stData.ok) {{
                             strategies.value = stData.strategies || [];
                             if (strategies.value.length === 0) {{
-                                console.warn("API returned empty strategy list");
+                                console.warn('API returned empty strategy list');
                             }}
                         }} else {{
                             throw new Error(stData.msg || '策略池同步失敗');
                         }}
+                        if (poolData && poolData.ok) {{
+                            factorPools.value = poolData.pools || [];
+                        }} else {{
+                            throw new Error((poolData && poolData.msg) || '動態策略池載入失敗');
+                        }}
                     }} catch (e) {{
                         error.value = '管理員資料載入失敗: ' + e.message;
-                        console.error("FetchData Error:", e);
+                        console.error('FetchData Error:', e);
                     }} finally {{
                         loading.value = false;
+                    }}
+                }};
+
+                const openPoolModal = (pool) => {{
+                    const base = pool ? JSON.parse(JSON.stringify(pool)) : blankPool();
+                    base.external_key = base.external_key || '';
+                    base.direction = String(base.direction || 'long').toLowerCase();
+                    base.grid_spec = base.grid_spec || {{}};
+                    base.risk_spec = base.risk_spec || {{}};
+                    base.grid_spec_str = JSON.stringify(base.grid_spec, null, 2);
+                    base.risk_spec_str = JSON.stringify(base.risk_spec, null, 2);
+                    editingPool.value = base;
+                    showPoolModal.value = true;
+                    error.value = '';
+                }};
+
+                const savePool = async () => {{
+                    loading.value = true;
+                    error.value = '';
+                    message.value = '';
+                    try {{
+                        const payload = {{
+                            name: String(editingPool.value.name || '').trim(),
+                            external_key: String(editingPool.value.external_key || '').trim(),
+                            symbol: String(editingPool.value.symbol || '').trim().toUpperCase(),
+                            direction: String(editingPool.value.direction || 'long').trim().toLowerCase(),
+                            timeframe_min: Number(editingPool.value.timeframe_min || 0),
+                            years: Number(editingPool.value.years || 3),
+                            family: String(editingPool.value.family || '').trim(),
+                            grid_spec: JSON.parse(editingPool.value.grid_spec_str || '{{}}'),
+                            risk_spec: JSON.parse(editingPool.value.risk_spec_str || '{{}}'),
+                            num_partitions: Number(editingPool.value.num_partitions || 1),
+                            seed: Number(editingPool.value.seed || 42),
+                            active: !!editingPool.value.active,
+                            auto_expand: !!editingPool.value.auto_expand,
+                        }};
+                        if (!payload.name || !payload.symbol || !payload.family || !payload.timeframe_min) {{
+                            throw new Error('Missing required pool fields.');
+                        }}
+                        if (editingPool.value.id) {{
+                            await req('/admin/factor_pools/' + editingPool.value.id, {{
+                                method: 'PUT',
+                                body: JSON.stringify(payload),
+                            }});
+                            message.value = 'Factor pool #' + editingPool.value.id + ' saved.';
+                        }} else {{
+                            await req('/admin/factor_pools', {{
+                                method: 'POST',
+                                body: JSON.stringify(payload),
+                            }});
+                            message.value = 'Factor pool created.';
+                        }}
+                        showPoolModal.value = false;
+                        await fetchData();
+                    }} catch (e) {{
+                        error.value = 'Save pool failed: ' + e.message;
+                    }} finally {{
+                        loading.value = false;
+                    }}
+                }};
+
+                const loadCatalogFile = async (event) => {{
+                    error.value = '';
+                    try {{
+                        const file = event && event.target && event.target.files ? event.target.files[0] : null;
+                        if (!file) return;
+                        catalogJson.value = await file.text();
+                        catalogReport.value = null;
+                        catalogReportText.value = '';
+                    }} catch (e) {{
+                        error.value = 'Load file failed: ' + e.message;
+                    }} finally {{
+                        if (event && event.target) event.target.value = '';
+                    }}
+                }};
+
+                const runCatalogImport = async (dryRun) => {{
+                    catalogImporting.value = true;
+                    error.value = '';
+                    message.value = '';
+                    try {{
+                        const payload = JSON.parse(catalogJson.value || '{{}}');
+                        const res = await req('/admin/catalog/import?dry_run=' + (dryRun ? 'true' : 'false'), {{
+                            method: 'POST',
+                            body: JSON.stringify(payload),
+                        }});
+                        catalogReport.value = res;
+                        catalogReportText.value = JSON.stringify(res, null, 2);
+                        message.value = dryRun ? 'Catalog dry-run completed.' : 'Catalog import completed.';
+                        if (!dryRun) {{
+                            await fetchData();
+                        }}
+                    }} catch (e) {{
+                        catalogReport.value = null;
+                        catalogReportText.value = '';
+                        error.value = 'Catalog import failed: ' + e.message;
+                    }} finally {{
+                        catalogImporting.value = false;
                     }}
                 }};
 
@@ -2167,7 +2345,10 @@ def landing() -> HTMLResponse:
 
                 return {{
                     token, username, password, loading, error, message,
-                    settings, strategies, login, logout, updateSettings
+                    settings, strategies, factorPools, showPoolModal, editingPool,
+                    catalogJson, catalogImporting, catalogReport, catalogReportText,
+                    login, logout, updateSettings, openPoolModal, savePool,
+                    loadCatalogFile, runCatalogImport
                 }};
             }}
         }}).mount('#app');

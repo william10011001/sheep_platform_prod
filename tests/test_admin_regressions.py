@@ -1109,6 +1109,36 @@ def test_admin_catalog_import_dry_run_apply_and_upsert(admin_client):
     assert second_body["strategies"]["update"] >= 1
 
 
+def test_generated_market_catalog_dry_run_succeeds(admin_client):
+    client = admin_client["client"]
+    headers = admin_client["headers"]
+    catalog_path = ROOT / "catalogs" / "admin_batch_market_catalog_v1.json"
+
+    payload = json.loads(catalog_path.read_text(encoding="utf-8"))
+    res = client.post("/admin/catalog/import?dry_run=true", headers=headers, json=payload)
+    assert res.status_code == 200, res.text
+
+    body = res.json()
+    assert body["ok"] is True
+    assert body["factor_pools"]["create"] == len(payload["factor_pools"])
+    assert body["strategies"]["create"] == len(payload["strategies"])
+    assert body["factor_pools"]["errors"] == []
+    assert body["strategies"]["errors"] == []
+
+
+def test_admin_html_includes_batch_catalog_import_controls(admin_client):
+    client = admin_client["client"]
+
+    res = client.get("/")
+    assert res.status_code == 200, res.text
+    html = res.text
+    assert "Batch JSON Import" in html
+    assert "runCatalogImport" in html
+    assert "loadCatalogFile" in html
+    assert "/admin/factor_pools" in html
+    assert "/admin/catalog/import" in html
+
+
 def test_review_state_maintenance_repairs_legacy_tasks_and_is_idempotent(admin_client):
     client = admin_client["client"]
     headers = admin_client["headers"]
