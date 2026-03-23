@@ -1,7 +1,6 @@
 import importlib.util
 import json
 import sys
-import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -158,16 +157,9 @@ def test_factor_pool_updater_accepts_token_only_and_syncs_cached_snapshot_on_fai
 
     assert build_calls, "token-only auth should still trigger Holy Grail build"
     assert build_calls[0]["factor_pool_token"] == "runtime-token"
-    assert len(sync_calls) == 4
-    assert all(call["headers"] == {"Authorization": "Bearer runtime-token"} for call in sync_calls)
-    assert [call["json"]["source"] for call in sync_calls] == [
-        "holy_grail_cached_in_progress",
-        "holy_grail_cached_in_progress",
-        "holy_grail_cached_failure",
-        "holy_grail_cached_failure",
-    ]
-    assert all(call["json"]["items"][0]["direction"] == "short" for call in sync_calls)
+    assert len(sync_calls) == 0
     assert any("保留上一版有效的對沖組合" in msg for msg in logs)
+    assert any("cached runtime 快照缺少有效績效欄位" in msg for msg in logs)
 
 
 def test_factor_pool_updater_refreshes_cached_runtime_snapshot_before_rebuild(monkeypatch):
@@ -268,13 +260,10 @@ def test_factor_pool_updater_refreshes_cached_runtime_snapshot_before_rebuild(mo
     updater = module.FactorPoolUpdater(_DummyUI())
     updater._build_holy_grail()
 
-    assert len(sync_calls) == 4
-    assert sync_calls[0]["json"]["source"] == "holy_grail_cached_in_progress"
-    assert sync_calls[1]["json"]["source"] == "holy_grail_cached_in_progress"
-    assert sync_calls[2]["json"]["source"] == "holy_grail_runtime"
-    assert sync_calls[3]["json"]["source"] == "holy_grail_runtime"
-    assert sync_calls[0]["json"]["items"][0]["direction"] == "short"
-    assert sync_calls[2]["json"]["items"][0]["direction"] == "long"
+    assert len(sync_calls) == 2
+    assert sync_calls[0]["json"]["source"] == "holy_grail_runtime"
+    assert sync_calls[1]["json"]["source"] == "holy_grail_runtime"
+    assert sync_calls[0]["json"]["items"][0]["direction"] == "long"
 
 
 def test_factor_pool_updater_runtime_payload_includes_live_position_items():
@@ -715,3 +704,38 @@ def test_leaderboard_invalidation_is_throttled(monkeypatch):
 
     assert api._live_versions["leaderboard"] != "old-version"
     assert api._live_cache["leaderboard"] == {}
+
+
+def test_postgres_leaderboard_uses_python_fallback(monkeypatch, tmp_path):
+    db_path = tmp_path / "leaderboard-postgres-path.sqlite3"
+    monkeypatch.setenv("SHEEP_DB_URL", "")
+    monkeypatch.setenv("SHEEP_DB_PATH", str(db_path))
+    _reset_db_module()
+    import sheep_platform_db as db
+
+    db.init_db()
+    db.ensure_cycle_rollover()
+    real_conn = db._conn()
+
+    monkeypatch.setattr(db, "_db_kind", lambda: "postgres")
+    monkeypatch.setattr(db, "_conn", lambda: real_conn)
+    monkeypatch.setattr(
+        db,
+        "_leaderboard_python_fallback",
+        lambda conn, cutoff_iso, window_end_iso: {
+            "combos": [{"username": "miner-a", "total_done": 1234.0}],
+            "time": [{"username": "miner-a", "total_seconds": 4321.0}],
+        },
+    )
+    monkeypatch.setattr(
+        db,
+        "_leaderboard_postgres_recent_agg",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("postgres aggregate should not be used")),
+    )
+
+    stats = db.get_leaderboard_stats(period_hours=720)
+
+    assert stats["combos"]
+    assert stats["time"]
+    assert stats["combos"][0]["username"] == "miner-a"
+    assert stats["time"][0]["username"] == "miner-a"

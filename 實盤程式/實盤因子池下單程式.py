@@ -2949,6 +2949,28 @@ class FactorPoolUpdater:
         payload = self._runtime_sync_payload(scope, result, runtime_kwargs)
         self._post_runtime_snapshot(scope, payload, runtime_kwargs)
 
+    def _cached_runtime_snapshot_is_publishable(self, items) -> bool:
+        for raw_item in list(items or []):
+            item = dict(raw_item or {})
+            try:
+                if abs(float(item.get("sharpe") or 0.0)) > 1e-9:
+                    return True
+            except Exception:
+                pass
+            try:
+                if abs(float(item.get("total_return_pct") or 0.0)) > 1e-9:
+                    return True
+            except Exception:
+                pass
+            try:
+                if abs(float(item.get("max_drawdown_pct") or 0.0)) > 1e-9:
+                    return True
+            except Exception:
+                pass
+            if str(item.get("selection_status") or "").strip():
+                return True
+        return False
+
     def _sync_cached_runtime_snapshot(self, scope: str, runtime_kwargs: dict, *, reason: str):
         cached_json = str(self.last_good_json or "").strip()
         if not cached_json:
@@ -2986,12 +3008,14 @@ class FactorPoolUpdater:
                 payload.get("strategy_key")
                 or payload.get("external_key")
                 or normalized.get("strategy_key")
-                or payload.get("strategy_id")
                 or payload.get("name")
                 or f"{payload.get('family', 'UNKNOWN')}_{idx}"
             )
             items.append(payload)
         if not items:
+            return
+        if not self._cached_runtime_snapshot_is_publishable(items):
+            log(f"【網站同步】{scope} cached runtime 快照缺少有效績效欄位，略過覆蓋站上資料。")
             return
         payload = {
             "scope": scope,

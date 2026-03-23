@@ -333,6 +333,52 @@ def test_cached_runtime_snapshot_preserves_full_strategy_metrics(monkeypatch):
     assert item["sharpe"] == pytest.approx(4.19)
 
 
+def test_cached_runtime_snapshot_skips_config_only_payload(monkeypatch):
+    live_mod = _load_live_trader_module()
+    captured = {}
+
+    class _TextBox:
+        def __init__(self, text):
+            self._text = text
+
+        def get(self, *_args):
+            return self._text
+
+    class _UI:
+        def __init__(self, text):
+            self.multi_json_text = _TextBox(text)
+
+    updater = live_mod.FactorPoolUpdater(
+        _UI(
+            json.dumps(
+                [
+                    {
+                        "strategy_id": 321,
+                        "family": "TEMA_RSI",
+                        "symbol": "ETH_USDT",
+                        "direction": "long",
+                        "interval": "1d",
+                        "family_params": {"fast_len": 9, "slow_len": 30},
+                        "stake_pct": 45.35,
+                    }
+                ],
+                ensure_ascii=False,
+            )
+        )
+    )
+    monkeypatch.setattr(updater, "_collect_runtime_position_items", lambda: [])
+
+    def _capture(scope, payload, runtime_kwargs):
+        captured["scope"] = scope
+        captured["payload"] = payload
+
+    monkeypatch.setattr(updater, "_post_runtime_snapshot", _capture)
+
+    updater._sync_cached_runtime_snapshot("global", {}, reason="startup")
+
+    assert captured == {}
+
+
 class _DummyBT:
     def run_backtest(self, **kwargs):
         return {

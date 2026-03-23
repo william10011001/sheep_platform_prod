@@ -4716,19 +4716,13 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
         db_kind = _db_kind()
         if db_kind == "postgres":
             try:
-                recent_rows = _leaderboard_postgres_recent_agg(conn, cutoff_iso, window_end_iso)
+                recent_rows = _leaderboard_python_fallback(conn, cutoff_iso, window_end_iso)
                 results["combos"] = recent_rows.get("combos") or []
                 results["time"] = recent_rows.get("time") or []
-            except Exception as e:
-                print(f"[DB WARN] Leaderboard postgres aggregate failed: {e}")
-                try:
-                    recent_rows = _leaderboard_python_fallback(conn, cutoff_iso, window_end_iso)
-                    results["combos"] = recent_rows.get("combos") or []
-                    results["time"] = recent_rows.get("time") or []
-                except Exception as fallback_error:
-                    print(f"[DB WARN] Leaderboard recent-task query failed: {fallback_error}")
-                    results["combos"] = []
-                    results["time"] = []
+            except Exception as fallback_error:
+                print(f"[DB WARN] Leaderboard recent-task query failed: {fallback_error}")
+                results["combos"] = []
+                results["time"] = []
         else:
             sql_combos = """
                 SELECT u.username, u.nickname, u.avatar_url, COUNT(t.id) as task_count,
