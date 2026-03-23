@@ -2908,6 +2908,9 @@ class FactorPoolUpdater:
             if warning not in self.seen_warnings:
                 self.seen_warnings.add(warning)
                 log(warning)
+        if self.last_good_json:
+            self._sync_cached_runtime_snapshot("personal", runtime_kwargs, reason="in_progress")
+            self._sync_cached_runtime_snapshot("global", runtime_kwargs, reason="in_progress")
         log("【聖杯引擎】開始拉取實盤因子池進行背景計算...")
         result = run_holy_grail_build(
             bt_module=bt,

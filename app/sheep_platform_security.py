@@ -359,7 +359,7 @@ def verify_slider_captcha(token: str, offset: float, tracks: list, client_ip: st
             # 檢查是否過度規律 (腳本每次都移動固定步長 ±2，人類步長變化極大)
             # [專家級修正] 加入 max(x_deltas) > 3 條件，避免誤殺慢慢滑動(dx永遠只有 0, 1, 2)的真實人類
             unique_dx = len(set(x_deltas))
-            if unique_dx <= 3 and max(x_deltas) > 3 and len(tracks) > 15:
+            if unique_dx <= 2 and max(x_deltas) >= 6 and len(tracks) > 25:
                 return False, "滑動異常，請重試。"
 
             # [專家級新增] 驗證 7：Y軸高頻震盪分析 (專殺攻擊腳本中的 random.randint 雜訊)

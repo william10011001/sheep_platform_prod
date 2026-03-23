@@ -648,6 +648,8 @@ def test_runtime_portfolio_sync_updates_dashboard_personal_and_global(admin_clie
     assert dash["global_runtime_portfolio_updated_at"]
     assert dash["runtime_sync"]["global"]["last_success_at"]
     assert dash["runtime_sync"]["personal"]["last_success_at"]
+    assert dash["runtime_sync"]["global"]["count_mismatch"] is False
+    assert dash["runtime_sync"]["global_active_strategy_mismatch"] is False
 
     live = client.get("/live/version", headers=headers)
     assert live.status_code == 200, live.text

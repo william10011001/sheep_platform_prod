@@ -152,11 +152,123 @@ def test_factor_pool_updater_accepts_token_only_and_syncs_cached_snapshot_on_fai
 
     assert build_calls, "token-only auth should still trigger Holy Grail build"
     assert build_calls[0]["factor_pool_token"] == "runtime-token"
-    assert len(sync_calls) == 2
+    assert len(sync_calls) == 4
     assert all(call["headers"] == {"Authorization": "Bearer runtime-token"} for call in sync_calls)
-    assert all(call["json"]["source"].startswith("holy_grail_cached_") for call in sync_calls)
+    assert [call["json"]["source"] for call in sync_calls] == [
+        "holy_grail_cached_in_progress",
+        "holy_grail_cached_in_progress",
+        "holy_grail_cached_failure",
+        "holy_grail_cached_failure",
+    ]
     assert all(call["json"]["items"][0]["direction"] == "short" for call in sync_calls)
     assert any("保留上一版有效的對沖組合" in msg for msg in logs)
+
+
+def test_factor_pool_updater_refreshes_cached_runtime_snapshot_before_rebuild(monkeypatch):
+    module = _load_live_trader_module()
+    logs = []
+    module.log = logs.append
+    module.bt = type("_BT", (), {"NUMBA_OK": True})()
+
+    sync_calls = []
+
+    class _Result:
+        ok = True
+        message = ""
+        warnings = []
+        multi_payload = [
+            {
+                "strategy_key": "fresh-long",
+                "family": "TEMA_RSI",
+                "symbol": "BTCUSDT",
+                "direction": "long",
+                "interval": "4h",
+                "family_params": {"fast_len": 9, "slow_len": 30},
+                "tp_pct": 1.2,
+                "sl_pct": 0.8,
+                "max_hold_bars": 36,
+                "stake_pct": 40.0,
+                "enabled": True,
+                "sharpe": 2.1,
+            }
+        ]
+        portfolio_metrics = {"sharpe": 2.1, "cagr_pct": 25.0, "max_drawdown_pct": 4.0}
+        selected_count = 1
+        candidate_count = 5
+        backtested_count = 5
+        report_paths = {}
+        multi_strategies_json = json.dumps({"schema_version": 1, "strategies": multi_payload}, ensure_ascii=False)
+
+    def _fake_build(**kwargs):
+        return _Result()
+
+    class _SyncResp:
+        status_code = 200
+        headers = {"content-type": "application/json"}
+        text = '{"ok": true}'
+
+        def json(self):
+            return {"ok": True, "snapshot": {"strategy_count": 1}}
+
+    def _fake_post(url, json=None, headers=None, timeout=None, verify=None):
+        sync_calls.append({"url": url, "json": json, "headers": headers})
+        return _SyncResp()
+
+    module.run_holy_grail_build = _fake_build
+    monkeypatch.setattr(module.requests, "post", _fake_post)
+
+    class _DummyVar:
+        def __init__(self, value):
+            self._value = value
+
+        def get(self):
+            return self._value
+
+    class _DummyText:
+        def get(self, *_args):
+            return json.dumps(
+                {
+                    "schema_version": 1,
+                    "strategies": [
+                        {
+                            "strategy_key": "cached-short",
+                            "family": "TEMA_RSI",
+                            "symbol": "ETHUSDT",
+                            "direction": "short",
+                            "interval": "1h",
+                            "family_params": {"fast_len": 11, "slow_len": 44},
+                            "tp_pct": 1.1,
+                            "sl_pct": 0.7,
+                            "max_hold_bars": 30,
+                            "stake_pct": 25.0,
+                            "enabled": True,
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+            )
+
+    class _DummyUI:
+        global_stake_pct_var = _DummyVar(95.0)
+        multi_json_text = _DummyText()
+        factor_pool_url_var = _DummyVar("https://example.com")
+        factor_pool_token_var = _DummyVar("runtime-token")
+        factor_pool_user_var = _DummyVar("")
+        factor_pool_pass_var = _DummyVar("")
+
+        def update_multi_json(self, _payload):
+            return None
+
+    updater = module.FactorPoolUpdater(_DummyUI())
+    updater._build_holy_grail()
+
+    assert len(sync_calls) == 4
+    assert sync_calls[0]["json"]["source"] == "holy_grail_cached_in_progress"
+    assert sync_calls[1]["json"]["source"] == "holy_grail_cached_in_progress"
+    assert sync_calls[2]["json"]["source"] == "holy_grail_runtime"
+    assert sync_calls[3]["json"]["source"] == "holy_grail_runtime"
+    assert sync_calls[0]["json"]["items"][0]["direction"] == "short"
+    assert sync_calls[2]["json"]["items"][0]["direction"] == "long"
 
 
 def test_live_trader_accepts_wrapped_multi_strategy_json():

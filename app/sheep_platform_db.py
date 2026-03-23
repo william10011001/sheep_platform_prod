@@ -4009,7 +4009,9 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
                        SUM(COALESCE((t.progress_json::jsonb->>'combos_done')::bigint, 0)) as total_done
                 FROM mining_tasks t
                 JOIN users u ON t.user_id = u.id
-                WHERE t.updated_at >= ? AND t.updated_at <= ?
+                WHERE COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
+                  AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <= ?
+                  AND t.status IN ('assigned', 'queued', 'running', 'completed')
                 GROUP BY u.id, u.username, u.nickname
                 ORDER BY total_done DESC
                 LIMIT 300
@@ -4017,10 +4019,12 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
         else:
             sql_combos = """
                 SELECT u.username, u.nickname, COUNT(t.id) as task_count, 
-                       SUM(CAST(json_extract(t.progress_json, '$.combos_done') AS INTEGER)) as total_done
+                       SUM(COALESCE(CAST(json_extract(t.progress_json, '$.combos_done') AS INTEGER), 0)) as total_done
                 FROM mining_tasks t
                 JOIN users u ON t.user_id = u.id
-                WHERE t.updated_at >= ? AND t.updated_at <= ?
+                WHERE COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
+                  AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <= ?
+                  AND t.status IN ('assigned', 'queued', 'running', 'completed')
                 GROUP BY u.id
                 ORDER BY total_done DESC
                 LIMIT 300
@@ -4053,22 +4057,39 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
         # 3. 總挖礦時長 (Mining Time) - 近似值：SUM(elapsed_s)
         if db_kind == "postgres":
             sql_time = """
+                WITH task_elapsed AS (
+                    SELECT
+                        t.id,
+                        t.user_id,
+                        GREATEST(COALESCE(NULLIF((t.progress_json::jsonb->>'elapsed_s'), '')::double precision, 0.0), 0.0) as elapsed_s
+                    FROM mining_tasks t
+                    WHERE COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
+                      AND t.status IN ('assigned', 'queued', 'running', 'completed')
+                )
                 SELECT u.username, u.nickname,
-                       SUM(COALESCE(NULLIF((t.progress_json::jsonb->>'elapsed_s'), '')::double precision, 0.0)) as total_seconds
-                FROM mining_tasks t
-                JOIN users u ON t.user_id = u.id
-                WHERE t.updated_at >= ? AND t.status IN ('completed', 'running')
+                       SUM(te.elapsed_s) as total_seconds
+                FROM task_elapsed te
+                JOIN users u ON te.user_id = u.id
                 GROUP BY u.id, u.username, u.nickname
                 ORDER BY total_seconds DESC
                 LIMIT 300
             """
         else:
             sql_time = """
+                WITH task_elapsed AS (
+                    SELECT
+                        t.id,
+                        t.user_id,
+                        MAX(COALESCE(CAST(json_extract(t.progress_json, '$.elapsed_s') AS REAL), 0.0)) as elapsed_s
+                    FROM mining_tasks t
+                    WHERE COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
+                      AND t.status IN ('assigned', 'queued', 'running', 'completed')
+                    GROUP BY t.id, t.user_id
+                )
                 SELECT u.username, u.nickname,
-                       SUM(CAST(json_extract(t.progress_json, '$.elapsed_s') AS REAL)) as total_seconds
-                FROM mining_tasks t
-                JOIN users u ON t.user_id = u.id
-                WHERE t.updated_at >= ? AND t.status IN ('completed', 'running')
+                       SUM(te.elapsed_s) as total_seconds
+                FROM task_elapsed te
+                JOIN users u ON te.user_id = u.id
                 GROUP BY u.id
                 ORDER BY total_seconds DESC
                 LIMIT 300

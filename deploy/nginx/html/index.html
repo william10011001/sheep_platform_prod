@@ -615,7 +615,13 @@
                                 <div class="text-sm text-white font-semibold">{{ activeLeaderboardSection.title }}</div>
                                 <div class="text-xs text-slate-400 mt-1">{{ activeLeaderboardSection.subtitle }}</div>
                             </div>
-                            <div class="text-xs text-slate-500">{{ activeLeaderboardSection.unit }}</div>
+                            <div class="text-right">
+                                <div class="text-xs text-slate-500">{{ activeLeaderboardSection.unit }}</div>
+                                <div class="mt-1 text-[11px]" :class="leaderboardState.phase === 'error' ? 'text-amber-300' : 'text-slate-500'">{{ leaderboardStatusText }}</div>
+                            </div>
+                        </div>
+                        <div class="mb-3 flex items-center justify-end">
+                            <button @click="manualRefreshLeaderboard" class="px-3 py-1.5 rounded-lg border border-white/10 text-xs text-slate-300 hover:text-white hover:border-white/20 transition-colors">重新整理</button>
                         </div>
                         <div class="hidden sm:block overflow-x-auto">
                                 <table class="w-full text-left border-collapse min-w-[420px]">
@@ -633,7 +639,7 @@
                                             <td class="py-3 px-4 text-right text-emerald-400 cyber-num text-[15px]">{{ formatLeaderboardValue(activeLeaderboardSection.key, item) }}</td>
                                         </tr>
                                         <tr v-if="!activeLeaderboardSection.rows || activeLeaderboardSection.rows.length === 0">
-                                            <td colspan="3" class="py-8 px-4 text-center text-sm text-slate-500">目前尚無排行資料</td>
+                                            <td colspan="3" class="py-8 px-4 text-center text-sm text-slate-500">{{ leaderboardEmptyStateText }}</td>
                                         </tr>
                                     </tbody>
                                 </table>
@@ -653,7 +659,7 @@
                                     <div class="mt-2 text-sm text-gray-200">{{ item.nickname || item.username }}</div>
                                 </div>
                                 <div v-if="!activeLeaderboardSection.rows || activeLeaderboardSection.rows.length === 0" class="rounded-lg border border-dashed border-white/10 px-3 py-6 text-center text-sm text-slate-500">
-                                    目前尚無排行資料
+                                    {{ leaderboardEmptyStateText }}
                                 </div>
                             </div>
                     </div>
@@ -907,6 +913,8 @@
                 let pollTimer = null;
                 let livePollTimer = null;
                 let devtoolsTimer = null;
+                let leaderboardRetryTimer = null;
+                let devtoolsDetectionHits = 0;
                 
                 // 新增 Toast 狀態管理
                 const toastMsg = ref('');
@@ -974,7 +982,7 @@
                     }
                     const res = await fetchApi('/workers/token', {
                         method: 'POST',
-                        body: JSON.stringify({ ttl_seconds: 86400 * 30, rotate_existing: true })
+                        body: JSON.stringify({ ttl_seconds: 86400 * 30, rotate_existing: !!force })
                     });
                     localStorage.setItem(workerTokenKey, res.token || '');
                     localStorage.setItem(workerTokenOwnerKey, String(res.user_id || user.value.id || ''));
@@ -1070,9 +1078,10 @@
                     captchaState.isDragging = true;
                     captchaState.error = false;
                     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
                     captchaState.startX = clientX - captchaState.currentX;
                     captchaState.startTime = Date.now();
-                    captchaState.tracks.push({ x: captchaState.currentX, y: 0, t: captchaState.startTime });
+                    captchaState.tracks.push({ x: captchaState.currentX, y: Math.round(clientY || 0), t: captchaState.startTime });
 
                     document.addEventListener('mousemove', onSliderMove);
                     document.addEventListener('touchmove', onSliderMove, { passive: false });
@@ -1082,6 +1091,7 @@
 
                 const onSliderMove = (e) => {
                     if (!captchaState.isDragging) return;
+                    if (e.cancelable) e.preventDefault();
                     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
                     let x = clientX - captchaState.startX;
                     const maxWalk = (captchaContainer.value ? captchaContainer.value.offsetWidth : 300) - 40;
@@ -1120,6 +1130,7 @@
                 };
                 const tasksData = reactive({ tasks: [], run_enabled: false, pending_task_count: 0, active_cycle_id: 0 });
                 const leaderboard = reactive({ combos: [], score: [], time: [], points: [], qualified_strategies: [] });
+                const leaderboardState = reactive({ phase: 'idle', hasLoaded: false, lastError: '', consecutiveFailures: 0, lastLoadedAt: '' });
 
                 // 管理員專屬狀態
                 const adminSubTab = ref('thresholds');
@@ -1449,6 +1460,32 @@
                 const activeLeaderboardSection = computed(() => {
                     return leaderboardSections.value.find(section => section.key === activeLeaderboardKey.value) || leaderboardSections.value[0] || { key: '', title: '', subtitle: '', unit: '', rows: [] };
                 });
+                const leaderboardHasAnyRows = computed(() => {
+                    return leaderboardSections.value.some(section => Array.isArray(section.rows) && section.rows.length > 0);
+                });
+                const leaderboardEmptyStateText = computed(() => {
+                    if (leaderboardState.phase === 'loading' && !leaderboardState.hasLoaded) return '排行榜資料同步中，請稍候...';
+                    if (leaderboardState.phase === 'error' && !leaderboardState.hasLoaded) return '排行榜暫時無法載入，系統會自動重試。';
+                    return '目前尚無排行資料';
+                });
+                const leaderboardStatusText = computed(() => {
+                    if (leaderboardState.phase === 'error' && leaderboardHasAnyRows.value) {
+                        return '目前顯示上一版已同步資料，系統會自動重試。';
+                    }
+                    if (leaderboardState.phase === 'loading' && !leaderboardState.hasLoaded) {
+                        return '排行榜資料同步中';
+                    }
+                    if (leaderboardState.lastLoadedAt) {
+                        return `最近同步：${formatDate(leaderboardState.lastLoadedAt)}`;
+                    }
+                    return '排行榜會自動同步最新統計';
+                });
+                const manualRefreshLeaderboard = async () => {
+                    try {
+                        await loadLeaderboardData({ silent: false, preserveExisting: true });
+                    } catch (_err) {
+                    }
+                };
                 const formatLeaderboardValue = (key, item) => {
                     if (key === 'combos') return Number(item?.total_done || 0).toLocaleString();
                     if (key === 'points') return Number(item?.total_usdt || 0).toFixed(2);
@@ -1475,11 +1512,38 @@
                         return payload.map(item => extractApiErrorMessage(item)).filter(Boolean).join(', ');
                     }
                     if (typeof payload === 'object') {
+                        if (payload.code && payload.message) return `${payload.message}`;
                         if (payload.message) return extractApiErrorMessage(payload.message);
                         if (payload.detail) return extractApiErrorMessage(payload.detail);
-                        if (payload.code && payload.message) return `${payload.code}: ${payload.message}`;
+                        if (payload.error) return extractApiErrorMessage(payload.error);
+                        const textValues = Object.values(payload)
+                            .map(item => extractApiErrorMessage(item))
+                            .filter(Boolean);
+                        if (textValues.length) return textValues.join(' / ');
                     }
                     return String(payload);
+                };
+
+                const tryParseJsonText = (rawText) => {
+                    const text = typeof rawText === 'string' ? rawText.trim() : '';
+                    if (!text) return null;
+                    try {
+                        return JSON.parse(text);
+                    } catch (_err) {
+                        return null;
+                    }
+                };
+
+                const readApiPayload = async (res) => {
+                    const text = await res.text();
+                    const parsed = tryParseJsonText(text);
+                    if (parsed !== null) return parsed;
+                    return text;
+                };
+
+                const describeApiError = async (res) => {
+                    const payload = await readApiPayload(res);
+                    return extractApiErrorMessage(payload) || (typeof payload === 'string' ? payload : JSON.stringify(payload));
                 };
 
                 const fetchApi = async (endpoint, options = {}) => {
@@ -1495,8 +1559,13 @@
                         
                         // [專家級修復] 1. 優先攔截並處理非 JSON 響應 (例如 Cloudflare 的 502 Bad Gateway 網頁)
                         if (!contentType.includes("application/json")) {
-                            const badText = await res.text();
-                            if (badText.includes('<html') || badText.includes('Cloudflare') || badText.includes('502 Bad Gateway') || res.status >= 500) {
+                            const payload = await readApiPayload(res);
+                            const payloadText = typeof payload === 'string' ? payload : JSON.stringify(payload);
+                            if (!res.ok) {
+                                const detail = extractApiErrorMessage(payload) || payloadText;
+                                throw new Error(`API 請求失敗 (${res.status}): ${detail}`);
+                            }
+                            if (payloadText.includes('<html') || payloadText.includes('Cloudflare') || payloadText.includes('502 Bad Gateway') || res.status >= 500) {
                                 throw new Error(`系統連線異常 (伺服器重啟或網路擁塞)，請稍後再試。`);
                             }
                             throw new Error(`API 錯誤：未收到預期的資料格式，狀態碼 ${res.status}。`);
@@ -1504,15 +1573,12 @@
 
                         // [專家級修復] 2. 確認為 JSON 後，再解析業務邏輯的錯誤狀態
                         if (!res.ok) {
-                            let errorText = await res.text();
-                            try {
-                                const errObj = JSON.parse(errorText);
-                                errorText = extractApiErrorMessage(errObj) || JSON.stringify(errObj);
-                            } catch(e) {}
-                            throw new Error(`API 錯誤 (${res.status}): ${errorText}`);
+                            const payload = await readApiPayload(res);
+                            const detail = extractApiErrorMessage(payload) || (typeof payload === 'string' ? payload : JSON.stringify(payload));
+                            throw new Error(`API 錯誤 (${res.status}): ${detail}`);
                         }
                         
-                        return await res.json();
+                        return await readApiPayload(res);
                     } catch (error) {
                         console.error(`[fetchApi Error] ${endpoint}:`, error);
                         throw error;
@@ -1533,9 +1599,30 @@
                     leaderboard.time = data.time || [];
                     leaderboard.points = data.points || [];
                     leaderboard.qualified_strategies = data.qualified_strategies || [];
+                    leaderboardState.phase = 'ready';
+                    leaderboardState.hasLoaded = true;
+                    leaderboardState.lastError = '';
+                    leaderboardState.consecutiveFailures = 0;
+                    leaderboardState.lastLoadedAt = new Date().toISOString();
                     if (payload?.leaderboard_version) {
                         liveVersions.leaderboard_version = payload.leaderboard_version;
                     }
+                };
+
+                const clearLeaderboardRetry = () => {
+                    if (leaderboardRetryTimer) {
+                        clearTimeout(leaderboardRetryTimer);
+                        leaderboardRetryTimer = null;
+                    }
+                };
+
+                const scheduleLeaderboardRetry = () => {
+                    clearLeaderboardRetry();
+                    if (!user.value || devtoolsTripped.value) return;
+                    const delay = Math.min(30000, 3000 * Math.max(1, leaderboardState.consecutiveFailures));
+                    leaderboardRetryTimer = setTimeout(() => {
+                        loadLeaderboardData({ silent: true, preserveExisting: true }).catch(() => {});
+                    }, delay);
                 };
 
                 const loadManifestData = async () => {
@@ -1550,10 +1637,32 @@
                     return res;
                 };
 
-                const loadLeaderboardData = async () => {
-                    const res = await fetchApi('/leaderboard?period_hours=720');
-                    applyLeaderboardData(res || {});
-                    return res;
+                const loadLeaderboardData = async ({ silent = false, preserveExisting = true } = {}) => {
+                    if (!leaderboardState.hasLoaded) {
+                        leaderboardState.phase = 'loading';
+                    }
+                    try {
+                        const res = await fetchApi('/leaderboard?period_hours=720');
+                        applyLeaderboardData(res || {});
+                        clearLeaderboardRetry();
+                        return res;
+                    } catch (e) {
+                        leaderboardState.phase = 'error';
+                        leaderboardState.lastError = e.message || '排行榜暫時無法載入';
+                        leaderboardState.consecutiveFailures += 1;
+                        if (!preserveExisting) {
+                            leaderboard.combos = [];
+                            leaderboard.score = [];
+                            leaderboard.time = [];
+                            leaderboard.points = [];
+                            leaderboard.qualified_strategies = [];
+                        }
+                        if (!silent) {
+                            showToast(`排行榜同步失敗：${leaderboardState.lastError}`, 'error', 4000);
+                        }
+                        scheduleLeaderboardRetry();
+                        throw e;
+                    }
                 };
 
                 const stopLiveVersionPolling = () => {
@@ -1578,8 +1687,8 @@
                         if (dashboardChanged || runtimeChanged) {
                             await loadDashboardData();
                         }
-                        if (leaderboardChanged) {
-                            await loadLeaderboardData();
+                        if (leaderboardChanged || !leaderboardState.hasLoaded) {
+                            await loadLeaderboardData({ silent: true, preserveExisting: true });
                         }
                         if (user.value?.role === 'admin' && currentTab.value === 'admin' && (dashboardChanged || runtimeChanged)) {
                             await Promise.allSettled([
@@ -1610,9 +1719,20 @@
                     scheduleLiveVersionPoll();
                 };
 
+                const isTouchDevice = () => {
+                    try {
+                        return Boolean(navigator.maxTouchPoints > 0 || window.matchMedia('(pointer: coarse)').matches);
+                    } catch (_err) {
+                        return false;
+                    }
+                };
+
+                const isDevtoolsProtectedTab = () => ['tasks', 'dashboard', 'rewards', 'rating', 'admin'].includes(currentTab.value);
+
                 const tripDevtoolsLock = () => {
                     if (devtoolsTripped.value) return;
                     devtoolsTripped.value = true;
+                    clearLeaderboardRetry();
                     stopLiveVersionPolling();
                     if (pollTimer) clearInterval(pollTimer);
                     localStorage.removeItem('sheep_token');
@@ -1629,9 +1749,19 @@
 
                 const checkDevtoolsOpen = () => {
                     if (!user.value || devtoolsTripped.value) return;
+                    if (!isDevtoolsProtectedTab()) {
+                        devtoolsDetectionHits = 0;
+                        return;
+                    }
+                    if (isTouchDevice()) {
+                        devtoolsDetectionHits = 0;
+                        return;
+                    }
                     const widthGap = window.outerWidth - window.innerWidth;
                     const heightGap = window.outerHeight - window.innerHeight;
-                    if (widthGap > 160 || heightGap > 160) {
+                    const detected = document.visibilityState === 'visible' && (widthGap > 220 || heightGap > 220);
+                    devtoolsDetectionHits = detected ? (devtoolsDetectionHits + 1) : 0;
+                    if (devtoolsDetectionHits >= 3) {
                         tripDevtoolsLock();
                     }
                 };
@@ -1644,9 +1774,14 @@
                         await issueWorkerToken(false, false);
                         await loadAllData();
                         startLiveVersionPolling();
+                        loadManifestData().catch((err) => {
+                            console.error('Manifest load failed in background:', err);
+                        });
+                        loadLeaderboardData({ silent: true, preserveExisting: true }).catch(() => {});
                     } catch (e) { 
                         user.value = null; 
                         userToken.value = '';
+                        clearLeaderboardRetry();
                         stopLiveVersionPolling();
                         localStorage.removeItem('sheep_token');
                         localStorage.removeItem(workerTokenKey);
@@ -1662,25 +1797,15 @@
                 };
 
                 const loadAllData = async () => {
-                    const [manifestRes, dashRes, lbRes, tRes] = await Promise.allSettled([
-                        loadManifestData(),
+                    const [dashRes, tRes] = await Promise.allSettled([
                         loadDashboardData(),
-                        loadLeaderboardData(),
                         loadTasks()
                     ]);
                     const errors = [];
 
-                    if (manifestRes.status !== 'fulfilled') {
-                        console.error('Manifest 載入失敗:', manifestRes.reason);
-                        errors.push(`下載資訊: ${manifestRes.reason?.message || manifestRes.reason}`);
-                    }
                     if (dashRes.status !== 'fulfilled') {
                         console.error('Dashboard 載入失敗:', dashRes.reason);
                         errors.push(`總覽: ${dashRes.reason?.message || dashRes.reason}`);
-                    }
-                    if (lbRes.status !== 'fulfilled') {
-                        console.error('Leaderboard 載入失敗:', lbRes.reason);
-                        errors.push(`排行榜: ${lbRes.reason?.message || lbRes.reason}`);
                     }
                     if (tRes.status !== 'fulfilled') {
                         console.error('Tasks 載入失敗:', tRes.reason);
@@ -1737,12 +1862,9 @@
                         });
                         
                         if (!res.ok) {
-                            let detail = '';
-                            let fullError = await res.text();
-                            try { 
-                                const errData = JSON.parse(fullError);
-                                detail = extractApiErrorMessage(errData) || fullError;
-                            } catch(e){ detail = fullError; }
+                            const payload = await readApiPayload(res);
+                            const fullError = typeof payload === 'string' ? payload : JSON.stringify(payload);
+                            const detail = extractApiErrorMessage(payload) || fullError;
                             
                             if(detail === 'user_exists') throw new Error('註冊失敗：該帳號已被其他人註冊');
                             if(detail === 'password_too_short') throw new Error('註冊失敗：密碼至少需要6個字元');
@@ -1783,7 +1905,7 @@
                             });
                             
                             if (!lRes.ok) {
-                                const lErr = await lRes.text();
+                                const lErr = await describeApiError(lRes);
                                 throw new Error(`自動登入失敗 [狀態碼 ${lRes.status}]: ${lErr}`);
                             }
                             const data = await lRes.json();
@@ -1846,6 +1968,7 @@
                 };
 
                 const logout = () => { 
+                    clearLeaderboardRetry();
                     localStorage.removeItem('sheep_token'); 
                     localStorage.removeItem(workerTokenKey);
                     localStorage.removeItem(workerTokenOwnerKey);
@@ -2072,6 +2195,15 @@
                     await refreshAdminStrategies(true);
                 });
 
+                watch(currentTab, async (nextTab) => {
+                    if (nextTab === 'leaderboard' && user.value && !leaderboardState.hasLoaded) {
+                        try {
+                            await loadLeaderboardData({ silent: true, preserveExisting: true });
+                        } catch (_err) {
+                        }
+                    }
+                });
+
                 const handleVisibilityChange = () => {
                     if (user.value && !devtoolsTripped.value) {
                         scheduleLiveVersionPoll();
@@ -2089,6 +2221,7 @@
                 onUnmounted(() => { 
                     clearInterval(pollTimer); 
                     if (devtoolsTimer) clearInterval(devtoolsTimer);
+                    clearLeaderboardRetry();
                     stopLiveVersionPolling();
                     document.removeEventListener('visibilitychange', handleVisibilityChange);
                     if(tickTimer) clearInterval(tickTimer);
@@ -2104,7 +2237,7 @@
                     getStatusText, getPhaseText, getProgressState, getScore, getScoreNumber,
                     loadTasks, getShortPoolName, getScoreColorClass, formatDate,
                     activeTasks, activeTaskEmptyStateText, ratingView, setRatingView, paginatedRatingTasks, activeRatingPage, totalRatingPages, changeRatingPage,
-                    qualifiedTasks, rejectedArchiveTasks, leaderboardSections, activeLeaderboardKey, activeLeaderboardSection, formatLeaderboardValue,
+                    qualifiedTasks, rejectedArchiveTasks, leaderboardSections, activeLeaderboardKey, activeLeaderboardSection, leaderboardState, leaderboardEmptyStateText, leaderboardStatusText, manualRefreshLeaderboard, formatLeaderboardValue,
                     getReviewStatus, getReviewStatusMeta, getReviewDetail,
                     adminSubTab, adminThresholds, adminPools, adminStrats, adminError, adminDiagnostics, adminStratSummary, adminStratFilters, adminStratPage, adminStratPageSize, adminStratTotal, adminStratHasNext, adminStratTotalPages, loadAdminData, refreshAdminStrategies, resetAdminStrategyFilters, changeAdminStratPage, downloadAdminErrors, saveThresholds, savePool,
                     catalogImportText, catalogImportResult, handleCatalogFileChange, runCatalogImport

@@ -40,6 +40,8 @@ def test_spa_index_contains_mobile_rating_and_leaderboard_contracts():
         "paginatedRatingTasks",
         "leaderboardSections",
         "activeLeaderboardSection",
+        "leaderboardState",
+        "manualRefreshLeaderboard",
         "qualified_strategies",
         "formatLeaderboardValue",
         "catalogImportText",

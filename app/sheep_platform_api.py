@@ -102,7 +102,7 @@ app = FastAPI(title="sheep-platform-api", root_path=API_ROOT_PATH)
 async def custom_http_exception_handler(request: Request, exc: StarletteHTTPException):
     """[專家級修復] HTTPException 統一處理，記錄並拋出真實錯誤供調試"""
     # 記錄所有 HTTP 異常以便調試
-    if exc.status_code >= 400:
+    if exc.status_code >= 400 and _should_log_http_error(request, exc):
         db.log_sys_event(
             "HTTP_ERROR",
             getattr(request.state, "user_id", None),
@@ -176,6 +176,7 @@ _live_cache: Dict[str, Dict[str, Dict[str, Any]]] = {
     "dashboard": {},
     "leaderboard": {},
 }
+_http_error_telemetry_cache: Dict[str, float] = {}
 
 
 class _ChatHub:
@@ -248,6 +249,35 @@ def _invalidate_live_state(*channels: str) -> None:
         _live_versions["leaderboard"] = now_iso
     if "runtime" in requested:
         _live_versions["runtime"] = now_iso
+
+
+def _should_log_http_error(request: Request, exc: StarletteHTTPException) -> bool:
+    status_code = int(getattr(exc, "status_code", 500) or 500)
+    if status_code < 400:
+        return False
+
+    detail_text = str(getattr(exc, "detail", "") or "")
+    path = str(request.url.path or "")
+    method = str(request.method or "GET").upper()
+    ip = _client_ip(request)
+
+    throttle_window = 0.0
+    if status_code == 401 and "invalid_or_expired_token" in detail_text:
+        if path in {"/flags", "/workers/heartbeat", "/user/me"}:
+            throttle_window = 30.0
+    elif status_code == 404 and path == "/tasks/oos/claim":
+        throttle_window = 60.0
+
+    if throttle_window <= 0.0:
+        return True
+
+    cache_key = f"{status_code}:{method}:{path}:{detail_text}:{ip}"
+    now = time.time()
+    last = float(_http_error_telemetry_cache.get(cache_key, 0.0))
+    if now - last < throttle_window:
+        return False
+    _http_error_telemetry_cache[cache_key] = now
+    return True
 
 
 def _categorize_captcha_error(err_msg: str) -> Dict[str, str]:
@@ -340,12 +370,37 @@ def _runtime_snapshot_status(snapshot: Dict[str, Any], *, threshold_minutes: int
     dt = _parse_iso_datetime(updated_at)
     stale = True
     age_seconds = None
+    summary = dict(snapshot.get("summary") or {})
+    items = list(snapshot.get("items") or [])
+    strategy_count = int(snapshot.get("strategy_count") or len(items))
+    item_count = len(items)
+    expected_strategy_count = None
+    for key in ("expected_strategy_count", "selected_count", "strategy_count"):
+        raw_value = summary.get(key)
+        if raw_value is None:
+            continue
+        try:
+            parsed = int(raw_value)
+        except Exception:
+            continue
+        if parsed >= 0:
+            expected_strategy_count = parsed
+            break
+    count_mismatch_reasons: List[str] = []
+    if item_count > 0 and item_count != strategy_count:
+        count_mismatch_reasons.append("item_count")
+    if expected_strategy_count is not None and expected_strategy_count != strategy_count:
+        count_mismatch_reasons.append("summary_count")
     if dt is not None:
         age_seconds = max(0.0, (datetime.now(timezone.utc) - dt.astimezone(timezone.utc)).total_seconds())
         stale = age_seconds > float(threshold_minutes * 60)
     return {
         "updated_at": updated_at,
-        "strategy_count": int(snapshot.get("strategy_count") or len(snapshot.get("items") or [])),
+        "strategy_count": strategy_count,
+        "item_count": item_count,
+        "expected_strategy_count": expected_strategy_count,
+        "count_mismatch": bool(count_mismatch_reasons),
+        "count_mismatch_reasons": count_mismatch_reasons,
         "stale": bool(stale),
         "age_seconds": age_seconds,
     }
@@ -1310,7 +1365,7 @@ def get_admin_system_diagnostics(req: Request, authorization: Optional[str] = He
     personal_snapshot = db.get_runtime_portfolio_snapshot("personal", user_id=int(ctx["user"]["id"])) or {}
     global_status = _runtime_snapshot_status(global_snapshot)
     personal_status = _runtime_snapshot_status(personal_snapshot)
-    runtime_mismatch = int(global_status.get("strategy_count") or 0) != int(db.count_strategies(status="active"))
+    runtime_mismatch = bool(global_status.get("count_mismatch"))
 
     return {
         "ok": True,
@@ -2254,7 +2309,7 @@ def web_dashboard(request: Request, authorization: Optional[str] = Header(None))
             "runtime_sync": {
                 "personal": {**personal_runtime_status, **_runtime_sync_event_detail("personal", uid)},
                 "global": {**global_runtime_status, **_runtime_sync_event_detail("global")},
-                "global_active_strategy_mismatch": int(global_runtime_status.get("strategy_count") or 0) != global_strategies_active,
+                "global_active_strategy_mismatch": bool(global_runtime_status.get("count_mismatch")),
             },
             "payouts_unpaid": len([p for p in payouts if p["status"] == "unpaid"]),
             "recent_tasks": tasks[:10],
