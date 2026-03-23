@@ -63,12 +63,15 @@ from sheep_holy_grail_runtime import HolyGrailRuntime, run_holy_grail_build
 from sheep_runtime_paths import (
     ensure_parent,
     import_backtest_runtime,
+    realtime_local_config_path,
+    realtime_public_config_path,
     realtime_config_path,
+    realtime_config_template_path,
     realtime_exec_log_dir,
     realtime_log_path,
     realtime_state_path,
 )
-from sheep_strategy_schema import normalize_direction, normalize_runtime_strategy_entry
+from sheep_strategy_schema import normalize_direction, normalize_runtime_strategy_entry, normalize_strategy_batch
 
 bt, HOLY_GRAIL_IMPORT_ERROR = import_backtest_runtime(PROJECT_ROOT)
 
@@ -120,7 +123,10 @@ np.seterr(divide='ignore', invalid='ignore')
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 APP_NAME = "TEMA_RSI 自動交易系統"
-CFG_FILE = str(realtime_config_path())
+CFG_FILE = str(realtime_local_config_path())
+CFG_FALLBACK_FILE = str(realtime_config_path())
+CFG_PUBLIC_FILE = str(realtime_public_config_path())
+CFG_TEMPLATE_FILE = str(realtime_config_template_path())
 LOG_FILE = str(realtime_log_path())
 STATE_FILE = str(realtime_state_path())
 TZ8 = timezone(timedelta(hours=8))
@@ -2652,33 +2658,29 @@ def build_daily_equity_curve_for_backtest(trades_detail: list) -> pd.Series:
     return HolyGrailRuntime.build_daily_equity_curve(trades_detail)
 
 
-def normalize_multi_strategy_entries(raw_multi_json, default_symbol: str, default_interval: str, default_stake_pct: float):
+def normalize_multi_strategy_entries(
+    raw_multi_json,
+    default_symbol: str = "",
+    default_interval: str = "",
+    default_stake_pct: float = 0.0,
+):
     strategies_cfg: Dict[str, Dict[str, Any]] = {}
     active_sym_intervals = set()
 
-    if isinstance(raw_multi_json, dict):
-        iterable = []
-        for raw_sid, raw_entry in raw_multi_json.items():
-            entry = dict(raw_entry or {})
-            entry.setdefault("strategy_id", raw_sid)
-            iterable.append(entry)
-    elif isinstance(raw_multi_json, list):
-        iterable = list(raw_multi_json)
-    else:
-        iterable = []
+    iterable = normalize_strategy_batch(
+        raw_multi_json,
+        default_symbol=default_symbol,
+        default_interval=default_interval,
+    )
 
     for idx, raw_entry in enumerate(iterable):
-        entry = normalize_runtime_strategy_entry(
-            dict(raw_entry or {}),
-            default_symbol=default_symbol,
-            default_interval=default_interval,
-        )
+        entry = dict(raw_entry or {})
         family = str(entry.get("family") or "UNKNOWN").strip() or "UNKNOWN"
         direction = normalize_direction(entry.get("direction"), default="long")
         params = dict(entry.get("family_params") or {})
         params["direction"] = direction
         params["reverse"] = direction == "short"
-        strategy_ref = raw_entry.get("strategy_key") or raw_entry.get("strategy_id") or entry.get("strategy_id") or idx
+        strategy_ref = entry.get("strategy_key") or entry.get("strategy_id") or idx
         sid = f"{family}_{strategy_ref}"
         sym = str(entry.get("symbol") or default_symbol).upper()
         iv = str(entry.get("interval") or default_interval)
@@ -2732,6 +2734,7 @@ class FactorPoolUpdater:
 
         return {
             "factor_pool_url": _ui_value("factor_pool_url_var", "SHEEP_FACTOR_POOL_URL", "https://sheep123.com"),
+            "factor_pool_token": _ui_value("factor_pool_token_var", "SHEEP_FACTOR_POOL_TOKEN"),
             "factor_pool_user": _ui_value("factor_pool_user_var", "SHEEP_FACTOR_POOL_USER"),
             "factor_pool_pass": _ui_value("factor_pool_pass_var", "SHEEP_FACTOR_POOL_PASS"),
         }
@@ -2760,15 +2763,20 @@ class FactorPoolUpdater:
             "source": "holy_grail_runtime",
             "summary": summary,
             "items": items,
-            "username": runtime_kwargs.get("factor_pool_user", ""),
-            "password": runtime_kwargs.get("factor_pool_pass", ""),
         }
 
     def _sync_runtime_snapshot(self, scope: str, result, runtime_kwargs: dict):
         sync_url = self._runtime_sync_url(runtime_kwargs.get("factor_pool_url", "https://sheep123.com"))
         payload = self._runtime_sync_payload(scope, result, runtime_kwargs)
         try:
-            resp = requests.post(sync_url, json=payload, timeout=20, verify=False)
+            headers = {}
+            token = str(runtime_kwargs.get("factor_pool_token") or "").strip()
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+            else:
+                payload["username"] = runtime_kwargs.get("factor_pool_user", "")
+                payload["password"] = runtime_kwargs.get("factor_pool_pass", "")
+            resp = requests.post(sync_url, json=payload, headers=headers, timeout=20, verify=False)
             data = resp.json() if resp.headers.get("content-type", "").lower().startswith("application/json") else {}
             if resp.status_code != 200 or not bool(data.get("ok")):
                 detail = data.get("detail") or data.get("error") or resp.text[:300]
@@ -3271,6 +3279,7 @@ class AnimatedUI(tk.Tk):
         self.trade_fetch_int_var    = tk.IntVar(value=60)
         self.verbose_var            = tk.BooleanVar(value=True)
         self.factor_pool_url_var    = tk.StringVar(value=os.environ.get("SHEEP_FACTOR_POOL_URL", "https://sheep123.com").strip())
+        self.factor_pool_token_var  = tk.StringVar(value=os.environ.get("SHEEP_FACTOR_POOL_TOKEN", "").strip())
         self.factor_pool_user_var   = tk.StringVar(value=os.environ.get("SHEEP_FACTOR_POOL_USER", "").strip())
         self.factor_pool_pass_var   = tk.StringVar(value=os.environ.get("SHEEP_FACTOR_POOL_PASS", "").strip())
 
@@ -3289,6 +3298,7 @@ class AnimatedUI(tk.Tk):
         ttk.Label(self.adv_tab, text="提示：背景載入在後台，不會卡 UI；若失敗會自動改用漸層備援。").grid(row=2, column=0, sticky="w", padx=10, pady=6, columnspan=3)
         self._grid(self.adv_tab, [
             ("因子池 Base URL", self.factor_pool_url_var, 48),
+            ("Runtime Sync Token", self.factor_pool_token_var, 48, True),
             ("因子池帳號", self.factor_pool_user_var, 24),
             ("因子池密碼", self.factor_pool_pass_var, 24, True),
         ], cols=2, start_row=3)
@@ -3379,6 +3389,7 @@ class AnimatedUI(tk.Tk):
             "verbose": bool(self.verbose_var.get()),
             "global_stake_pct": float(self.global_stake_pct_var.get() or 95.0),
             "factor_pool_url": (self.factor_pool_url_var.get() or "").strip(),
+            "factor_pool_token": (self.factor_pool_token_var.get() or "").strip(),
             "factor_pool_user": (self.factor_pool_user_var.get() or "").strip(),
             "factor_pool_pass": (self.factor_pool_pass_var.get() or "").strip(),
 
@@ -3426,19 +3437,20 @@ class AnimatedUI(tk.Tk):
             cfg_path = ensure_parent(CFG_FILE)
             with open(cfg_path, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, ensure_ascii=False, indent=2)
-            log(f"設定已保存至 {cfg_path}")
+            log(f"設定已保存至 {cfg_path}（本機私密設定檔）")
         except Exception as e:
             messagebox.showerror("保存失敗", str(e))
 
     def _load_cfg_safely(self):
         try:
-            cfg_path = Path(CFG_FILE)
-            if not cfg_path.exists():
+            for candidate in [Path(CFG_FILE), Path(CFG_FALLBACK_FILE), Path(CFG_PUBLIC_FILE), Path(CFG_TEMPLATE_FILE)]:
+                if not candidate.exists():
+                    continue
+                with open(candidate, "r", encoding="utf-8") as f:
+                    cfg = json.load(f)
+                self._apply_cfg(cfg)
+                log(f"已載入設定 {candidate}")
                 return
-            with open(cfg_path, "r", encoding="utf-8") as f:
-                cfg = json.load(f)
-            self._apply_cfg(cfg)
-            log(f"已載入設定 {cfg_path}")
         except Exception as e:
             log(f"載入設定失敗：{e}")
 
@@ -3472,6 +3484,7 @@ class AnimatedUI(tk.Tk):
         self.mode_var.set(g("mode", self.mode_var.get()))
         self.global_stake_pct_var.set(float(g("global_stake_pct", self.global_stake_pct_var.get())))
         self.factor_pool_url_var.set(g("factor_pool_url", self.factor_pool_url_var.get()))
+        self.factor_pool_token_var.set(g("factor_pool_token", self.factor_pool_token_var.get()))
         self.factor_pool_user_var.set(g("factor_pool_user", self.factor_pool_user_var.get()))
         self.factor_pool_pass_var.set(g("factor_pool_pass", self.factor_pool_pass_var.get()))
 

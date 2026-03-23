@@ -89,7 +89,22 @@ def report_dir() -> Path:
 
 
 def realtime_config_path() -> Path:
+    local_path = realtime_local_config_path()
+    if local_path.exists():
+        return local_path
+    return realtime_public_config_path()
+
+
+def realtime_public_config_path() -> Path:
     return realtime_dir() / "tema_rsi_gui_config.json"
+
+
+def realtime_local_config_path() -> Path:
+    return realtime_dir() / "tema_rsi_gui_config.local.json"
+
+
+def realtime_config_template_path() -> Path:
+    return realtime_dir() / "tema_rsi_gui_config.example.json"
 
 
 def realtime_log_path() -> Path:

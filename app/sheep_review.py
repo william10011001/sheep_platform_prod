@@ -6,7 +6,6 @@ KNOWN_REVIEW_STATUSES = {
     "auto_managed",
     "queued",
     "running",
-    "passed",
     "rejected",
     "error",
     "not_eligible",
@@ -16,7 +15,6 @@ PIPELINE_REVIEW_STATUSES = {
     "auto_managed",
     "queued",
     "running",
-    "passed",
 }
 
 REJECT_KEYWORDS = (
@@ -174,8 +172,6 @@ def _default_review_reason(review_status: str, progress: Dict[str, Any], last_er
         return "已達標，等待進入後續自動管理流程。"
     if review_status == "running":
         return "已達標，正在執行後續自動管理流程。"
-    if review_status == "passed":
-        return "已通過審核。"
     if review_status == "rejected":
         return last_error or "未通過門檻審核。"
     if review_status == "error":
@@ -218,6 +214,10 @@ def normalize_review_fields(progress_like: Any, task_status: str = "") -> Dict[s
 
     explicit_status = str(progress.get("review_status") or "").strip().lower()
     explicit_oos_status = str(progress.get("oos_status") or "").strip().lower()
+    if explicit_status == "passed":
+        explicit_status = "auto_managed"
+    if explicit_oos_status == "passed":
+        explicit_oos_status = "auto_managed"
     review_failures = _normalized_failures(progress)
     review_reason = str(progress.get("review_reason") or "").strip()
     last_reject_reason = str(progress.get("last_reject_reason") or "").strip()

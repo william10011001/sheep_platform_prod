@@ -100,6 +100,15 @@
 </head>
 <body>
     <div id="app" class="min-h-screen flex flex-col">
+        <div v-if="devtoolsTripped" class="min-h-screen flex items-center justify-center px-6 py-16 bg-black text-white">
+            <div class="w-full max-w-xl rounded-2xl border border-white/10 bg-slate-950/95 p-8 text-center shadow-2xl">
+                <div class="text-[12px] tracking-[0.35em] uppercase text-slate-500">sheep123.com</div>
+                <div class="mt-4 text-6xl font-black text-white">404</div>
+                <div class="mt-4 text-xl font-semibold">頁面不存在</div>
+                <div class="mt-3 text-sm leading-7 text-slate-400">為保護敏感資料，此頁面已停止顯示。請關閉開發者工具後重新登入。</div>
+            </div>
+        </div>
+        <template v-else>
         <div v-if="toastMsg" class="fixed top-20 left-4 right-4 sm:left-auto sm:right-4 z-[9999] px-4 sm:px-6 py-3 rounded-md shadow-lg border backdrop-blur-md transition-all duration-300"
              :class="toastType === 'error' ? 'bg-red-900/80 border-red-500 text-white' : (toastType === 'success' ? 'bg-emerald-900/80 border-emerald-500 text-white' : 'bg-slate-800/80 border-blue-500 text-white')">
             {{ toastMsg }}
@@ -124,30 +133,34 @@
                     <div><input v-model="authForm.username" type="text" placeholder="帳號" required class="cyber-input w-full px-4 py-2 rounded-md"></div>
                     <div><input v-model="authForm.password" type="password" placeholder="密碼" required class="cyber-input w-full px-4 py-2 rounded-md"></div>
                     
-                    <div v-show="captchaState.token && authForm.username.trim().length > 0 && authForm.password.trim().length > 0" class="w-full mt-4 transition-all duration-500">
-                        <div class="text-xs text-gray-400 mb-1">為確保安全性，請完成下方滑動驗證：</div>
-                        <div class="captcha-container" ref="captchaContainer">
-                            <div class="captcha-bg-text">{{ captchaState.success ? '驗證成功' : '向右滑動滑塊以完成驗證' }}</div>
-                            <div class="captcha-target-hole" v-show="captchaState.targetX > 0 && !captchaState.success" :style="{ left: captchaState.targetX + 'px' }"></div>
-                            <div class="captcha-fill" :style="{ width: (captchaState.currentX + 20) + 'px' }" :class="{'!bg-emerald-500/20 !border-emerald-500': captchaState.success, '!bg-red-500/20 !border-red-500': captchaState.error}"></div>
+                    <div v-show="showCaptchaPanel" class="w-full mt-4 transition-all duration-500">
+                        <div class="flex items-center justify-between gap-3 mb-2">
+                            <div class="text-xs text-gray-400">為確保安全性，請完成下方滑動驗證：</div>
+                            <button type="button" @click="resetCaptcha" class="text-[11px] text-slate-300 border border-white/10 px-2.5 py-1 rounded hover:bg-white/5 transition-colors">重新載入</button>
+                        </div>
+                        <div v-if="captchaState.phase === 'loading'" class="w-full mt-1 p-3 border border-blue-500/40 bg-blue-900/20 rounded text-blue-200 text-xs text-center">
+                            正在載入安全驗證...
+                        </div>
+                        <div v-else-if="captchaState.phase === 'failed'" class="w-full mt-1 p-3 border border-red-500/50 bg-red-900/20 rounded text-red-200 text-xs text-center">
+                            {{ captchaState.message || '無法載入安全驗證碼，請確認網路連線或伺服器狀態。' }}
+                        </div>
+                        <div v-else-if="captchaState.phase === 'ready' || captchaState.phase === 'verified'" class="captcha-container" ref="captchaContainer">
+                            <div class="captcha-bg-text">{{ captchaState.phase === 'verified' ? '驗證成功' : '向右滑動滑塊以完成驗證' }}</div>
+                            <div class="captcha-target-hole" v-show="captchaState.targetX > 0 && captchaState.phase !== 'verified'" :style="{ left: captchaState.targetX + 'px' }"></div>
+                            <div class="captcha-fill" :style="{ width: (captchaState.currentX + 20) + 'px' }" :class="{'!bg-emerald-500/20 !border-emerald-500': captchaState.phase === 'verified', '!bg-red-500/20 !border-red-500': captchaState.error}"></div>
                             <div class="captcha-slider" 
-                                 :class="{ active: captchaState.isDragging, success: captchaState.success, error: captchaState.error }"
+                                 :class="{ active: captchaState.isDragging, success: captchaState.phase === 'verified', error: captchaState.error }"
                                  :style="{ left: captchaState.currentX + 'px' }"
                                  @mousedown="onSliderDown" @touchstart.prevent="onSliderDown">
-                                <span v-if="captchaState.success">✔</span>
+                                <span v-if="captchaState.phase === 'verified'">✔</span>
                                 <span v-else-if="captchaState.error">✖</span>
                                 <span v-else>→</span>
                             </div>
                         </div>
                     </div>
-                    
-                    <div v-show="!captchaState.token && authForm.username.trim().length > 0 && authForm.password.trim().length > 0" class="w-full mt-4 p-3 border border-red-500/50 bg-red-900/20 rounded text-red-400 text-xs text-center flex flex-col gap-2">
-                        <span>無法載入安全驗證碼，請確認網路連線或伺服器狀態。</span>
-                        <button type="button" @click="resetCaptcha" class="px-4 py-1.5 bg-red-800/50 hover:bg-red-700/50 rounded border border-red-600/50 mx-auto transition-colors font-bold tracking-wide">重新載入驗證碼</button>
-                    </div>
 
                     <div v-if="errorMsg" class="text-red-500 text-sm font-bold">{{ errorMsg }}</div>
-                    <button type="submit" :disabled="!captchaState.success" class="cyber-btn w-full py-2.5 rounded-md font-bold mt-4 disabled:opacity-50 disabled:cursor-not-allowed" :title="!captchaState.success ? '請先完成上方滑動驗證' : ''">{{ isLoginMode ? '登入' : '註冊' }}</button>
+                    <button type="submit" :disabled="!captchaCanSubmit" class="cyber-btn w-full py-2.5 rounded-md font-bold mt-4 disabled:opacity-50 disabled:cursor-not-allowed" :title="!captchaCanSubmit ? '請先完成上方滑動驗證' : ''">{{ isLoginMode ? '登入' : '註冊' }}</button>
                     
                     <div class="text-center pt-2">
                         <button type="button" @click="isLoginMode = !isLoginMode; errorMsg = ''; authForm.password = ''; resetCaptcha();" class="text-sm text-gray-400 hover:text-white transition-colors">
@@ -177,7 +190,19 @@
                             </p>
                             <div class="bg-black/40 border border-white/10 rounded p-3 max-w-xl mb-2">
                                 <div class="text-sm text-gray-300 font-bold mb-1">專屬節點 Token</div>
-                                <div class="text-xs text-gray-500 mb-2">複製下方 Token 並貼至 OpenNode.exe 即可啟動運算，OpenNode.exe <a href="https://drive.google.com/file/d/13Vvpb7mG5F0ivyuXU58SLfQKAQ3n8zeY/view?usp=sharing" target="_blank" rel="noopener noreferrer" class="text-[#FF003C] hover:text-white underline transition-colors">下載連結</a></div>
+                                <div class="text-xs text-gray-500 mb-2">
+                                    複製下方 Token 並貼至 OpenNode 即可啟動運算。
+                                    <template v-if="manifest.worker_download_url">
+                                        <a :href="manifest.worker_download_url" target="_blank" rel="noopener noreferrer" class="text-[#FF003C] hover:text-white underline transition-colors">下載 OpenNode</a>
+                                        <span class="text-slate-500">({{ manifest.worker_bundle_kind || 'onedir' }})</span>
+                                    </template>
+                                    <template v-else>
+                                        <span class="text-slate-500">目前尚未設定下載連結</span>
+                                    </template>
+                                </div>
+                                <div v-if="manifest.worker_download_sha256" class="mb-2 text-[11px] text-slate-500 font-mono break-all">
+                                    SHA256: {{ manifest.worker_download_sha256 }}
+                                </div>
                                 <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
                                     <input type="text" readonly :value="userToken" class="cyber-input w-full px-2 py-1.5 rounded text-xs text-emerald-400 font-mono bg-black/80 border-white/10" @focus="$event.target.select()">
                                     <button @click="copyToken" class="cyber-btn px-4 py-1.5 rounded font-bold text-xs whitespace-nowrap">一鍵複製</button>
@@ -318,24 +343,27 @@
                             <div class="text-3xl text-white cyber-num">{{ dashData.personal_live_strategies_active || dashData.strategies_active || 0 }}</div>
                         </div>
                         <div class="cyber-card p-4 flex flex-col justify-center items-center text-center">
-                            <div class="text-xs text-white mb-1">個人達標 / 自動管理中</div>
+                            <div class="text-xs text-white mb-1">個人達標策略</div>
                             <div class="text-3xl text-white cyber-num">{{ dashData.personal_review_pipeline_count || 0 }}</div>
-                            <div class="mt-2 text-[11px] leading-5 text-slate-400">{{ dashData.personal_review_pipeline_hint || '本週期已達標且進入後續自動管理流程的任務數量' }}</div>
+                            <div class="mt-2 text-[11px] leading-5 text-slate-400">{{ dashData.personal_review_pipeline_hint || '已達標並由系統持續追蹤的任務數量' }}</div>
                         </div>
-                        <div class="cyber-card p-4 flex flex-col justify-center items-center border-cyan-500/30 bg-cyan-900/10">
-                            <div class="text-xs text-cyan-300 mb-1">目前實盤載入策略</div>
-                            <div class="text-3xl text-cyan-300 cyber-num">{{ dashData.personal_runtime_portfolio_count || 0 }}</div>
+                        <div class="cyber-card p-4 flex flex-col justify-center items-center text-center">
+                            <div class="text-xs text-white mb-1">目前實盤載入策略</div>
+                            <div class="text-3xl text-white cyber-num">{{ dashData.personal_runtime_portfolio_count || 0 }}</div>
                             <div class="mt-2 text-[11px] leading-5 text-slate-400">{{ formatDate(dashData.personal_runtime_portfolio_updated_at) }}</div>
+                            <div v-if="dashData.personal_runtime_portfolio_stale" class="mt-1 text-[11px] text-amber-400">超過 10 分鐘未同步</div>
                         </div>
-                        <div class="cyber-card p-4 flex flex-col justify-center items-center bg-emerald-900/20 border-emerald-500/30">
-                            <div class="text-xs text-emerald-400 font-bold mb-1">{{ dashData.global_live_strategies_reviewed_label || '全網審核上線策略' }}</div>
-                            <div class="text-3xl text-emerald-400 font-bold cyber-num">{{ dashData.global_strategies_active || 0 }}</div>
+                        <div class="cyber-card p-4 flex flex-col justify-center items-center text-center">
+                            <div class="text-xs text-white mb-1">{{ dashData.global_live_strategies_reviewed_label || '全網審核上線策略' }}</div>
+                            <div class="text-3xl text-white cyber-num">{{ dashData.global_strategies_active || 0 }}</div>
                         </div>
-                        <div class="cyber-card p-4 flex flex-col justify-center items-center border-amber-500/30 bg-amber-900/10 text-center">
-                            <div class="text-xs text-amber-300 font-bold mb-1">全域已上線策略</div>
-                            <div class="text-3xl text-amber-300 font-bold cyber-num">{{ dashData.global_runtime_portfolio_count || 0 }}</div>
+                        <div class="cyber-card p-4 flex flex-col justify-center items-center text-center">
+                            <div class="text-xs text-white mb-1">全域已上線策略</div>
+                            <div class="text-3xl text-white cyber-num">{{ dashData.global_runtime_portfolio_count || 0 }}</div>
                             <div class="mt-2 text-[11px] leading-5 text-slate-400">最近系統自動更新時間</div>
                             <div class="text-[11px] leading-5 text-slate-300">{{ formatDate(dashData.global_runtime_portfolio_updated_at) }}</div>
+                            <div v-if="dashData.global_runtime_portfolio_stale" class="mt-1 text-[11px] text-amber-400">超過 10 分鐘未同步</div>
+                            <div v-if="dashData.runtime_sync && dashData.runtime_sync.global_active_strategy_mismatch" class="mt-1 text-[11px] text-red-400">網站上線數與 runtime 載入數不一致</div>
                         </div>
                     </div>
 
@@ -344,9 +372,12 @@
                             <div class="flex items-center justify-between gap-3">
                                 <div>
                                     <h3 class="text-lg font-bold text-white">目前實盤載入策略</h3>
-                                    <div class="text-xs text-slate-400 mt-1">由本機實盤程式每次 Holy Grail 熱更新成功後同步。</div>
+                                    <div class="text-xs text-slate-400 mt-1">由本機實盤程式同步中的最新實盤策略。</div>
                                 </div>
-                                <div class="text-xs text-slate-400">{{ formatDate(dashData.personal_runtime_portfolio_updated_at) }}</div>
+                                <div class="flex flex-wrap items-center justify-end gap-2 text-xs">
+                                    <span v-if="dashData.personal_runtime_portfolio_stale" class="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-amber-300">超過 10 分鐘未更新</span>
+                                    <span class="text-slate-400">{{ formatDate(dashData.personal_runtime_portfolio_updated_at) }}</span>
+                                </div>
                             </div>
                             <div class="space-y-3">
                                 <div v-for="item in dashData.personal_runtime_portfolio_items || []" :key="`personal-runtime-${item.strategy_key || item.rank}`" class="rounded-xl border border-white/10 bg-black/30 p-4">
@@ -371,9 +402,13 @@
                             <div class="flex items-center justify-between gap-3">
                                 <div>
                                     <h3 class="text-lg font-bold text-white">全域已上線策略</h3>
-                                    <div class="text-xs text-slate-400 mt-1">中央 Holy Grail 最新發布的全域 Top 組合。</div>
+                                    <div class="text-xs text-slate-400 mt-1">目前全站最新發布的全域策略組合。</div>
                                 </div>
-                                <div class="text-xs text-slate-400">{{ formatDate(dashData.global_runtime_portfolio_updated_at) }}</div>
+                                <div class="flex flex-wrap items-center justify-end gap-2 text-xs">
+                                    <span v-if="dashData.runtime_sync && dashData.runtime_sync.global_active_strategy_mismatch" class="rounded-full border border-red-500/40 bg-red-500/10 px-2 py-1 text-red-300">數量待核對</span>
+                                    <span v-if="dashData.global_runtime_portfolio_stale" class="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-amber-300">超過 10 分鐘未更新</span>
+                                    <span class="text-slate-400">{{ formatDate(dashData.global_runtime_portfolio_updated_at) }}</span>
+                                </div>
                             </div>
                             <div class="space-y-3">
                                 <div v-for="item in dashData.global_runtime_portfolio_items || []" :key="`global-runtime-${item.strategy_key || item.rank}`" class="rounded-xl border border-white/10 bg-black/30 p-4">
@@ -458,7 +493,7 @@
                     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
                         <div>
                             <h3 class="text-xl font-bold text-white">達標策略與評分</h3>
-                            <div class="text-xs text-slate-400 mt-1">已達標與進入後續自動管理的任務會預設顯示在前；舊的未達標與異常任務會收進歷史區。</div>
+                            <div class="text-xs text-slate-400 mt-1">已達標並由系統持續追蹤的任務會優先顯示；未達標或異常結果可在歷史紀錄查看。</div>
                         </div>
                         <div class="flex gap-2 overflow-x-auto pb-1">
                             <button @click="setRatingView('qualified')" :class="ratingView === 'qualified' ? 'bg-white/15 text-white border-white/20' : 'text-slate-400 border-white/10'" class="px-3 py-1.5 rounded-lg border text-sm whitespace-nowrap transition-colors">
@@ -557,20 +592,32 @@
                     </div>
 
                 <div v-if="currentTab === 'leaderboard'" class="cyber-card p-4 sm:p-6 animate-fade-in space-y-4">
-                    <div>
+                    <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                         <h3 class="text-xl font-bold text-white">排行榜 ▪ 3月</h3>
-                        <div class="text-xs text-slate-400 mt-1">展示算力貢獻、積分收益、最高分與掛機時長四種排行。</div>
+                        <div class="text-xs text-slate-400">展示算力貢獻、積分收益、最高分、挖礦總時長與個人達標策略，資料會隨最新統計自動更新。</div>
                     </div>
-                    <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
-                        <div v-for="section in leaderboardSections" :key="section.key" class="rounded-xl border border-white/10 bg-black/20 p-4">
-                            <div class="flex items-center justify-between gap-3 mb-3">
-                                <div>
-                                    <div class="text-sm text-white font-semibold">{{ section.title }}</div>
-                                    <div class="text-xs text-slate-400 mt-1">{{ section.subtitle }}</div>
-                                </div>
-                                <div class="text-xs text-slate-500">{{ section.unit }}</div>
+                    <div class="overflow-x-auto pb-1">
+                        <div class="flex min-w-max gap-2">
+                            <button
+                                v-for="section in leaderboardSections"
+                                :key="`tab-${section.key}`"
+                                @click="activeLeaderboardKey = section.key"
+                                :class="activeLeaderboardKey === section.key ? 'bg-white/15 text-white border-white/20' : 'text-slate-400 border-white/10'"
+                                class="px-3 py-1.5 rounded-lg border text-sm whitespace-nowrap transition-colors"
+                            >
+                                {{ section.title }}
+                            </button>
+                        </div>
+                    </div>
+                    <div class="rounded-xl border border-white/10 bg-black/20 p-4">
+                        <div class="flex items-center justify-between gap-3 mb-3">
+                            <div>
+                                <div class="text-sm text-white font-semibold">{{ activeLeaderboardSection.title }}</div>
+                                <div class="text-xs text-slate-400 mt-1">{{ activeLeaderboardSection.subtitle }}</div>
                             </div>
-                            <div class="hidden sm:block overflow-x-auto">
+                            <div class="text-xs text-slate-500">{{ activeLeaderboardSection.unit }}</div>
+                        </div>
+                        <div class="hidden sm:block overflow-x-auto">
                                 <table class="w-full text-left border-collapse min-w-[420px]">
                                     <thead>
                                         <tr class="border-b border-white/10 text-gray-400 text-sm">
@@ -580,19 +627,19 @@
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        <tr v-for="(item, idx) in section.rows" :key="`${section.key}-${idx}`" class="border-b border-white/5 hover:bg-white/5">
+                                        <tr v-for="(item, idx) in activeLeaderboardSection.rows" :key="`${activeLeaderboardSection.key}-${idx}`" class="border-b border-white/5 hover:bg-white/5">
                                             <td class="py-3 px-4 text-amber-400 cyber-num text-lg">#{{ idx + 1 }}</td>
                                             <td class="py-3 px-4 text-gray-200">{{ item.nickname || item.username }}</td>
-                                            <td class="py-3 px-4 text-right text-emerald-400 cyber-num text-[15px]">{{ formatLeaderboardValue(section.key, item) }}</td>
+                                            <td class="py-3 px-4 text-right text-emerald-400 cyber-num text-[15px]">{{ formatLeaderboardValue(activeLeaderboardSection.key, item) }}</td>
                                         </tr>
-                                        <tr v-if="!section.rows || section.rows.length === 0">
+                                        <tr v-if="!activeLeaderboardSection.rows || activeLeaderboardSection.rows.length === 0">
                                             <td colspan="3" class="py-8 px-4 text-center text-sm text-slate-500">目前尚無排行資料</td>
                                         </tr>
                                     </tbody>
                                 </table>
                             </div>
                             <div class="sm:hidden space-y-2">
-                                <div v-for="(item, idx) in section.rows" :key="`mobile-${section.key}-${idx}`" class="rounded-lg border border-white/10 bg-black/30 px-3 py-3">
+                                <div v-for="(item, idx) in activeLeaderboardSection.rows" :key="`mobile-${activeLeaderboardSection.key}-${idx}`" class="rounded-lg border border-white/10 bg-black/30 px-3 py-3">
                                     <div class="flex items-center justify-between gap-3">
                                         <div>
                                             <div class="text-xs text-slate-400">排名</div>
@@ -600,16 +647,15 @@
                                         </div>
                                         <div class="text-right">
                                             <div class="text-xs text-slate-400">數值</div>
-                                            <div class="text-sm text-emerald-400 font-semibold cyber-num">{{ formatLeaderboardValue(section.key, item) }}</div>
+                                            <div class="text-sm text-emerald-400 font-semibold cyber-num">{{ formatLeaderboardValue(activeLeaderboardSection.key, item) }}</div>
                                         </div>
                                     </div>
                                     <div class="mt-2 text-sm text-gray-200">{{ item.nickname || item.username }}</div>
                                 </div>
-                                <div v-if="!section.rows || section.rows.length === 0" class="rounded-lg border border-dashed border-white/10 px-3 py-6 text-center text-sm text-slate-500">
+                                <div v-if="!activeLeaderboardSection.rows || activeLeaderboardSection.rows.length === 0" class="rounded-lg border border-dashed border-white/10 px-3 py-6 text-center text-sm text-slate-500">
                                     目前尚無排行資料
                                 </div>
                             </div>
-                        </div>
                     </div>
                 </div>
 
@@ -679,12 +725,137 @@
                         </div>
 
                         <div v-if="adminSubTab === 'livestrats'" class="space-y-4">
-                            <div class="text-emerald-400 font-bold mb-2 flex justify-between items-center">
-                                <span>實盤 API 運作正常，目前庫內共有 {{ adminStrats.length }} 組已過審策略待命下單</span>
-                                <button @click="loadAdminData" class="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-white text-xs rounded border border-slate-600">↻ 重新載入</button>
+                            <div class="grid grid-cols-1 xl:grid-cols-3 gap-3">
+                                <div class="rounded-xl border border-white/10 bg-black/30 p-4">
+                                    <div class="text-xs text-slate-400">網站已上線策略</div>
+                                    <div class="mt-2 text-2xl text-white cyber-num">{{ adminStratTotal }}</div>
+                                    <div class="mt-2 text-[11px] text-slate-400">目前頁面 {{ adminStrats.length }} 筆，分頁大小 {{ adminStratPageSize }}</div>
+                                </div>
+                                <div class="rounded-xl border border-white/10 bg-black/30 p-4">
+                                    <div class="text-xs text-slate-400">全域 runtime 載入</div>
+                                    <div class="mt-2 text-2xl text-white cyber-num">{{ adminDiagnostics.runtime_sync?.global?.strategy_count || 0 }}</div>
+                                    <div class="mt-2 text-[11px] text-slate-400">最後成功同步：{{ formatDate(adminDiagnostics.runtime_sync?.global?.last_success_at) }}</div>
+                                    <div v-if="adminDiagnostics.runtime_sync?.global_active_strategy_mismatch" class="mt-2 text-[11px] text-red-400">網站上線數與 runtime 載入數不一致</div>
+                                </div>
+                                <div class="rounded-xl border border-white/10 bg-black/30 p-4">
+                                    <div class="text-xs text-slate-400">個人 runtime 載入</div>
+                                    <div class="mt-2 text-2xl text-white cyber-num">{{ adminDiagnostics.runtime_sync?.personal?.strategy_count || 0 }}</div>
+                                    <div class="mt-2 text-[11px] text-slate-400">最後成功同步：{{ formatDate(adminDiagnostics.runtime_sync?.personal?.last_success_at) }}</div>
+                                    <div v-if="adminDiagnostics.runtime_sync?.personal?.stale" class="mt-2 text-[11px] text-amber-400">個人 runtime 超過 10 分鐘未更新</div>
+                                </div>
                             </div>
-                            <div class="bg-black/50 border border-white/10 rounded-md p-4 max-h-[600px] overflow-y-auto">
-                                <pre class="text-xs text-emerald-300 whitespace-pre-wrap font-mono">{{ JSON.stringify(adminStrats, null, 2) }}</pre>
+
+                            <div class="rounded-xl border border-white/10 bg-black/30 p-4 space-y-3">
+                                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
+                                    <input v-model.trim="adminStratFilters.q" type="text" placeholder="搜尋策略 / 池 / external_key" class="cyber-input w-full px-3 py-2 rounded text-sm">
+                                    <input v-model.trim="adminStratFilters.username" type="text" placeholder="使用者" class="cyber-input w-full px-3 py-2 rounded text-sm">
+                                    <input v-model.trim="adminStratFilters.symbol" type="text" placeholder="交易對" class="cyber-input w-full px-3 py-2 rounded text-sm">
+                                    <select v-model="adminStratFilters.direction" class="cyber-input w-full px-3 py-2 rounded text-sm">
+                                        <option value="">全部方向</option>
+                                        <option value="long">LONG</option>
+                                        <option value="short">SHORT</option>
+                                    </select>
+                                    <select v-model.number="adminStratPageSize" class="cyber-input w-full px-3 py-2 rounded text-sm">
+                                        <option :value="25">每頁 25 筆</option>
+                                        <option :value="50">每頁 50 筆</option>
+                                        <option :value="100">每頁 100 筆</option>
+                                    </select>
+                                </div>
+                                <div class="flex flex-wrap items-center gap-2">
+                                    <button @click="refreshAdminStrategies(true)" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-sm font-bold">套用篩選</button>
+                                    <button @click="resetAdminStrategyFilters" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded border border-slate-600 text-sm">清除條件</button>
+                                    <button @click="loadAdminData" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded border border-slate-600 text-sm">重新載入</button>
+                                    <button @click="downloadAdminErrors" class="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded text-sm font-bold">一鍵查看錯誤</button>
+                                </div>
+                                <div class="text-xs text-slate-400">
+                                    第 {{ adminStratPage }} 頁，共 {{ adminStratTotalPages }} 頁，總計 {{ adminStratTotal }} 筆。全域 runtime 最後更新：{{ formatDate(adminStratSummary.global_runtime?.updated_at) }}
+                                </div>
+                            </div>
+
+                            <div class="hidden lg:block overflow-x-auto rounded-xl border border-white/10 bg-black/30">
+                                <table class="w-full text-left border-collapse min-w-[1280px] text-sm">
+                                    <thead>
+                                        <tr class="border-b border-white/10 text-slate-400">
+                                            <th class="px-4 py-3 font-normal">strategy_id</th>
+                                            <th class="px-4 py-3 font-normal">owner</th>
+                                            <th class="px-4 py-3 font-normal">pool / symbol</th>
+                                            <th class="px-4 py-3 font-normal">方向 / 週期</th>
+                                            <th class="px-4 py-3 font-normal text-right">score</th>
+                                            <th class="px-4 py-3 font-normal">external_key</th>
+                                            <th class="px-4 py-3 font-normal">runtime</th>
+                                            <th class="px-4 py-3 font-normal">建立時間</th>
+                                            <th class="px-4 py-3 font-normal">詳細</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <tr v-for="item in adminStrats" :key="`admin-strat-${item.strategy_id}`" class="border-b border-white/5 align-top">
+                                            <td class="px-4 py-3 text-white cyber-num">#{{ item.strategy_id }}</td>
+                                            <td class="px-4 py-3 text-slate-200">{{ item.nickname || item.username || '-' }}</td>
+                                            <td class="px-4 py-3 text-slate-200">
+                                                <div>{{ item.pool_name || '-' }}</div>
+                                                <div class="mt-1 text-xs text-slate-500">{{ item.symbol || '-' }}</div>
+                                            </td>
+                                            <td class="px-4 py-3 text-slate-200">
+                                                <div>{{ (item.direction || 'long').toUpperCase() }}</div>
+                                                <div class="mt-1 text-xs text-slate-500">{{ item.timeframe_min || item.params?.interval || '-' }}</div>
+                                            </td>
+                                            <td class="px-4 py-3 text-right text-emerald-400 cyber-num">{{ Number(item.score || item.metrics?.sharpe || 0).toFixed(2) }}</td>
+                                            <td class="px-4 py-3 text-xs text-slate-300 font-mono break-all">{{ item.external_key || '-' }}</td>
+                                            <td class="px-4 py-3">
+                                                <div :class="item.in_runtime ? 'text-emerald-400' : 'text-slate-500'">{{ item.in_runtime ? '已載入' : '未載入' }}</div>
+                                                <div class="mt-1 text-xs text-slate-500">{{ (item.runtime_scopes || []).join(', ') || '-' }}</div>
+                                                <div class="mt-1 text-xs text-slate-500">{{ formatDate(item.runtime_updated_at) }}</div>
+                                            </td>
+                                            <td class="px-4 py-3 text-xs text-slate-400">{{ formatDate(item.created_at) }}</td>
+                                            <td class="px-4 py-3">
+                                                <details class="rounded border border-white/10 bg-black/20 px-3 py-2">
+                                                    <summary class="cursor-pointer text-xs text-slate-300">查看 JSON</summary>
+                                                    <pre class="mt-2 text-[11px] text-emerald-300 whitespace-pre-wrap font-mono">{{ JSON.stringify(item.params || {}, null, 2) }}</pre>
+                                                </details>
+                                            </td>
+                                        </tr>
+                                        <tr v-if="adminStrats.length === 0">
+                                            <td colspan="9" class="px-4 py-10 text-center text-sm text-slate-500">目前沒有符合條件的實盤策略資料。</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <div class="lg:hidden space-y-3">
+                                <div v-for="item in adminStrats" :key="`admin-strat-mobile-${item.strategy_id}`" class="rounded-xl border border-white/10 bg-black/30 p-4 space-y-3">
+                                    <div class="flex items-start justify-between gap-3">
+                                        <div>
+                                            <div class="text-xs text-slate-400">strategy_id</div>
+                                            <div class="text-base text-white cyber-num">#{{ item.strategy_id }}</div>
+                                        </div>
+                                        <div class="text-right">
+                                            <div class="text-xs text-slate-400">score</div>
+                                            <div class="text-base text-emerald-400 cyber-num">{{ Number(item.score || item.metrics?.sharpe || 0).toFixed(2) }}</div>
+                                        </div>
+                                    </div>
+                                    <div class="text-sm text-white">{{ item.nickname || item.username || '-' }}</div>
+                                    <div class="text-xs text-slate-400">{{ item.pool_name || '-' }} · {{ item.symbol || '-' }}</div>
+                                    <div class="text-xs text-slate-400">{{ (item.direction || 'long').toUpperCase() }} · {{ item.timeframe_min || item.params?.interval || '-' }}</div>
+                                    <div class="text-xs" :class="item.in_runtime ? 'text-emerald-400' : 'text-slate-500'">
+                                        {{ item.in_runtime ? `已載入 (${(item.runtime_scopes || []).join(', ')})` : '尚未載入 runtime' }}
+                                    </div>
+                                    <div class="text-[11px] text-slate-500">建立時間：{{ formatDate(item.created_at) }}</div>
+                                    <details class="rounded border border-white/10 bg-black/20 px-3 py-2">
+                                        <summary class="cursor-pointer text-xs text-slate-300">查看 JSON</summary>
+                                        <pre class="mt-2 text-[11px] text-emerald-300 whitespace-pre-wrap font-mono">{{ JSON.stringify(item.params || {}, null, 2) }}</pre>
+                                    </details>
+                                </div>
+                                <div v-if="adminStrats.length === 0" class="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-sm text-slate-500">
+                                    目前沒有符合條件的實盤策略資料。
+                                </div>
+                            </div>
+
+                            <div class="flex items-center justify-between gap-3">
+                                <div class="text-sm text-slate-400">第 <span class="text-white">{{ adminStratPage }}</span> 頁，共 <span class="text-white">{{ adminStratTotalPages }}</span> 頁</div>
+                                <div class="flex gap-2">
+                                    <button @click="changeAdminStratPage(-1)" :disabled="adminStratPage <= 1" class="px-3 py-1.5 text-sm border border-white/20 rounded hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed text-slate-300 transition-colors">上一頁</button>
+                                    <button @click="changeAdminStratPage(1)" :disabled="adminStratPage >= adminStratTotalPages" class="px-3 py-1.5 text-sm border border-white/20 rounded hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed text-slate-300 transition-colors">下一頁</button>
+                                </div>
                             </div>
                         </div>
 
@@ -717,10 +888,11 @@
                 <div class="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-red-500"></div>
             </div>
         </main>
+        </template>
     </div>
 
     <script>
-        const { createApp, ref, reactive, onMounted, onUnmounted, computed } = Vue;
+        const { createApp, ref, reactive, onMounted, onUnmounted, computed, watch } = Vue;
         // 註：這行維持你原本的設定，確保你本地 Live Server 能抓到資料
         const API_BASE = '/sheep123'; 
 
@@ -733,6 +905,8 @@
                 const errorMsg = ref('');
                 const pingMs = ref(0);
                 let pollTimer = null;
+                let livePollTimer = null;
+                let devtoolsTimer = null;
                 
                 // 新增 Toast 狀態管理
                 const toastMsg = ref('');
@@ -760,14 +934,31 @@
                     personal_runtime_portfolio_count: 0,
                     personal_runtime_portfolio_updated_at: '',
                     personal_runtime_portfolio_items: [],
+                    personal_runtime_portfolio_stale: false,
+                    personal_runtime_portfolio_age_seconds: 0,
                     global_runtime_portfolio_count: 0,
                     global_runtime_portfolio_updated_at: '',
                     global_runtime_portfolio_items: [],
+                    global_runtime_portfolio_stale: false,
+                    global_runtime_portfolio_age_seconds: 0,
+                    runtime_sync: null,
                     payouts_unpaid: 0,
                     strategies: [],
                     payouts: [],
                     min_sharpe: 0.6
                 });
+                const manifest = reactive({
+                    worker_download_url: '',
+                    worker_download_sha256: '',
+                    worker_bundle_kind: 'onedir',
+                });
+                const liveVersions = reactive({
+                    dashboard_version: '',
+                    leaderboard_version: '',
+                    runtime_version: '',
+                });
+                const devtoolsTripped = ref(false);
+                const activeLeaderboardKey = ref('combos');
                 
                 // 專屬 worker Token 狀態管理
                 const workerTokenKey = 'sheep_worker_token';
@@ -819,6 +1010,8 @@
                     token: '',
                     targetX: 0,
                     currentX: 0,
+                    phase: 'idle',
+                    message: '',
                     isDragging: false,
                     success: false,
                     error: false,
@@ -826,9 +1019,30 @@
                     tracks: [],
                     startTime: 0
                 });
+                const showCaptchaPanel = computed(() => !user.value && authForm.username.trim().length > 0 && authForm.password.trim().length > 0);
+                const captchaCanSubmit = computed(() => captchaState.phase === 'verified');
+
+                const clearCaptchaState = () => {
+                    captchaState.token = '';
+                    captchaState.targetX = 0;
+                    captchaState.currentX = 0;
+                    captchaState.phase = 'idle';
+                    captchaState.message = '';
+                    captchaState.success = false;
+                    captchaState.error = false;
+                    captchaState.isDragging = false;
+                    captchaState.tracks = [];
+                    captchaState.startTime = 0;
+                };
 
                 const loadCaptcha = async () => {
+                    if (!showCaptchaPanel.value || devtoolsTripped.value) {
+                        clearCaptchaState();
+                        return;
+                    }
                     try {
+                        captchaState.phase = 'loading';
+                        captchaState.message = '';
                         const res = await fetchApi('/auth/captcha');
                         captchaState.token = res.token;
                         captchaState.targetX = res.target_x;
@@ -836,24 +1050,23 @@
                         captchaState.success = false;
                         captchaState.error = false;
                         captchaState.tracks = [];
+                        captchaState.phase = 'ready';
                     } catch (e) {
                         console.error('加載驗證碼失敗', e);
-                        // [專家級修復] 驗證碼加載失敗時給予明確提示，避免使用者卡在無法登入的畫面
-                        showToast(`加載安全驗證失敗：${e.message}`, 'error', 5000);
+                        clearCaptchaState();
+                        captchaState.phase = 'failed';
+                        captchaState.message = e.message || '目前無法載入安全驗證，請稍後再試。';
+                        showToast(`加載安全驗證失敗：${captchaState.message}`, 'error', 5000);
                     }
                 };
 
                 const resetCaptcha = () => {
-                    captchaState.currentX = 0;
-                    captchaState.success = false;
-                    captchaState.error = false;
-                    captchaState.isDragging = false;
-                    captchaState.tracks = [];
-                    loadCaptcha();
+                    clearCaptchaState();
+                    if (showCaptchaPanel.value) loadCaptcha();
                 };
 
                 const onSliderDown = (e) => {
-                    if (captchaState.success) return;
+                    if (captchaState.phase === 'verified' || captchaState.phase !== 'ready') return;
                     captchaState.isDragging = true;
                     captchaState.error = false;
                     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
@@ -895,8 +1108,10 @@
                     // 初步前端驗證，相差小於 5 像素即允許提交
                     if (Math.abs(captchaState.currentX - captchaState.targetX) <= 5) {
                         captchaState.success = true;
+                        captchaState.phase = 'verified';
                     } else {
                         captchaState.error = true;
+                        captchaState.phase = 'ready';
                         showToast('驗證失敗，請重試', 'error', 2000);
                         setTimeout(() => {
                             resetCaptcha();
@@ -904,7 +1119,7 @@
                     }
                 };
                 const tasksData = reactive({ tasks: [], run_enabled: false, pending_task_count: 0, active_cycle_id: 0 });
-                const leaderboard = reactive({ combos: [], score: [], time: [], points: [] });
+                const leaderboard = reactive({ combos: [], score: [], time: [], points: [], qualified_strategies: [] });
 
                 // 管理員專屬狀態
                 const adminSubTab = ref('thresholds');
@@ -912,6 +1127,13 @@
                 const adminPools = ref([]);
                 const adminStrats = ref([]);
                 const adminError = ref('');
+                const adminDiagnostics = reactive({ runtime_sync: {} });
+                const adminStratSummary = reactive({ global_runtime: {}, personal_runtime: {} });
+                const adminStratFilters = reactive({ q: '', username: '', symbol: '', direction: '' });
+                const adminStratPage = ref(1);
+                const adminStratPageSize = ref(50);
+                const adminStratTotal = ref(0);
+                const adminStratHasNext = ref(false);
                 const catalogImportText = ref('');
                 const catalogImportResult = ref(null);
 
@@ -923,15 +1145,93 @@
                     candidate_keep_top_n: Number(data.candidate_keep_top_n ?? data.keep_top_n ?? 30)
                 });
 
+                const loadAdminStrategies = async ({ resetPage = false } = {}) => {
+                    if (!user.value || user.value.role !== 'admin') return;
+                    if (resetPage) adminStratPage.value = 1;
+                    const params = new URLSearchParams({
+                        page: String(adminStratPage.value || 1),
+                        page_size: String(adminStratPageSize.value || 50),
+                    });
+                    if (adminStratFilters.q) params.set('q', adminStratFilters.q);
+                    if (adminStratFilters.username) params.set('username', adminStratFilters.username);
+                    if (adminStratFilters.symbol) params.set('symbol', adminStratFilters.symbol);
+                    if (adminStratFilters.direction) params.set('direction', adminStratFilters.direction);
+
+                    const res = await fetchApi(`/admin/strategies?${params.toString()}`);
+                    adminStrats.value = res.items || res.strategies || [];
+                    adminStratTotal.value = Number(res.total || 0);
+                    adminStratHasNext.value = !!res.has_next;
+                    Object.assign(adminStratSummary, res.summary || { global_runtime: {}, personal_runtime: {} });
+                    if (res.ok === false) {
+                        throw new Error(res.msg || '管理策略資料讀取失敗');
+                    }
+                };
+
+                const loadAdminDiagnostics = async () => {
+                    if (!user.value || user.value.role !== 'admin') return;
+                    const res = await fetchApi('/admin/system_diagnostics');
+                    Object.assign(adminDiagnostics, res || { runtime_sync: {} });
+                };
+
+                const refreshAdminStrategies = async (resetPage = false) => {
+                    try {
+                        adminError.value = '';
+                        await loadAdminStrategies({ resetPage });
+                    } catch (e) {
+                        adminError.value = `管理資料同步失敗: ${e.message}`;
+                        showToast(`管理員策略載入失敗: ${e.message}`, 'error', 4000);
+                    }
+                };
+
+                const resetAdminStrategyFilters = async () => {
+                    adminStratFilters.q = '';
+                    adminStratFilters.username = '';
+                    adminStratFilters.symbol = '';
+                    adminStratFilters.direction = '';
+                    adminStratPageSize.value = 50;
+                    adminStratPage.value = 1;
+                    await refreshAdminStrategies(true);
+                };
+
+                const changeAdminStratPage = async (delta) => {
+                    const nextPage = adminStratPage.value + delta;
+                    const totalPages = Math.max(1, Math.ceil(adminStratTotal.value / Math.max(1, adminStratPageSize.value)));
+                    if (nextPage < 1 || nextPage > totalPages) return;
+                    adminStratPage.value = nextPage;
+                    await refreshAdminStrategies(false);
+                };
+
+                const downloadAdminErrors = async () => {
+                    try {
+                        const token = localStorage.getItem('sheep_token');
+                        const headers = token ? { Authorization: `Bearer ${token}` } : {};
+                        const res = await fetch(`${API_BASE}/admin/errors/export.txt`, { headers });
+                        if (!res.ok) {
+                            throw new Error(`下載失敗 (${res.status})`);
+                        }
+                        const blob = await res.blob();
+                        const url = URL.createObjectURL(blob);
+                        const anchor = document.createElement('a');
+                        anchor.href = url;
+                        anchor.download = `sheep-errors-${new Date().toISOString().replace(/[:.]/g, '-')}.txt`;
+                        document.body.appendChild(anchor);
+                        anchor.click();
+                        anchor.remove();
+                        URL.revokeObjectURL(url);
+                        showToast('錯誤報告已開始下載', 'success', 3000);
+                    } catch (e) {
+                        showToast(`下載錯誤報告失敗: ${e.message}`, 'error', 4000);
+                    }
+                };
+
                 const loadAdminData = async () => {
                     if (!user.value || user.value.role !== 'admin') return;
                     try {
                         showToast('正在獲取管理員資料...', 'info', 1000);
                         adminError.value = '';
-                        const [thRes, pRes, sRes] = await Promise.all([
+                        const [thRes, pRes] = await Promise.all([
                             fetchApi('/settings/thresholds'),
                             fetchApi('/admin/factor_pools'),
-                            fetchApi('/admin/strategies')
                         ]);
                         Object.assign(adminThresholds, normalizeAdminThresholds(thRes));
                         adminPools.value = (pRes.pools || []).map(p => ({
@@ -942,7 +1242,10 @@
                             _grid_spec_str: JSON.stringify(p.grid_spec || p.grid_spec_json || {}, null, 2),
                             _risk_spec_str: JSON.stringify(p.risk_spec || p.risk_spec_json || {}, null, 2)
                         }));
-                        adminStrats.value = sRes.strategies || [];
+                        await Promise.all([
+                            loadAdminStrategies({ resetPage: false }),
+                            loadAdminDiagnostics(),
+                        ]);
                     } catch(e) {
                         adminError.value = `管理資料同步失敗: ${e.message}`;
                         showToast(`管理員資料載入失敗: ${e.message}`, 'error', 4000);
@@ -1037,7 +1340,8 @@
                     if (t && t.review_status) return String(t.review_status);
                     try {
                         const p = JSON.parse(t.progress_json || '{}');
-                        return p.review_status || p.oos_status || (p.best_any_passed ? 'auto_managed' : 'not_eligible');
+                        const status = p.review_status || p.oos_status || (p.best_any_passed ? 'auto_managed' : 'not_eligible');
+                        return status === 'passed' ? 'auto_managed' : status;
                     } catch (e) {
                         return 'not_eligible';
                     }
@@ -1057,7 +1361,6 @@
                         auto_managed: { label: '自動管理中', className: 'text-[13px] text-slate-300' },
                         queued: { label: '排隊中', className: 'text-[13px] text-slate-400' },
                         running: { label: '用戶端運算中', className: 'text-[13px] text-amber-400' },
-                        passed: { label: '已通過', className: 'text-[13px] text-emerald-400' },
                         rejected: { label: '未達標', className: 'text-[13px] text-red-400' },
                         error: { label: '審核異常', className: 'text-[13px] text-red-400' },
                         not_eligible: { label: '未達標', className: 'text-[13px] text-red-400/70' }
@@ -1100,7 +1403,7 @@
                 const qualifiedTasks = computed(() => {
                     return completedTasks.value.filter((t) => {
                         const status = getReviewStatus(t);
-                        return Boolean(t?.best_any_passed) || ['auto_managed', 'queued', 'running', 'passed'].includes(status);
+                        return Boolean(t?.best_any_passed) || ['auto_managed', 'queued', 'running'].includes(status);
                     });
                 });
                 const rejectedArchiveTasks = computed(() => {
@@ -1141,20 +1444,42 @@
                     { key: 'points', title: '積分收益', subtitle: '依已發放積分總額排序', unit: 'USDT', rows: leaderboard.points || [] },
                     { key: 'score', title: '最高分', subtitle: '依單一策略最佳分數排序', unit: '分', rows: leaderboard.score || [] },
                     { key: 'time', title: '挖礦總時長', subtitle: '依累積掛機秒數排序', unit: '小時', rows: leaderboard.time || [] },
+                    { key: 'qualified_strategies', title: '個人達標策略', subtitle: '依目前已審核上線策略數排序', unit: '組', rows: leaderboard.qualified_strategies || [] },
                 ]));
+                const activeLeaderboardSection = computed(() => {
+                    return leaderboardSections.value.find(section => section.key === activeLeaderboardKey.value) || leaderboardSections.value[0] || { key: '', title: '', subtitle: '', unit: '', rows: [] };
+                });
                 const formatLeaderboardValue = (key, item) => {
                     if (key === 'combos') return Number(item?.total_done || 0).toLocaleString();
                     if (key === 'points') return Number(item?.total_usdt || 0).toFixed(2);
                     if (key === 'score') return Number(item?.max_score || 0).toFixed(2);
                     if (key === 'time') return `${(Number(item?.total_seconds || 0) / 3600).toFixed(1)}h`;
+                    if (key === 'qualified_strategies') return Number(item?.active_strategy_count || 0).toLocaleString();
                     return '-';
                 };
+                const adminStratTotalPages = computed(() => {
+                    return Math.max(1, Math.ceil(adminStratTotal.value / Math.max(1, adminStratPageSize.value)));
+                });
 
                 // 時間格式化工具
                 const formatDate = (isoStr) => {
                     if (!isoStr) return '-';
                     const d = new Date(isoStr);
                     return isNaN(d) ? isoStr : d.toLocaleString('zh-TW', { hour12: false });
+                };
+
+                const extractApiErrorMessage = (payload) => {
+                    if (!payload) return '';
+                    if (typeof payload === 'string') return payload;
+                    if (Array.isArray(payload)) {
+                        return payload.map(item => extractApiErrorMessage(item)).filter(Boolean).join(', ');
+                    }
+                    if (typeof payload === 'object') {
+                        if (payload.message) return extractApiErrorMessage(payload.message);
+                        if (payload.detail) return extractApiErrorMessage(payload.detail);
+                        if (payload.code && payload.message) return `${payload.code}: ${payload.message}`;
+                    }
+                    return String(payload);
                 };
 
                 const fetchApi = async (endpoint, options = {}) => {
@@ -1182,8 +1507,7 @@
                             let errorText = await res.text();
                             try {
                                 const errObj = JSON.parse(errorText);
-                                // 優先取用友善的錯誤訊息欄位
-                                errorText = errObj.detail || errObj.message || JSON.stringify(errObj);
+                                errorText = extractApiErrorMessage(errObj) || JSON.stringify(errObj);
                             } catch(e) {}
                             throw new Error(`API 錯誤 (${res.status}): ${errorText}`);
                         }
@@ -1195,6 +1519,123 @@
                     }
                 };
 
+                const applyDashboardData = (payload = {}) => {
+                    Object.assign(dashData, payload || {});
+                    if (payload?.dashboard_version) {
+                        liveVersions.dashboard_version = payload.dashboard_version;
+                    }
+                };
+
+                const applyLeaderboardData = (payload = {}) => {
+                    const data = payload?.data || {};
+                    leaderboard.combos = data.combos || [];
+                    leaderboard.score = data.score || [];
+                    leaderboard.time = data.time || [];
+                    leaderboard.points = data.points || [];
+                    leaderboard.qualified_strategies = data.qualified_strategies || [];
+                    if (payload?.leaderboard_version) {
+                        liveVersions.leaderboard_version = payload.leaderboard_version;
+                    }
+                };
+
+                const loadManifestData = async () => {
+                    const res = await fetchApi('/manifest');
+                    Object.assign(manifest, res || {});
+                    return res;
+                };
+
+                const loadDashboardData = async () => {
+                    const res = await fetchApi('/dashboard');
+                    applyDashboardData(res || {});
+                    return res;
+                };
+
+                const loadLeaderboardData = async () => {
+                    const res = await fetchApi('/leaderboard?period_hours=720');
+                    applyLeaderboardData(res || {});
+                    return res;
+                };
+
+                const stopLiveVersionPolling = () => {
+                    if (livePollTimer) {
+                        clearTimeout(livePollTimer);
+                        livePollTimer = null;
+                    }
+                };
+
+                const pollLiveVersionOnce = async () => {
+                    if (!user.value || devtoolsTripped.value) return;
+                    try {
+                        const res = await fetchApi('/live/version');
+                        const dashboardChanged = !!liveVersions.dashboard_version && res.dashboard_version !== liveVersions.dashboard_version;
+                        const leaderboardChanged = !!liveVersions.leaderboard_version && res.leaderboard_version !== liveVersions.leaderboard_version;
+                        const runtimeChanged = !!liveVersions.runtime_version && res.runtime_version !== liveVersions.runtime_version;
+
+                        if (!liveVersions.dashboard_version) liveVersions.dashboard_version = res.dashboard_version || '';
+                        if (!liveVersions.leaderboard_version) liveVersions.leaderboard_version = res.leaderboard_version || '';
+                        if (!liveVersions.runtime_version) liveVersions.runtime_version = res.runtime_version || '';
+
+                        if (dashboardChanged || runtimeChanged) {
+                            await loadDashboardData();
+                        }
+                        if (leaderboardChanged) {
+                            await loadLeaderboardData();
+                        }
+                        if (user.value?.role === 'admin' && currentTab.value === 'admin' && (dashboardChanged || runtimeChanged)) {
+                            await Promise.allSettled([
+                                loadAdminStrategies({ resetPage: false }),
+                                loadAdminDiagnostics(),
+                            ]);
+                        }
+
+                        liveVersions.dashboard_version = res.dashboard_version || liveVersions.dashboard_version;
+                        liveVersions.leaderboard_version = res.leaderboard_version || liveVersions.leaderboard_version;
+                        liveVersions.runtime_version = res.runtime_version || liveVersions.runtime_version;
+                    } catch (e) {
+                        console.error('[live/version 輪詢失敗]', e);
+                    }
+                };
+
+                const scheduleLiveVersionPoll = () => {
+                    stopLiveVersionPolling();
+                    if (!user.value || devtoolsTripped.value) return;
+                    const delay = document.visibilityState === 'visible' ? 8000 : 30000;
+                    livePollTimer = setTimeout(async () => {
+                        await pollLiveVersionOnce();
+                        scheduleLiveVersionPoll();
+                    }, delay);
+                };
+
+                const startLiveVersionPolling = () => {
+                    scheduleLiveVersionPoll();
+                };
+
+                const tripDevtoolsLock = () => {
+                    if (devtoolsTripped.value) return;
+                    devtoolsTripped.value = true;
+                    stopLiveVersionPolling();
+                    if (pollTimer) clearInterval(pollTimer);
+                    localStorage.removeItem('sheep_token');
+                    localStorage.removeItem(workerTokenKey);
+                    localStorage.removeItem(workerTokenOwnerKey);
+                    user.value = null;
+                    userToken.value = '';
+                    authForm.username = '';
+                    authForm.password = '';
+                    tasksData.tasks = [];
+                    adminStrats.value = [];
+                    clearCaptchaState();
+                };
+
+                const checkDevtoolsOpen = () => {
+                    if (!user.value || devtoolsTripped.value) return;
+                    const widthGap = window.outerWidth - window.innerWidth;
+                    const heightGap = window.outerHeight - window.innerHeight;
+                    if (widthGap > 160 || heightGap > 160) {
+                        tripDevtoolsLock();
+                    }
+                };
+
                 const checkAuth = async () => {
                     try {
                         const storedToken = localStorage.getItem('sheep_token');
@@ -1202,9 +1643,11 @@
                         user.value = await fetchApi('/user/me');
                         await issueWorkerToken(false, false);
                         await loadAllData();
+                        startLiveVersionPolling();
                     } catch (e) { 
                         user.value = null; 
                         userToken.value = '';
+                        stopLiveVersionPolling();
                         localStorage.removeItem('sheep_token');
                         localStorage.removeItem(workerTokenKey);
                         localStorage.removeItem(workerTokenOwnerKey);
@@ -1212,45 +1655,34 @@
                             console.error('[checkAuth 錯誤] /user/me 或後續請求失敗:', e);
                             showToast(`獲取使用者資訊失敗: ${e.message}`, 'error', 5000);
                         }
-                        // 未登入狀態，載入驗證碼
-                        loadCaptcha();
+                        if (showCaptchaPanel.value) loadCaptcha();
+                        else clearCaptchaState();
                     } 
                     finally { isLoading.value = false; }
                 };
 
                 const loadAllData = async () => {
-                    const [dashRes, lbRes, tRes] = await Promise.allSettled([
-                        fetchApi('/dashboard'),
-                        fetchApi('/leaderboard?period_hours=720'),
-                        fetchApi('/tasks')
+                    const [manifestRes, dashRes, lbRes, tRes] = await Promise.allSettled([
+                        loadManifestData(),
+                        loadDashboardData(),
+                        loadLeaderboardData(),
+                        loadTasks()
                     ]);
                     const errors = [];
 
-                    if (dashRes.status === 'fulfilled') {
-                        Object.assign(dashData, dashRes.value || {});
-                    } else {
+                    if (manifestRes.status !== 'fulfilled') {
+                        console.error('Manifest 載入失敗:', manifestRes.reason);
+                        errors.push(`下載資訊: ${manifestRes.reason?.message || manifestRes.reason}`);
+                    }
+                    if (dashRes.status !== 'fulfilled') {
                         console.error('Dashboard 載入失敗:', dashRes.reason);
                         errors.push(`總覽: ${dashRes.reason?.message || dashRes.reason}`);
                     }
-
-                    if (lbRes.status === 'fulfilled') {
-                        if (lbRes.value?.data) {
-                            leaderboard.combos = lbRes.value.data.combos || [];
-                            leaderboard.score = lbRes.value.data.score || [];
-                            leaderboard.time = lbRes.value.data.time || [];
-                            leaderboard.points = lbRes.value.data.points || [];
-                        }
-                    } else {
+                    if (lbRes.status !== 'fulfilled') {
                         console.error('Leaderboard 載入失敗:', lbRes.reason);
                         errors.push(`排行榜: ${lbRes.reason?.message || lbRes.reason}`);
                     }
-
-                    if (tRes.status === 'fulfilled') {
-                        tasksData.tasks = tRes.value.tasks || [];
-                        tasksData.run_enabled = !!tRes.value.run_enabled;
-                        tasksData.pending_task_count = Number(tRes.value.pending_task_count || 0);
-                        tasksData.active_cycle_id = Number(tRes.value.active_cycle_id || 0);
-                    } else {
+                    if (tRes.status !== 'fulfilled') {
                         console.error('Tasks 載入失敗:', tRes.reason);
                         errors.push(`任務: ${tRes.reason?.message || tRes.reason}`);
                     }
@@ -1281,7 +1713,7 @@
                     showToast(' 正在驗證登入資訊...', 'info', 0); // 持續顯示直到流程結束
                     
                     try {
-                        if (!captchaState.success) {
+                        if (!captchaCanSubmit.value) {
                             throw new Error("請先完成安全滑動驗證");
                         }
 
@@ -1309,11 +1741,7 @@
                             let fullError = await res.text();
                             try { 
                                 const errData = JSON.parse(fullError);
-                                detail = errData.detail || errData.message || fullError;
-                                // 處理 FastAPI 驗證錯誤陣列
-                                if (Array.isArray(detail)) {
-                                    detail = detail.map(d => `${d.loc?.join('.')}: ${d.msg}`).join(', ');
-                                }
+                                detail = extractApiErrorMessage(errData) || fullError;
                             } catch(e){ detail = fullError; }
                             
                             if(detail === 'user_exists') throw new Error('註冊失敗：該帳號已被其他人註冊');
@@ -1322,6 +1750,11 @@
                             // [專家級修復] 針對 401 狀態碼翻譯，提供使用者友善的白話文錯誤
                             if(detail === 'bad_credentials') throw new Error('登入失敗：帳號或密碼錯誤，請重新確認');
                             if(detail === 'user_disabled') throw new Error('登入失敗：此帳號已被系統停用');
+                            if(detail.includes('captcha_unavailable')) throw new Error('安全驗證暫時無法載入，請稍後再試');
+                            if(detail.includes('captcha_expired')) throw new Error('安全驗證已過期，請重新載入後再試');
+                            if(detail.includes('captcha_mismatch')) throw new Error('滑塊位置未對準，請重新嘗試');
+                            if(detail.includes('captcha_invalid')) throw new Error('安全驗證動作異常，請重新滑動驗證');
+                            if(detail.includes('captcha_missing')) throw new Error('安全驗證資料不完整，請重新載入後再試');
                             
                             // [專家級修復] 攔截 Cloudflare 520 / 502 等伺服器離線回傳的龐大 HTML，避免擠爆畫面
                             if (fullError.includes('<html') || fullError.includes('Cloudflare')) {
@@ -1419,12 +1852,13 @@
                     userToken.value = ''; 
                     user.value = null; 
                     clearInterval(pollTimer); 
+                    stopLiveVersionPolling();
                     
                     // [專家級修復] 登出時徹底清空帳密表單，並重新載入全新的驗證碼狀態
                     // 這樣畫面會因為 authForm 變空而自動隱藏驗證碼區域，直到下一次輸入
                     authForm.username = '';
                     authForm.password = '';
-                    resetCaptcha();
+                    clearCaptchaState();
                 };
 
                 // Helpers
@@ -1618,14 +2052,45 @@
                     }
                 };
 
+                watch(
+                    () => `${authForm.username.trim()}|${authForm.password.trim()}|${isLoginMode.value}`,
+                    () => {
+                        errorMsg.value = '';
+                        if (showCaptchaPanel.value) {
+                            if (!captchaState.token || ['idle', 'failed'].includes(captchaState.phase)) {
+                                loadCaptcha();
+                            }
+                        } else {
+                            clearCaptchaState();
+                        }
+                    }
+                );
+
+                watch(adminStratPageSize, async (next, prev) => {
+                    if (next === prev || !user.value || user.value.role !== 'admin') return;
+                    adminStratPage.value = 1;
+                    await refreshAdminStrategies(true);
+                });
+
+                const handleVisibilityChange = () => {
+                    if (user.value && !devtoolsTripped.value) {
+                        scheduleLiveVersionPoll();
+                    }
+                };
+
                 onMounted(() => {
                     checkAuth();
                     pollTimer = setInterval(safePoll, 3000);
+                    devtoolsTimer = setInterval(checkDevtoolsOpen, 1500);
+                    document.addEventListener('visibilitychange', handleVisibilityChange);
                     // 啟動 1000ms 畫面更新引擎
                     tickTimer = setInterval(() => { localNow.value = Date.now(); }, 1000);
                 });
                 onUnmounted(() => { 
                     clearInterval(pollTimer); 
+                    if (devtoolsTimer) clearInterval(devtoolsTimer);
+                    stopLiveVersionPolling();
+                    document.removeEventListener('visibilitychange', handleVisibilityChange);
                     if(tickTimer) clearInterval(tickTimer);
                 });
 
@@ -1633,15 +2098,15 @@
                 return { 
                     user, isLoading, isLoginMode, currentTab, authForm, errorMsg, handleAuth, logout, 
                     userToken, copyToken, refreshWorkerToken, // 導出 Token 顯示與複製方法
-                    captchaContainer, captchaState, onSliderDown, resetCaptcha, loadCaptcha, // 導出驗證碼狀態與事件 
+                    captchaContainer, captchaState, showCaptchaPanel, captchaCanSubmit, onSliderDown, resetCaptcha, loadCaptcha, // 導出驗證碼狀態與事件 
                     toastMsg, toastType, // 導出供 UI 使用
-                    dashData, tasksData, leaderboard, pingMs, startMining, stopMining, 
+                    manifest, dashData, tasksData, leaderboard, devtoolsTripped, pingMs, startMining, stopMining, 
                     getStatusText, getPhaseText, getProgressState, getScore, getScoreNumber,
                     loadTasks, getShortPoolName, getScoreColorClass, formatDate,
                     activeTasks, activeTaskEmptyStateText, ratingView, setRatingView, paginatedRatingTasks, activeRatingPage, totalRatingPages, changeRatingPage,
-                    qualifiedTasks, rejectedArchiveTasks, leaderboardSections, formatLeaderboardValue,
+                    qualifiedTasks, rejectedArchiveTasks, leaderboardSections, activeLeaderboardKey, activeLeaderboardSection, formatLeaderboardValue,
                     getReviewStatus, getReviewStatusMeta, getReviewDetail,
-                    adminSubTab, adminThresholds, adminPools, adminStrats, adminError, loadAdminData, saveThresholds, savePool,
+                    adminSubTab, adminThresholds, adminPools, adminStrats, adminError, adminDiagnostics, adminStratSummary, adminStratFilters, adminStratPage, adminStratPageSize, adminStratTotal, adminStratHasNext, adminStratTotalPages, loadAdminData, refreshAdminStrategies, resetAdminStrategyFilters, changeAdminStratPage, downloadAdminErrors, saveThresholds, savePool,
                     catalogImportText, catalogImportResult, handleCatalogFileChange, runCatalogImport
                 };
             }

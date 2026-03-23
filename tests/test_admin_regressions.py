@@ -353,6 +353,65 @@ def test_admin_routes_and_aliases_return_seeded_data(admin_client):
     assert any(f"/admin/pools/{pool_id}/update" in row["message"] for row in alias_events)
 
 
+def test_admin_strategy_pagination_live_summary_and_error_export(admin_client):
+    client = admin_client["client"]
+    headers = admin_client["headers"]
+    db_module = admin_client["db"]
+    user_id = admin_client["user_id"]
+    pool_id = admin_client["pool_id"]
+
+    now = db_module._now_iso()
+    conn = db_module._conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO strategies (
+                submission_id, user_id, pool_id, params_json, status,
+                allocation_pct, note, created_at, expires_at, direction, external_key
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                2,
+                int(user_id),
+                int(pool_id),
+                json.dumps({"family": "TEMA_Cross", "interval": "30m"}),
+                "active",
+                15.0,
+                "extra-active-short",
+                now,
+                "2099-12-31T23:59:59+00:00",
+                "short",
+                "extra-short-key",
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    paged = client.get(
+        "/admin/strategies?page=1&page_size=1&direction=short&q=extra-short-key",
+        headers=headers,
+    )
+    assert paged.status_code == 200, paged.text
+    body = paged.json()
+    assert body["ok"] is True
+    assert body["page"] == 1
+    assert body["page_size"] == 1
+    assert body["total"] >= 1
+    assert len(body["items"]) == 1
+    assert body["items"][0]["direction"] == "short"
+    assert "in_runtime" in body["items"][0]
+    assert "summary" in body
+
+    db_module.log_sys_event("CAPTCHA_GEN_ERROR", user_id, "captcha generation failed", {"source": "test"})
+    export_res = client.get("/admin/errors/export.txt", headers=headers)
+    assert export_res.status_code == 200, export_res.text
+    assert export_res.headers["content-type"].startswith("text/plain")
+    export_text = export_res.text
+    assert "timestamp | source | event_type | user | worker | message | detail_json" in export_text
+    assert "CAPTCHA_GEN_ERROR" in export_text
+
+
 def test_system_diagnostics_and_stop_route_reflect_runtime_state(admin_client):
     client = admin_client["client"]
     headers = admin_client["headers"]
@@ -457,7 +516,7 @@ def test_dashboard_start_route_workers_token_and_task_review_fields(admin_client
     assert dash["global_runtime_portfolio_count"] == 0
     assert dash["personal_runtime_portfolio_items"] == []
     assert dash["global_runtime_portfolio_items"] == []
-    assert "本週期已達標" in dash["personal_review_pipeline_hint"]
+    assert "已達標並由系統持續追蹤" in dash["personal_review_pipeline_hint"]
 
     tasks = client.get("/tasks", headers=headers)
     assert tasks.status_code == 200, tasks.text
@@ -519,6 +578,7 @@ def test_dashboard_start_route_workers_token_and_task_review_fields(admin_client
 def test_runtime_portfolio_sync_updates_dashboard_personal_and_global(admin_client):
     client = admin_client["client"]
     headers = admin_client["headers"]
+    db_module = admin_client["db"]
 
     payload_items = [
         {
@@ -558,9 +618,18 @@ def test_runtime_portfolio_sync_updates_dashboard_personal_and_global(admin_clie
     assert personal.status_code == 200, personal.text
     assert personal.json()["snapshot"]["strategy_count"] == 2
 
+    issued = client.post(
+        "/runtime-sync/token",
+        headers=headers,
+        json={"ttl_seconds": 7200, "rotate_existing": True},
+    )
+    assert issued.status_code == 200, issued.text
+    issued_body = issued.json()
+    assert issued_body["token_kind"] == "system_sync"
+
     global_sync = client.post(
         "/runtime/portfolio/sync",
-        headers=headers,
+        headers={"Authorization": f"Bearer {issued_body['token']}"},
         json={
             "scope": "global",
             "summary": {"portfolio_metrics": {"sharpe": 1.9}},
@@ -577,6 +646,17 @@ def test_runtime_portfolio_sync_updates_dashboard_personal_and_global(admin_clie
     assert dash["personal_runtime_portfolio_items"][0]["direction"] == "long"
     assert dash["global_runtime_portfolio_items"][1]["direction"] == "short"
     assert dash["global_runtime_portfolio_updated_at"]
+    assert dash["runtime_sync"]["global"]["last_success_at"]
+    assert dash["runtime_sync"]["personal"]["last_success_at"]
+
+    live = client.get("/live/version", headers=headers)
+    assert live.status_code == 200, live.text
+    live_body = live.json()
+    assert live_body["dashboard_version"] == dash["dashboard_version"]
+    assert live_body["runtime_version"]
+
+    deprecated_events = _query_sys_events(db_module, "RUNTIME_SYNC_DEPRECATED_AUTH")
+    assert deprecated_events
 
 
 def test_admin_catalog_import_dry_run_apply_and_upsert(admin_client):

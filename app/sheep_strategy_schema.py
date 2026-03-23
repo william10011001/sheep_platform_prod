@@ -85,6 +85,8 @@ def normalize_runtime_strategy_entry(
             sl_pct = 0.0
 
     max_hold = raw.get("max_hold")
+    if max_hold in (None, "") and raw.get("max_hold_bars") is not None:
+        max_hold = raw.get("max_hold_bars")
     if max_hold in (None, "") and wrapper.get("max_hold") is not None:
         max_hold = wrapper.get("max_hold")
 
@@ -94,6 +96,8 @@ def normalize_runtime_strategy_entry(
 
     normalized = {
         "strategy_id": raw.get("strategy_id"),
+        "strategy_key": raw.get("strategy_key") or raw.get("external_key") or raw.get("key"),
+        "name": str(raw.get("name") or raw.get("_catalog_name") or "").strip(),
         "family": family,
         "family_params": family_params,
         "direction": direction,
@@ -103,5 +107,51 @@ def normalize_runtime_strategy_entry(
         "stake_pct": float(raw.get("stake_pct") or 0.0),
         "symbol": symbol,
         "interval": interval,
+        "enabled": bool(raw.get("enabled", True)),
     }
+    return normalized
+
+
+def extract_strategy_entries(raw_batch: Any) -> list[Dict[str, Any]]:
+    if isinstance(raw_batch, list):
+        return [dict(item or {}) for item in raw_batch]
+    if isinstance(raw_batch, dict):
+        strategies = raw_batch.get("strategies")
+        if isinstance(strategies, list):
+            return [dict(item or {}) for item in strategies]
+        if isinstance(strategies, dict):
+            out = []
+            for raw_key, raw_item in strategies.items():
+                item = dict(raw_item or {})
+                item.setdefault("strategy_key", raw_key)
+                out.append(item)
+            return out
+        if any(key in raw_batch for key in ("family", "symbol", "interval", "family_params")):
+            return [dict(raw_batch)]
+        out = []
+        for raw_key, raw_item in raw_batch.items():
+            if not isinstance(raw_item, dict):
+                continue
+            item = dict(raw_item)
+            item.setdefault("strategy_key", raw_key)
+            out.append(item)
+        return out
+    return []
+
+
+def normalize_strategy_batch(
+    raw_batch: Any,
+    *,
+    default_symbol: str = "",
+    default_interval: str = "",
+) -> list[Dict[str, Any]]:
+    normalized: list[Dict[str, Any]] = []
+    for raw_item in extract_strategy_entries(raw_batch):
+        normalized.append(
+            normalize_runtime_strategy_entry(
+                raw_item,
+                default_symbol=default_symbol,
+                default_interval=default_interval,
+            )
+        )
     return normalized

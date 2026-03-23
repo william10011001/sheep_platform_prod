@@ -3989,7 +3989,8 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
             "combos": [],   # 貢獻組合數 (勤勞度)
             "score": [],    # 最高分 (運氣/實力)
             "time": [],     # 貢獻時長 (掛機時間)
-            "points": []    # 積分 (已獲利)
+            "points": [],   # 積分 (已獲利)
+            "qualified_strategies": [],  # 目前已審核上線策略數
         }
 
         db_kind = _db_kind()
@@ -4123,10 +4124,30 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
                 except Exception as e:
                     print(f"[DB WARN] Leaderboard points fallback query failed: {e}")
 
+        sql_qualified_strategies = """
+            SELECT u.username, u.nickname, COUNT(st.id) as active_strategy_count
+            FROM strategies st
+            JOIN users u ON st.user_id = u.id
+            WHERE COALESCE(st.status, '') = 'active'
+            GROUP BY u.id, u.username, u.nickname
+            ORDER BY active_strategy_count DESC, u.id ASC
+            LIMIT 300
+        """
+        try:
+            rows = conn.execute(sql_qualified_strategies).fetchall()
+            results["qualified_strategies"] = [
+                dict(r)
+                for r in rows
+                if r["active_strategy_count"] is not None and int(r["active_strategy_count"]) > 0
+            ]
+        except Exception as e:
+            print(f"[DB WARN] Leaderboard qualified_strategies query failed: {e}")
+            results["qualified_strategies"] = []
+
         return results
     except Exception as e:
         print(f"[DB ERROR] get_leaderboard_stats: {e}")
-        return {"combos": [], "score": [], "time": [], "points": []}
+        return {"combos": [], "score": [], "time": [], "points": [], "qualified_strategies": []}
     finally:
         conn.close()
 import uuid as _uuid
@@ -4661,5 +4682,166 @@ def get_admin_active_strategies() -> list:
         import traceback
         print(f"[DB ERROR] get_admin_active_strategies failed: {e}\n{traceback.format_exc()}")
         return []
+    finally:
+        conn.close()
+
+
+def get_admin_active_strategies_page(
+    *,
+    page: int = 1,
+    page_size: int = 50,
+    q: str = "",
+    username: str = "",
+    symbol: str = "",
+    direction: str = "",
+) -> dict:
+    current_page = max(1, int(page or 1))
+    size = max(1, min(200, int(page_size or 50)))
+    offset = (current_page - 1) * size
+    direction_value = normalize_direction(direction, default="")
+    if direction_value not in {"long", "short"}:
+        direction_value = ""
+
+    where = ["st.status = 'active'"]
+    params: List[Any] = []
+
+    def _append_like(columns: List[str], value: str) -> None:
+        text = str(value or "").strip().lower()
+        if not text:
+            return
+        like_term = f"%{text}%"
+        where.append("(" + " OR ".join([f"LOWER(COALESCE({col}, '')) LIKE ?" for col in columns]) + ")")
+        params.extend([like_term] * len(columns))
+
+    _append_like(
+        ["u.username", "u.nickname", "p.name", "p.symbol", "st.external_key"],
+        q,
+    )
+    _append_like(["u.username", "u.nickname"], username)
+    _append_like(["p.symbol"], symbol)
+    if direction_value:
+        where.append("COALESCE(st.direction, 'long') = ?")
+        params.append(direction_value)
+
+    where_sql = " AND ".join(where)
+    conn = _conn()
+    try:
+        total_row = conn.execute(
+            f"""
+            SELECT COUNT(*) as c
+            FROM strategies st
+            LEFT JOIN users u ON st.user_id = u.id
+            LEFT JOIN factor_pools p ON st.pool_id = p.id
+            WHERE {where_sql}
+            """,
+            params,
+        ).fetchone()
+        total = int((dict(total_row) if total_row is not None else {}).get("c") or 0)
+        rows = conn.execute(
+            f"""
+            SELECT st.id as strategy_id, st.status, st.allocation_pct, st.created_at, st.direction, st.params_json, st.external_key,
+                   u.id as owner_user_id, u.username, u.nickname,
+                   p.name as pool_name, p.symbol, p.timeframe_min,
+                   c.metrics_json, c.score,
+                   t.progress_json
+            FROM strategies st
+            LEFT JOIN users u ON st.user_id = u.id
+            LEFT JOIN factor_pools p ON st.pool_id = p.id
+            LEFT JOIN submissions su ON st.submission_id = su.id
+            LEFT JOIN candidates c ON su.candidate_id = c.id
+            LEFT JOIN mining_tasks t ON c.task_id = t.id
+            WHERE {where_sql}
+            ORDER BY st.id DESC
+            LIMIT ? OFFSET ?
+            """,
+            [*params, size, offset],
+        ).fetchall()
+        items = []
+        for row in rows:
+            item = _normalize_strategy_row(row)
+            try:
+                item["metrics"] = json.loads(item.get("metrics_json") or "{}")
+            except Exception:
+                item["metrics"] = {}
+            try:
+                item["progress"] = json.loads(item.get("progress_json") or "{}")
+            except Exception:
+                item["progress"] = {}
+            items.append(item)
+        return {
+            "items": items,
+            "total": total,
+            "page": current_page,
+            "page_size": size,
+            "has_next": offset + len(items) < total,
+        }
+    finally:
+        conn.close()
+
+
+def list_actionable_error_rows(limit: int = 2000) -> list:
+    actionable_tokens = ("ERROR", "FAIL", "CRASH", "WARN", "REJECT", "ALARM", "DENIED", "MISMATCH")
+    actionable_exact = {
+        "CAPTCHA_GEN_ERROR",
+        "LOGIN_CAPTCHA_FAIL",
+        "REGISTER_CAPTCHA_FAIL",
+        "UNKNOWN_ROUTE",
+        "ADMIN_QUERY_EMPTY",
+        "RUNTIME_SYNC_DEPRECATED_AUTH",
+        "RUNTIME_SYNC_FAIL",
+    }
+    max_rows = max(1, min(10000, int(limit or 2000)))
+    conn = _conn()
+    try:
+        report_rows: List[Dict[str, Any]] = []
+        sys_rows = conn.execute(
+            """
+            SELECT created_at, user_id, event_type, message, detail_json
+            FROM sys_monitor_events
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (max_rows,),
+        ).fetchall()
+        for row in sys_rows:
+            event_type = str(row["event_type"] or "").strip()
+            if event_type not in actionable_exact and not any(token in event_type for token in actionable_tokens):
+                continue
+            report_rows.append(
+                {
+                    "timestamp": str(row["created_at"] or ""),
+                    "source": "sys_monitor",
+                    "event_type": event_type,
+                    "user_id": row["user_id"],
+                    "worker_id": "",
+                    "message": str(row["message"] or ""),
+                    "detail_json": str(row["detail_json"] or "{}"),
+                }
+            )
+
+        worker_rows = conn.execute(
+            """
+            SELECT ts, user_id, worker_id, event, detail_json
+            FROM worker_events
+            WHERE event IN ('task_finish_fail')
+            ORDER BY ts DESC, id DESC
+            LIMIT ?
+            """,
+            (max_rows,),
+        ).fetchall()
+        for row in worker_rows:
+            report_rows.append(
+                {
+                    "timestamp": str(row["ts"] or ""),
+                    "source": "worker",
+                    "event_type": str(row["event"] or ""),
+                    "user_id": row["user_id"],
+                    "worker_id": str(row["worker_id"] or ""),
+                    "message": str(row["event"] or ""),
+                    "detail_json": str(row["detail_json"] or "{}"),
+                }
+            )
+        report_rows.sort(key=lambda item: str(item.get("timestamp") or ""), reverse=True)
+        return report_rows[:max_rows]
     finally:
         conn.close()

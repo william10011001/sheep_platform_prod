@@ -3,12 +3,13 @@ import os
 import time
 import random
 import hashlib
+import hmac
 import html
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import FastAPI, Header, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 import logging
 from pydantic import BaseModel
@@ -22,7 +23,7 @@ from sheep_review import (
     normalize_review_fields as _normalize_review_fields,
     rebuild_review_state as _rebuild_review_state,
 )
-from sheep_strategy_schema import normalize_direction, normalize_runtime_strategy_entry
+from sheep_strategy_schema import normalize_direction, normalize_runtime_strategy_entry, normalize_strategy_batch
 
 def enrich_task_row(task: Dict[str, Any]) -> Dict[str, Any]:
     row = _enrich_task_row(task)
@@ -165,6 +166,17 @@ _register_ip_limiter = RateLimiter(rate_per_minute=0.2, burst=2.0)
 # [極致防護] 全域註冊限制器：防止駭客使用動態代理 IP 池進行分散式機器人攻擊 (全站每分鐘最多允許 3 次註冊)
 _register_global_limiter = RateLimiter(rate_per_minute=3.0, burst=6.0)
 
+_LIVE_CACHE_TTL_SECONDS = 5.0
+_live_versions: Dict[str, str] = {
+    "dashboard": "",
+    "leaderboard": "",
+    "runtime": "",
+}
+_live_cache: Dict[str, Dict[str, Dict[str, Any]]] = {
+    "dashboard": {},
+    "leaderboard": {},
+}
+
 
 class _ChatHub:
     def __init__(self) -> None:
@@ -196,6 +208,176 @@ _chat_hub = _ChatHub()
 
 def _utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+if not _live_versions["dashboard"]:
+    _live_versions.update(
+        {
+            "dashboard": _utc_iso(),
+            "leaderboard": _utc_iso(),
+            "runtime": _utc_iso(),
+        }
+    )
+
+
+def _live_cache_key(*parts: Any) -> str:
+    return "::".join([str(part) for part in parts])
+
+
+def _cached_live_payload(bucket: str, key: str, loader) -> Dict[str, Any]:
+    now = time.time()
+    cache_bucket = _live_cache.setdefault(bucket, {})
+    cached = cache_bucket.get(key) or {}
+    if cached and now - float(cached.get("ts") or 0.0) < _LIVE_CACHE_TTL_SECONDS:
+        return dict(cached.get("value") or {})
+    value = dict(loader() or {})
+    cache_bucket[key] = {"ts": now, "value": value}
+    return dict(value)
+
+
+def _invalidate_live_state(*channels: str) -> None:
+    now_iso = _utc_iso()
+    requested = {str(channel or "").strip().lower() for channel in channels if str(channel or "").strip()}
+    if not requested:
+        requested = {"dashboard", "leaderboard", "runtime"}
+    if "dashboard" in requested or "runtime" in requested:
+        _live_cache["dashboard"].clear()
+        _live_versions["dashboard"] = now_iso
+    if "leaderboard" in requested:
+        _live_cache["leaderboard"].clear()
+        _live_versions["leaderboard"] = now_iso
+    if "runtime" in requested:
+        _live_versions["runtime"] = now_iso
+
+
+def _categorize_captcha_error(err_msg: str) -> Dict[str, str]:
+    message = str(err_msg or "").strip()
+    lower = message.lower()
+    if "缺失" in message:
+        return {"code": "captcha_missing", "message": "驗證資料不完整，請重新載入滑塊後再試。"}
+    if "過期" in message or "invalidtoken" in lower or "ttl" in lower:
+        return {"code": "captcha_expired", "message": "驗證碼已過期，請重新取得後再試。"}
+    if "ip不匹配" in message.lower() or "ip不匹配" in message:
+        return {"code": "captcha_ip_mismatch", "message": "驗證環境已變更，請重新整理後再試。"}
+    if "位置不精確" in message or "滑動位置" in message:
+        return {"code": "captcha_mismatch", "message": "滑動位置未對準，請重新嘗試。"}
+    if "滑動異常" in message or "操作時間異常" in message:
+        return {"code": "captcha_invalid", "message": "驗證動作異常，請重新滑動驗證。"}
+    return {"code": "captcha_failed", "message": "安全驗證失敗，請重新嘗試。"}
+
+
+def _runtime_sync_event_detail(scope: str, user_id: int = 0) -> Dict[str, Any]:
+    conn = db._conn()
+    try:
+        params: List[Any] = [f"RUNTIME_SYNC_{str(scope or '').strip().upper()}_%"]
+        user_filter = ""
+        if int(user_id or 0) > 0:
+            user_filter = " AND (user_id = ? OR user_id IS NULL)"
+            params.append(int(user_id))
+        rows = conn.execute(
+            f"""
+            SELECT event_type, user_id, message, detail_json, created_at
+            FROM sys_monitor_events
+            WHERE event_type LIKE ?
+            {user_filter}
+            ORDER BY created_at DESC, id DESC
+            LIMIT 20
+            """,
+            params,
+        ).fetchall()
+        latest_success: Dict[str, Any] = {}
+        latest_failure: Dict[str, Any] = {}
+        for row in rows:
+            payload = {}
+            try:
+                payload = json.loads(row["detail_json"] or "{}")
+            except Exception:
+                payload = {}
+            event_type = str(row["event_type"] or "")
+            base = {
+                "event_type": event_type,
+                "timestamp": str(row["created_at"] or ""),
+                "user_id": row["user_id"],
+                "message": str(row["message"] or ""),
+                "detail": payload,
+            }
+            if not latest_success and event_type.endswith("_SUCCESS"):
+                latest_success = base
+            if not latest_failure and event_type.endswith("_FAIL"):
+                latest_failure = base
+            if latest_success and latest_failure:
+                break
+        latest_success_detail = dict(latest_success.get("detail") or {})
+        latest_failure_detail = dict(latest_failure.get("detail") or {})
+        return {
+            "latest_success": latest_success,
+            "latest_failure": latest_failure,
+            "last_success_at": str(latest_success_detail.get("updated_at") or latest_success.get("timestamp") or ""),
+            "last_failure_at": str(latest_failure_detail.get("updated_at") or latest_failure.get("timestamp") or ""),
+            "last_success_message": str(latest_success.get("message") or ""),
+            "last_failure_message": str(latest_failure.get("message") or ""),
+            "last_success_strategy_count": int(latest_success_detail.get("strategy_count") or 0),
+            "last_failure_strategy_count": int(latest_failure_detail.get("strategy_count") or 0),
+            "last_success_checksum": str(latest_success_detail.get("checksum") or ""),
+            "last_failure_checksum": str(latest_failure_detail.get("checksum") or ""),
+        }
+    finally:
+        conn.close()
+
+
+def _parse_iso_datetime(value: str) -> Optional[datetime]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _runtime_snapshot_status(snapshot: Dict[str, Any], *, threshold_minutes: int = 10) -> Dict[str, Any]:
+    updated_at = str(snapshot.get("updated_at") or "")
+    dt = _parse_iso_datetime(updated_at)
+    stale = True
+    age_seconds = None
+    if dt is not None:
+        age_seconds = max(0.0, (datetime.now(timezone.utc) - dt.astimezone(timezone.utc)).total_seconds())
+        stale = age_seconds > float(threshold_minutes * 60)
+    return {
+        "updated_at": updated_at,
+        "strategy_count": int(snapshot.get("strategy_count") or len(snapshot.get("items") or [])),
+        "stale": bool(stale),
+        "age_seconds": age_seconds,
+    }
+
+
+def _runtime_match_signature(item: Dict[str, Any]) -> Tuple[str, str, str, str, str]:
+    entry = normalize_runtime_strategy_entry(
+        item.get("params_json") if isinstance(item.get("params_json"), dict) else dict(item or {}),
+        default_symbol=str(item.get("symbol") or ""),
+        default_interval=str(item.get("interval") or item.get("timeframe_min") or ""),
+    )
+    external_key = str(item.get("external_key") or item.get("strategy_key") or entry.get("strategy_key") or "").strip()
+    interval = str(entry.get("interval") or item.get("interval") or item.get("timeframe_min") or "").strip()
+    if interval.endswith(".0"):
+        interval = interval[:-2]
+    return (
+        external_key,
+        str(entry.get("family") or item.get("family") or "").strip().lower(),
+        str(entry.get("symbol") or item.get("symbol") or "").strip().upper(),
+        normalize_direction(entry.get("direction") or item.get("direction"), default="long"),
+        interval.lower(),
+    )
+
+
+def _runtime_snapshot_signatures(snapshot: Dict[str, Any]) -> set[Tuple[str, str, str, str, str]]:
+    out: set[Tuple[str, str, str, str, str]] = set()
+    for item in list(snapshot.get("items") or []):
+        try:
+            out.add(_runtime_match_signature(dict(item or {})))
+        except Exception:
+            continue
+    return out
 
 
 def _get_settings_cached() -> Dict[str, Any]:
@@ -389,7 +571,7 @@ def _can_publish_global_runtime(ctx: Dict[str, Any]) -> bool:
     if not _is_admin_ctx(ctx):
         return False
     token_name = str((ctx.get("token") or {}).get("name") or "").strip().lower()
-    return token_name in {"compute", "web_session", "worker", "system_sync"} or token_name == ""
+    return token_name in {"compute", "web_session", "worker", "system_sync", "runtime_password"} or token_name == ""
 
 
 def _runtime_sync_auth_ctx(
@@ -637,6 +819,11 @@ class WorkerTokenIssueIn(BaseModel):
     ttl_seconds: int = 86400 * 30
     rotate_existing: bool = True
 
+
+class RuntimeSyncTokenIssueIn(BaseModel):
+    ttl_seconds: int = 86400 * 30
+    rotate_existing: bool = True
+
 class WebRegisterIn(BaseModel):
     username: str
     password: str
@@ -696,7 +883,7 @@ def get_captcha(req: Request):
         import traceback
         err_detail = traceback.format_exc()
         db.log_sys_event("CAPTCHA_GEN_ERROR", None, f"生成驗證碼崩潰: {e}", {"trace": err_detail})
-        raise HTTPException(status_code=500, detail=f"系統驗證碼生成模組錯誤: {e}")
+        raise HTTPException(status_code=500, detail={"code": "captcha_unavailable", "message": "目前無法載入安全驗證，請稍後再試。"})
 
 @app.get("/healthz")
 async def healthz():
@@ -929,6 +1116,8 @@ def admin_catalog_import(
         payload=body.model_dump() if hasattr(body, "model_dump") else body.dict(),
         dry_run=bool(dry_run),
     )
+    if report.get("ok") and not bool(dry_run):
+        _invalidate_live_state("dashboard", "leaderboard")
     return JSONResponse(status_code=200 if report.get("ok") else 400, content=report)
 
 
@@ -947,6 +1136,14 @@ def runtime_portfolio_sync(
     scope = "global" if str(body.scope or "").strip().lower() == "global" else "personal"
     if scope == "global" and not _can_publish_global_runtime(ctx):
         raise HTTPException(status_code=403, detail="global_runtime_admin_required")
+    token_kind = _token_kind(ctx)
+    if token_kind == "runtime_password":
+        db.log_sys_event(
+            "RUNTIME_SYNC_DEPRECATED_AUTH",
+            int(ctx["user"]["id"]),
+            f"Runtime sync using deprecated password auth ({scope})",
+            {"scope": scope, "ip": _client_ip(req)},
+        )
 
     normalized_items: List[Dict[str, Any]] = []
     for idx, raw_item in enumerate(list(body.items or []), start=1):
@@ -966,18 +1163,46 @@ def runtime_portfolio_sync(
             }
         )
         normalized_items.append(item)
-
-    snapshot = db.save_runtime_portfolio_snapshot(
-        scope=scope,
-        user_id=int(ctx["user"]["id"]) if scope == "personal" else 0,
-        published_by=int(ctx["user"]["id"]),
-        source=str(body.source or "holy_grail_runtime"),
-        items=normalized_items,
-        summary=dict(body.summary or {}),
-        updated_at=str(body.updated_at or ""),
-        checksum=str(body.checksum or ""),
-    )
-    return {"ok": True, "snapshot": snapshot}
+    try:
+        snapshot = db.save_runtime_portfolio_snapshot(
+            scope=scope,
+            user_id=int(ctx["user"]["id"]) if scope == "personal" else 0,
+            published_by=int(ctx["user"]["id"]),
+            source=str(body.source or "holy_grail_runtime"),
+            items=normalized_items,
+            summary=dict(body.summary or {}),
+            updated_at=str(body.updated_at or ""),
+            checksum=str(body.checksum or ""),
+        )
+        db.log_sys_event(
+            f"RUNTIME_SYNC_{scope.upper()}_SUCCESS",
+            int(ctx["user"]["id"]),
+            f"{scope} runtime snapshot synced",
+            {
+                "scope": scope,
+                "published_by": int(ctx["user"]["id"]),
+                "source": str(body.source or "holy_grail_runtime"),
+                "strategy_count": int(snapshot.get("strategy_count") or 0),
+                "checksum": str(snapshot.get("checksum") or ""),
+                "updated_at": str(snapshot.get("updated_at") or ""),
+                "token_kind": token_kind,
+            },
+        )
+        _invalidate_live_state("dashboard", "runtime")
+        return {"ok": True, "snapshot": snapshot}
+    except Exception as exc:
+        db.log_sys_event(
+            f"RUNTIME_SYNC_{scope.upper()}_FAIL",
+            int(ctx["user"]["id"]),
+            f"{scope} runtime snapshot sync failed: {exc}",
+            {
+                "scope": scope,
+                "source": str(body.source or "holy_grail_runtime"),
+                "strategy_count": len(normalized_items),
+                "token_kind": token_kind,
+            },
+        )
+        raise
 
 
 @app.post("/admin/settings")
@@ -1003,26 +1228,71 @@ def update_admin_settings(req: Request, body: AdminSettingsUpdate, authorization
     return {"ok": True, "msg": "達標門檻設定已成功更新並立即生效！"}
 
 @app.get("/admin/strategies")
-def get_admin_strategies(req: Request, authorization: Optional[str] = Header(None)):
+def get_admin_strategies(
+    req: Request,
+    authorization: Optional[str] = Header(None),
+    page: int = 1,
+    page_size: int = 50,
+    q: str = "",
+    username: str = "",
+    symbol: str = "",
+    direction: str = "",
+):
     ctx = _auth_ctx(req, authorization)
     if str(ctx["user"].get("role")) != "admin":
         db.log_sys_event("ADMIN_ACCESS_DENIED", ctx["user"].get("id"), "非法存取管理策略介面", {"ip": _client_ip(req)})
         raise HTTPException(status_code=403, detail="權限不足：僅限系統管理員")
     
     try:
-        # 強制從資料庫底層提取所有 active 狀態策略，確保 30 個策略能被正確列舉
-        data = db.get_admin_active_strategies()
-        if not data:
-            # 若為空，主動檢查是否存在任何策略，判斷是查詢錯誤還是真的沒資料
+        page_data = db.get_admin_active_strategies_page(
+            page=page,
+            page_size=page_size,
+            q=q,
+            username=username,
+            symbol=symbol,
+            direction=direction,
+        )
+        global_snapshot = db.get_runtime_portfolio_snapshot("global") or {}
+        personal_snapshot = db.get_runtime_portfolio_snapshot("personal", user_id=int(ctx["user"]["id"])) or {}
+        global_signatures = _runtime_snapshot_signatures(global_snapshot)
+        personal_signatures = _runtime_snapshot_signatures(personal_snapshot)
+        enriched_items: List[Dict[str, Any]] = []
+        for item in list(page_data.get("items") or []):
+            row = dict(item or {})
+            signature = _runtime_match_signature(row)
+            in_global = signature in global_signatures
+            in_personal = signature in personal_signatures
+            row["in_runtime"] = bool(in_global or in_personal)
+            row["runtime_scopes"] = [scope for scope, enabled in (("personal", in_personal), ("global", in_global)) if enabled]
+            row["runtime_updated_at"] = str(personal_snapshot.get("updated_at") or global_snapshot.get("updated_at") or "")
+            enriched_items.append(row)
+
+        if not enriched_items and int(page_data.get("total") or 0) == 0:
             db.log_sys_event("ADMIN_QUERY_EMPTY", ctx["user"].get("id"), "實盤策略池查詢結果為空", {})
-            
-        return {"ok": True, "strategies": data, "total": len(data)}
+
+        summary = {
+            "global_runtime": _runtime_snapshot_status(global_snapshot),
+            "personal_runtime": _runtime_snapshot_status(personal_snapshot),
+        }
+        return {
+            "ok": True,
+            "items": enriched_items,
+            "strategies": enriched_items,
+            "total": int(page_data.get("total") or 0),
+            "page": int(page_data.get("page") or page),
+            "page_size": int(page_data.get("page_size") or page_size),
+            "has_next": bool(page_data.get("has_next")),
+            "summary": summary,
+        }
     except Exception as e:
         import traceback
         err_msg = traceback.format_exc()
         db.log_sys_event("ADMIN_STRAT_ERROR", ctx["user"].get("id"), f"讀取策略池失敗: {str(e)}", {"trace": err_msg})
         # 即使發生錯誤也回傳 200 並帶上錯誤詳情，防止前端觸發 504 崩潰
-        return JSONResponse(status_code=200, content={"ok": False, "msg": f"資料庫讀取異常: {str(e)}", "strategies": []})
+        return JSONResponse(
+            status_code=200,
+            content={"ok": False, "msg": f"資料庫讀取異常: {str(e)}", "items": [], "strategies": [], "total": 0, "page": 1, "page_size": 50, "has_next": False},
+        )
 
 @app.get("/admin/system_diagnostics")
 def get_admin_system_diagnostics(req: Request, authorization: Optional[str] = Header(None)):
@@ -1033,9 +1303,14 @@ def get_admin_system_diagnostics(req: Request, authorization: Optional[str] = He
     cycle = db.get_active_cycle() or {}
     cycle_id = int(cycle.get("id") or 0)
     pools = db.list_factor_pools(cycle_id) if cycle_id > 0 else []
-    strategies = db.get_admin_active_strategies()
+    strategies = db.get_admin_active_strategies_page(page=1, page_size=1)
     thresholds, threshold_updated_at = _load_threshold_state()
     db_source = db.describe_db_source()
+    global_snapshot = db.get_runtime_portfolio_snapshot("global") or {}
+    personal_snapshot = db.get_runtime_portfolio_snapshot("personal", user_id=int(ctx["user"]["id"])) or {}
+    global_status = _runtime_snapshot_status(global_snapshot)
+    personal_status = _runtime_snapshot_status(personal_snapshot)
+    runtime_mismatch = int(global_status.get("strategy_count") or 0) != int(db.count_strategies(status="active"))
 
     return {
         "ok": True,
@@ -1052,11 +1327,42 @@ def get_admin_system_diagnostics(req: Request, authorization: Optional[str] = He
             "end_ts": cycle.get("end_ts"),
         },
         "active_pool_count": len(pools),
-        "active_strategy_count": len(strategies),
+        "active_strategy_count": int(strategies.get("total") or 0),
         "thresholds": thresholds,
         "threshold_updated_at": threshold_updated_at,
+        "runtime_sync": {
+            "global": {**global_status, **_runtime_sync_event_detail("global")},
+            "personal": {**personal_status, **_runtime_sync_event_detail("personal", int(ctx["user"]["id"]))},
+            "global_active_strategy_mismatch": runtime_mismatch,
+        },
         "server_time": _utc_iso(),
     }
+
+
+@app.get("/admin/errors/export.txt")
+def export_admin_errors(req: Request, authorization: Optional[str] = Header(None), limit: int = 2000):
+    ctx = _auth_ctx(req, authorization)
+    if not _is_admin_ctx(ctx):
+        raise HTTPException(status_code=403, detail="admin_required")
+    rows = db.list_actionable_error_rows(limit=limit)
+    lines = ["timestamp | source | event_type | user | worker | message | detail_json"]
+    for row in rows:
+        lines.append(
+            " | ".join(
+                [
+                    str(row.get("timestamp") or ""),
+                    str(row.get("source") or ""),
+                    str(row.get("event_type") or ""),
+                    str(row.get("user_id") or ""),
+                    str(row.get("worker_id") or ""),
+                    str(row.get("message") or "").replace("\n", " ").strip(),
+                    str(row.get("detail_json") or "{}").replace("\n", " ").strip(),
+                ]
+            )
+        )
+    filename = f"sheep-errors-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.txt"
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return PlainTextResponse("\n".join(lines), headers=headers)
 
 
 @app.post("/admin/maintenance/rebuild-review-state")
@@ -1072,6 +1378,7 @@ def admin_rebuild_review_state(req: Request, authorization: Optional[str] = Head
         "Admin triggered review-state maintenance",
         summary,
     )
+    _invalidate_live_state("dashboard", "leaderboard")
     return {"ok": True, **summary}
 
 
@@ -1534,6 +1841,8 @@ def manifest():
             "worker_latest_version": str(db.get_setting(conn, "worker_latest_version", "2.0.0")),
             "worker_min_protocol": int(db.get_setting(conn, "worker_min_protocol", 2)),
             "worker_download_url": str(db.get_setting(conn, "worker_download_url", "")),
+            "worker_download_sha256": str(db.get_setting(conn, "worker_download_sha256", "")),
+            "worker_bundle_kind": str(db.get_setting(conn, "worker_bundle_kind", "onedir")),
         }
     finally:
         conn.close()
@@ -1647,7 +1956,7 @@ def issue_token(req: Request, body: TokenRequest):
             is_valid, err_msg = verify_slider_captcha(body.captcha_token, body.captcha_offset, body.captcha_tracks, ip)
             if not is_valid:
                 db.log_sys_event("LOGIN_CAPTCHA_FAIL", None, f"驗證碼未通過: {err_msg}", {"ip": ip, "username": body.username})
-                raise HTTPException(status_code=400, detail=f"CAPTCHA_FAILED: {err_msg}")
+                raise HTTPException(status_code=400, detail=_categorize_captcha_error(err_msg))
         if not allowed:
             db.log_sys_event("LOGIN_FAIL", None, f"IP {ip} 登入頻率過高觸發限制", {"ip": ip})
             headers = {"Retry-After": str(int(max(1, retry_after or 1.0)))}
@@ -1758,6 +2067,38 @@ def issue_worker_token(request: Request, body: WorkerTokenIssueIn, authorization
         "issued_at": str(token.get("issued_at")),
         "expires_at": str(token.get("expires_at")),
     }
+
+
+@app.post("/runtime-sync/token")
+def issue_runtime_sync_token(request: Request, body: RuntimeSyncTokenIssueIn, authorization: Optional[str] = Header(None)):
+    ctx = _auth_ctx(request, authorization)
+    if not _is_admin_ctx(ctx):
+        raise HTTPException(status_code=403, detail="admin_required")
+    user_id = int(ctx["user"]["id"])
+    rotated_count = 0
+    if bool(body.rotate_existing):
+        rotated_count = int(db.revoke_api_tokens_for_user(user_id, name="system_sync"))
+    token = db.create_api_token(user_id, ttl_seconds=int(body.ttl_seconds), name="system_sync")
+    db.log_sys_event(
+        "RUNTIME_SYNC_TOKEN_ISSUED",
+        user_id,
+        "Issued runtime sync token",
+        {
+            "rotated_count": rotated_count,
+            "ip": _client_ip(request),
+        },
+    )
+    return {
+        "ok": True,
+        "token": str(token["token"]),
+        "token_id": int(token["token_id"]),
+        "user_id": user_id,
+        "name": "system_sync",
+        "token_kind": "system_sync",
+        "rotated_count": rotated_count,
+        "issued_at": str(token.get("issued_at")),
+        "expires_at": str(token.get("expires_at")),
+    }
 @app.post("/auth/register")
 def web_register(req: Request, body: WebRegisterIn):
     ip = _client_ip(req) or "unknown_ip"
@@ -1766,7 +2107,7 @@ def web_register(req: Request, body: WebRegisterIn):
         is_valid, err_msg = verify_slider_captcha(body.captcha_token, body.captcha_offset, body.captcha_tracks, ip)
         if not is_valid:
             db.log_sys_event("REGISTER_CAPTCHA_FAIL", None, f"驗證碼未通過: {err_msg}", {"ip": ip, "username": body.username})
-            raise HTTPException(status_code=400, detail=f"CAPTCHA_FAILED: {err_msg}")
+            raise HTTPException(status_code=400, detail=_categorize_captcha_error(err_msg))
 
         allowed_ip, retry_after_ip = _register_ip_limiter.check(f"reg_ip:{ip}", cost=1.0)
         allowed_global, retry_after_global = _register_global_limiter.check("global_register", cost=1.0)
@@ -1849,8 +2190,12 @@ def web_get_me(request: Request, authorization: Optional[str] = Header(None)):
 @app.get("/leaderboard")
 def web_leaderboard(period_hours: int = 9999999):
     try:
-        stats = db.get_leaderboard_stats(period_hours)
-        return {"ok": True, "data": stats}
+        stats = _cached_live_payload(
+            "leaderboard",
+            _live_cache_key("period_hours", int(period_hours or 0)),
+            lambda: db.get_leaderboard_stats(period_hours),
+        )
+        return {"ok": True, "data": stats, "leaderboard_version": _live_versions["leaderboard"]}
     except Exception as e:
         logger.error(f"Leaderboard error: {e}")
         raise HTTPException(status_code=500, detail="fetch_leaderboard_failed")
@@ -1859,50 +2204,78 @@ def web_leaderboard(period_hours: int = 9999999):
 def web_dashboard(request: Request, authorization: Optional[str] = Header(None)):
     ctx = _auth_ctx(request, authorization)
     uid = int(ctx["user"]["id"])
-    cycle_id = _get_active_cycle_id()
+    def _load_dashboard() -> Dict[str, Any]:
+        cycle_id = _get_active_cycle_id()
+        all_tasks = db.list_tasks_for_user(uid, cycle_id=0)
+        tasks = [enrich_task_row(t) for t in all_tasks if int(t.get("cycle_id") or 0) == int(cycle_id)]
+        strategies = db.list_strategies(user_id=uid, limit=200)
+        payouts = db.list_payouts(user_id=uid, limit=200)
 
-    all_tasks = db.list_tasks_for_user(uid, cycle_id=0)
-    tasks = [enrich_task_row(t) for t in all_tasks if int(t.get("cycle_id") or 0) == int(cycle_id)]
-    strategies = db.list_strategies(user_id=uid, limit=200)
-    payouts = db.list_payouts(user_id=uid, limit=200)
+        conn = db._conn()
+        try:
+            min_sharpe = float(db.get_setting(conn, "min_sharpe", 0.6))
+        finally:
+            conn.close()
 
-    conn = db._conn()
-    try:
-        min_sharpe = float(db.get_setting(conn, "min_sharpe", 0.6))
-    finally:
-        conn.close()
+        completed_tasks = [t for t in all_tasks if str(t.get("status") or "") == "completed"]
+        personal_live_strategies_active = int(db.count_strategies(user_id=uid, status="active"))
+        global_strategies_active = int(db.count_strategies(status="active"))
+        personal_review_pipeline_count = count_review_pipeline_tasks(tasks)
+        personal_runtime_snapshot = db.get_runtime_portfolio_snapshot("personal", user_id=uid) or {}
+        global_runtime_snapshot = db.get_runtime_portfolio_snapshot("global") or {}
+        personal_runtime_items = list(personal_runtime_snapshot.get("items") or [])
+        global_runtime_items = list(global_runtime_snapshot.get("items") or [])
+        personal_runtime_updated_at = str(personal_runtime_snapshot.get("updated_at") or "")
+        global_runtime_updated_at = str(global_runtime_snapshot.get("updated_at") or "")
+        personal_runtime_status = _runtime_snapshot_status(personal_runtime_snapshot)
+        global_runtime_status = _runtime_snapshot_status(global_runtime_snapshot)
 
-    completed_tasks = [t for t in all_tasks if str(t.get("status") or "") == "completed"]
-    personal_live_strategies_active = int(db.count_strategies(user_id=uid, status="active"))
-    global_strategies_active = int(db.count_strategies(status="active"))
-    personal_review_pipeline_count = count_review_pipeline_tasks(tasks)
-    personal_runtime_snapshot = db.get_runtime_portfolio_snapshot("personal", user_id=uid) or {}
-    global_runtime_snapshot = db.get_runtime_portfolio_snapshot("global") or {}
-    personal_runtime_items = list(personal_runtime_snapshot.get("items") or [])
-    global_runtime_items = list(global_runtime_snapshot.get("items") or [])
+        return {
+            "ok": True,
+            "cycle_id": cycle_id,
+            "tasks_count": len(completed_tasks),
+            "strategies_active": personal_live_strategies_active,
+            "personal_live_strategies_active": personal_live_strategies_active,
+            "personal_live_strategies_reviewed_label": "個人審核上線策略",
+            "personal_review_pipeline_count": int(personal_review_pipeline_count),
+            "personal_review_pipeline_hint": "已達標並由系統持續追蹤的任務數量",
+            "global_strategies_active": global_strategies_active,
+            "global_live_strategies_reviewed_label": "全網審核上線策略",
+            "personal_runtime_portfolio_count": int(personal_runtime_snapshot.get("strategy_count") or len(personal_runtime_items)),
+            "personal_runtime_portfolio_updated_at": personal_runtime_updated_at,
+            "personal_runtime_portfolio_items": personal_runtime_items,
+            "personal_runtime_portfolio_stale": bool(personal_runtime_status.get("stale")),
+            "personal_runtime_portfolio_age_seconds": personal_runtime_status.get("age_seconds"),
+            "global_runtime_portfolio_count": int(global_runtime_snapshot.get("strategy_count") or len(global_runtime_items)),
+            "global_runtime_portfolio_updated_at": global_runtime_updated_at,
+            "global_runtime_portfolio_items": global_runtime_items[:20],
+            "global_runtime_portfolio_stale": bool(global_runtime_status.get("stale")),
+            "global_runtime_portfolio_age_seconds": global_runtime_status.get("age_seconds"),
+            "runtime_sync": {
+                "personal": {**personal_runtime_status, **_runtime_sync_event_detail("personal", uid)},
+                "global": {**global_runtime_status, **_runtime_sync_event_detail("global")},
+                "global_active_strategy_mismatch": int(global_runtime_status.get("strategy_count") or 0) != global_strategies_active,
+            },
+            "payouts_unpaid": len([p for p in payouts if p["status"] == "unpaid"]),
+            "recent_tasks": tasks[:10],
+            "strategies": strategies,
+            "payouts": payouts,
+            "min_sharpe": min_sharpe,
+            "dashboard_version": _live_versions["dashboard"],
+        }
 
+    return _cached_live_payload("dashboard", _live_cache_key("user_id", uid), _load_dashboard)
+
+
+@app.get("/live/version")
+def live_version(request: Request, authorization: Optional[str] = Header(None)):
+    _auth_ctx(request, authorization)
     return {
         "ok": True,
-        "cycle_id": cycle_id,
-        "tasks_count": len(completed_tasks),
-        "strategies_active": personal_live_strategies_active,
-        "personal_live_strategies_active": personal_live_strategies_active,
-        "personal_live_strategies_reviewed_label": "個人審核上線策略",
-        "personal_review_pipeline_count": int(personal_review_pipeline_count),
-        "personal_review_pipeline_hint": "本週期已達標且進入後續自動管理流程的任務數量",
-        "global_strategies_active": global_strategies_active,
-        "global_live_strategies_reviewed_label": "全網審核上線策略",
-        "personal_runtime_portfolio_count": int(personal_runtime_snapshot.get("strategy_count") or len(personal_runtime_items)),
-        "personal_runtime_portfolio_updated_at": str(personal_runtime_snapshot.get("updated_at") or ""),
-        "personal_runtime_portfolio_items": personal_runtime_items,
-        "global_runtime_portfolio_count": int(global_runtime_snapshot.get("strategy_count") or len(global_runtime_items)),
-        "global_runtime_portfolio_updated_at": str(global_runtime_snapshot.get("updated_at") or ""),
-        "global_runtime_portfolio_items": global_runtime_items[:20],
-        "payouts_unpaid": len([p for p in payouts if p["status"] == "unpaid"]),
-        "recent_tasks": tasks[:10],
-        "strategies": strategies,
-        "payouts": payouts,
-        "min_sharpe": min_sharpe
+        "dashboard_version": _live_versions["dashboard"],
+        "leaderboard_version": _live_versions["leaderboard"],
+        "runtime_version": _live_versions["runtime"],
+        "server_time": _utc_iso(),
     }
 
 @app.get("/tasks")
@@ -1936,6 +2309,7 @@ def web_start_tasks(request: Request, authorization: Optional[str] = Header(None
         "User requested task start via API",
         {"ip": _client_ip(request), **primed},
     )
+    _invalidate_live_state("dashboard")
     return {"ok": True, "run_enabled": True, **primed}
 
 
@@ -1945,6 +2319,7 @@ def web_stop_tasks(request: Request, authorization: Optional[str] = Header(None)
     uid = int(ctx["user"]["id"])
     db.set_user_run_enabled(uid, False)
     db.log_sys_event("USER_RUN_DISABLED", uid, "User requested task stop via API", {"ip": _client_ip(request)})
+    _invalidate_live_state("dashboard")
     return {
         "ok": True,
         "run_enabled": False,
@@ -2304,6 +2679,7 @@ def update_progress(
     )
     if not ok:
         raise HTTPException(status_code=409, detail="lease_mismatch_or_task_not_running")
+    _invalidate_live_state("dashboard", "leaderboard")
     return {"ok": True}
 
 
@@ -2330,6 +2706,7 @@ def release_task(
     )
     if not ok:
         raise HTTPException(status_code=409, detail="lease_mismatch_or_task_not_running")
+    _invalidate_live_state("dashboard", "leaderboard")
     return {"ok": True}
 
 
@@ -2577,6 +2954,7 @@ def finish_task(
 
     if best_id is None and verified_candidates:
         raise HTTPException(status_code=409, detail="lease_mismatch_or_task_not_running")
+    _invalidate_live_state("dashboard", "leaderboard")
     return {"ok": True, "best_candidate_id": best_id}
 
 

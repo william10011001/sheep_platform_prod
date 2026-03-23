@@ -69,6 +69,50 @@ def test_factor_pool_updater_pauses_cleanly_without_credentials(monkeypatch):
     assert not any("本輪更新失敗" in msg for msg in logs)
 
 
+def test_live_trader_accepts_wrapped_multi_strategy_json():
+    module = _load_live_trader_module()
+
+    cfg, active_pairs = module.normalize_multi_strategy_entries(
+        {
+            "schema_version": 1,
+            "strategies": [
+                {
+                    "strategy_key": "tema-long",
+                    "family": "TEMA_Cross",
+                    "symbol": "ETHUSDT",
+                    "direction": "long",
+                    "interval": "30m",
+                    "family_params": {"fast_len": 12, "slow_len": 55},
+                    "tp_pct": 1.2,
+                    "sl_pct": 0.8,
+                    "max_hold_bars": 36,
+                    "stake_pct": 25.0,
+                    "enabled": True,
+                },
+                {
+                    "strategy_key": "tema-short",
+                    "family": "TEMA_Cross",
+                    "symbol": "BTCUSDT",
+                    "direction": "short",
+                    "interval": "1h",
+                    "family_params": {"fast_len": 9, "slow_len": 44},
+                    "tp_pct": 1.0,
+                    "sl_pct": 0.7,
+                    "max_hold_bars": 48,
+                    "stake_pct": 20.0,
+                    "enabled": True,
+                },
+            ],
+        }
+    )
+
+    rows = list(cfg.values())
+    assert [row["direction"] for row in rows] == ["long", "short"]
+    assert rows[0]["strategy_key"] == "tema-long"
+    assert rows[1]["interval"] == "1h"
+    assert active_pairs == [("BTCUSDT", "1h"), ("ETHUSDT", "30m")]
+
+
 def test_leaderboard_stats_include_time_and_points_fallback(monkeypatch, tmp_path):
     db_path = tmp_path / "leaderboard-regression.sqlite3"
     monkeypatch.setenv("SHEEP_DB_URL", "")
@@ -164,3 +208,5 @@ def test_leaderboard_stats_include_time_and_points_fallback(monkeypatch, tmp_pat
     assert float(stats["time"][0]["total_seconds"]) >= 7200.0
     assert stats["points"], stats
     assert round(float(stats["points"][0]["total_usdt"]), 4) == 250.0
+    assert stats["qualified_strategies"], stats
+    assert int(stats["qualified_strategies"][0]["active_strategy_count"]) >= 1

@@ -1,586 +1,387 @@
-import threading
-try:
-    import webview
-except ImportError:
-    print(" [系統錯誤] 找不到 pywebview 模組！這是使用新版 HTML UI 的必要組件。")
-    print("請於終端機執行: pip install pywebview")
-    import sys
-    sys.exit(1)
-import queue
+from __future__ import annotations
+
+import datetime as dt
 import json
+import logging
+import multiprocessing
 import os
-import time
-import datetime
-import traceback
+import queue
 import sys
+import threading
+import time
+import traceback
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+from typing import Any, Dict, Optional
 
-# 【核心級防護】強制設定標準輸出與錯誤輸出為 UTF-8 編碼，並啟用安全替換機制
-# 徹底解決 Windows 預設 CP950 編碼無法解析特殊字元 (如 ⚠️, 🚨) 導致的 UnicodeEncodeError 崩潰
+import tkinter as tk
+from tkinter import messagebox, ttk
+
+from sheep_runtime_paths import default_worker_id_path, ensure_parent, runtime_dir
+
+
 if sys.stdout is not None:
-    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 if sys.stderr is not None:
-    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-# 匯入微調後的底層模組
-import sheep_worker_client
 
-# 設定伺服器位址 (打包前請確認改為正式機網址)
-SERVER_URL = sheep_worker_client.normalize_api_base_url(
-    os.environ.get("SHEEP_WORKER_BASE_URL", "https://sheep123.com/sheep123")
-)
-CONFIG_FILE = "worker_config.json"
+APP_NAME = "OpenNode"
+DEFAULT_SERVER_URL = os.environ.get("SHEEP_WORKER_BASE_URL", "https://sheep123.com/sheep123").strip()
+APP_RUNTIME_DIR = (runtime_dir() / "OpenNode").resolve()
+CONFIG_FILE = ensure_parent(APP_RUNTIME_DIR / "worker_config.json")
+LOG_FILE = ensure_parent(APP_RUNTIME_DIR / "logs" / "opennode.log")
 
-UI_HTML = """
-<!DOCTYPE html>
-<html lang="zh-Hant">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>OpenNode UI</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;700&family=Inter:wght@300;400;600&display=swap');
-        :root {
-            --bg-color-top: #3e5252;
-            --bg-color-bottom: #1e2b2b;
-            --accent-color: #ffffff;
-            --input-border: rgba(255, 255, 255, 0.2);
-            --text-secondary: rgba(255, 255, 255, 0.4);
-        }
-        body {
-            font-family: 'Inter', 'Noto Sans TC', sans-serif;
-            background: radial-gradient(circle at center, var(--bg-color-top) 0%, var(--bg-color-bottom) 100%);
-            background-attachment: fixed;
-            height: 100vh;
-            margin: 0;
-            display: flex;
-            /* 移除 center 避免上下雙向溢出裁切，改用 flex-start 從頂部開始安全排版 */
-            align-items: flex-start;
-            justify-content: center;
-            color: white;
-            /* 將整個畫面精準往下推移 35px，確保頂部不被裁切 */
-            padding-top: 35px;
-            box-sizing: border-box;
-            overflow: hidden;
-        }
-        .input-group { position: relative; margin-bottom: 2rem; width: 100%; }
-        .input-label { display: block; font-size: 10px; text-transform: uppercase; letter-spacing: 0.2em; color: var(--text-secondary); margin-bottom: 8px; }
-        .input-field { width: 100%; background: transparent; border: none; border-bottom: 1px solid var(--input-border); padding: 8px 0; color: white; font-size: 14px; font-weight: 300; letter-spacing: 0.05em; transition: border-color 0.3s ease; outline: none; }
-        .input-field:focus { border-bottom-color: rgba(255, 255, 255, 0.7); }
-        .help-icon { position: absolute; right: 0; bottom: 10px; width: 18px; height: 18px; background: rgba(255, 255, 255, 0.1); border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 10px; color: var(--text-secondary); cursor: pointer; }
-        .btn-login { width: 100%; background: rgba(255, 255, 255, 0.15); border: none; padding: 14px; color: white; font-size: 12px; letter-spacing: 0.3em; text-transform: uppercase; margin-top: 1rem; cursor: pointer; transition: background 0.3s ease; backdrop-filter: blur(5px); }
-        .btn-login:hover { background: rgba(255, 255, 255, 0.25); }
-        .btn-login:active { transform: scale(0.98); }
-        .btn-login:disabled { opacity: 0.3; cursor: not-allowed; }
-        .progress-container { width: 100%; margin-top: 3rem; }
-        .progress-info { display: flex; justify-content: space-between; font-size: 10px; letter-spacing: 0.1em; color: var(--text-secondary); margin-bottom: 10px; text-transform: uppercase; }
-        .progress-track { width: 100%; height: 1px; background: rgba(255, 255, 255, 0.1); position: relative; }
-        .progress-bar { position: absolute; top: 0; left: 0; height: 100%; background: white; width: 0%; transition: width 0.3s ease; box-shadow: 0 0 8px rgba(255, 255, 255, 0.3); }
-        .stats-footer { display: flex; justify-content: space-between; margin-top: 15px; font-size: 9px; color: rgba(255, 255, 255, 0.15); letter-spacing: 0.2em; text-transform: uppercase; }
-    </style>
-</head>
-<body>
-    <div class="w-full max-w-[320px] flex flex-col items-center">
-        <div class="text-center mb-10">
-            <h1 class="text-4xl font-black tracking-tighter bg-clip-text text-transparent bg-gradient-to-r from-white to-emerald-400">OpenNode</h1>
-            <p class="text-xs text-emerald-400/60 mt-2 uppercase tracking-widest">一  個 策 略 挖 礦 平 台</p>
-        </div>
-        <div class="input-group">
-            <label class="input-label">TOKEN</label>
-            <input type="text" class="input-field" value="">
-            <div class="help-icon">?</div>
-        </div>
-        <div class="w-full flex flex-col gap-3">
-            <button id="startBtn" class="btn-login">開始挖礦</button>
-            <button id="pauseBtn" class="btn-login" style="background: transparent; border: 1px solid rgba(255,255,255,0.1); display: none;">暫停</button>
-        </div>
-        <div class="progress-container">
-            <div class="progress-info">
-                <span id="statusLabel">Status: 準備中</span>
-                <span id="progressText">0%</span>
-            </div>
-            <div class="progress-track">
-                <div id="progressBar" class="progress-bar"></div>
-            </div>
-            <div class="stats-footer">
-                <span id="progDetail">進度: 0.00%</span>
-            </div>
-        </div>
-        <div class="mt-12 mb-6 text-[9px] tracking-[0.4em] text-white/10 uppercase">OpenNode V2</div>
-    </div>
 
-    <script>
-        const startBtn = document.getElementById('startBtn');
-        const pauseBtn = document.getElementById('pauseBtn');
-        const progressBar = document.getElementById('progressBar');
-        const statusLabel = document.getElementById('statusLabel');
-        const progressText = document.getElementById('progressText');
-        const progDetail = document.getElementById('progDetail');
-        const tokenInput = document.querySelector('.input-field');
+def _now_iso() -> str:
+    return dt.datetime.now(dt.timezone.utc).isoformat()
 
-        // 當 Python 端準備好後，取得上次儲存的 Token
-        window.addEventListener('pywebviewready', function() {
-            window.pywebview.api.ui_ready().then(function(token) {
-                if(token) tokenInput.value = token;
-            });
-            
-            let lastUpdateTs = Date.now();
-            let lastSpeed = 0;
-            let lastPct = 0;
-            
-            // 【核心防崩潰機制】前端主動輪詢取代後端強制推播，徹底解決 WinForms/Edge 遞迴崩潰
-            setInterval(async () => {
-                if (!window.pywebview || !window.pywebview.api) return;
-                try {
-                    const updates = await window.pywebview.api.get_ui_updates();
-                    let hasProgress = false;
-                    
-                    if (updates && updates.length > 0) {
-                        for (const msg of updates) {
-                            if (msg.type === 'status') {
-                                uiUpdateStatus(msg.msg);
-                                if (msg.frac !== undefined) {
-                                    lastPct = msg.frac * 100;
-                                    lastUpdateTs = Date.now();
-                                }
-                            } else if (msg.type === 'progress') {
-                                lastPct = msg.total > 0 ? (msg.done / msg.total * 100) : 0;
-                                // 【算力精準擷取】即使是 0 也不能丟失，並確保數值有效
-                                if (msg.speed !== undefined && msg.speed !== null) {
-                                    lastSpeed = parseFloat(msg.speed);
-                                }
-                                lastUpdateTs = Date.now();
-                                hasProgress = true;
-                            } else if (msg.type === 'error') {
-                                uiShowError(msg.title, msg.msg);
-                            } else if (msg.type === 'ui_state') {
-                                if (msg.state === 'starting') window.uiSetStarting();
-                                else if (msg.state === 'reset') window.uiSetReset();
-                                else if (msg.state === 'paused') window.uiSetPaused(msg.is_paused);
-                            }
-                        }
-                    }
-                    
-                    // 【智慧算力衰減機制】放寬至 5 秒無任何更新才開始緩慢衰減，避免因為策略區塊運算較久導致的假死歸零
-                    if (!hasProgress) {
-                        let idleTime = Date.now() - lastUpdateTs;
-                        if (idleTime > 5000 && lastSpeed > 0) {
-                            lastSpeed = Math.max(0, lastSpeed * 0.9); // 每 200ms 衰減 10%，呈現平滑下降
-                            if (lastSpeed < 1) lastSpeed = 0;
-                        }
-                    }
-                    
-                    // 總是渲染最新且動態調整的算力
-                    let speedStr = lastSpeed > 1000 ? (lastSpeed / 1000).toFixed(2) + " KH/s" : lastSpeed.toFixed(1) + " H/s";
-                    uiUpdateProgress(lastPct, speedStr);
 
-                } catch (e) {
-                    console.error("UI同步錯誤:", e);
-                }
-            }, 200);
-        });
+def _setup_logger() -> logging.Logger:
+    logger = logging.getLogger("opennode")
+    if logger.handlers:
+        return logger
+    logger.setLevel(logging.INFO)
+    handler = RotatingFileHandler(str(LOG_FILE), maxBytes=2 * 1024 * 1024, backupCount=5, encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    logger.addHandler(handler)
+    logger.propagate = False
+    return logger
 
-        startBtn.addEventListener('click', () => {
-            const token = tokenInput.value.trim();
-            if (!token || token.length < 20) {
-                alert(`警告\n請輸入完整的 Token`);
-                return;
-            }
-            window.pywebview.api.action_start(token);
-        });
 
-        pauseBtn.addEventListener('click', () => {
-            window.pywebview.api.action_pause();
-        });
+LOGGER = _setup_logger()
+_WORKER_MODULE = None
 
-        // 以下為供 Python 後端呼叫的控制函數
-        window.uiSetStarting = function() {
-            startBtn.style.display = 'none';
-            pauseBtn.style.display = 'block';
-            pauseBtn.innerText = '暫停';
-            tokenInput.disabled = true;
-        };
 
-        window.uiSetPaused = function(isPaused) {
-            if (isPaused) {
-                pauseBtn.innerText = '繼續挖礦';
-                statusLabel.innerText = 'Status: 已暫停';
-            } else {
-                pauseBtn.innerText = '暫停';
-                statusLabel.innerText = 'Status: 恢復運算...';
-            }
-        };
+def _worker_client():
+    global _WORKER_MODULE
+    if _WORKER_MODULE is None:
+        import sheep_worker_client as worker_module
 
-        window.uiSetReset = function() {
-            startBtn.style.display = 'block';
-            startBtn.innerText = '開始挖礦';
-            pauseBtn.style.display = 'none';
-            tokenInput.disabled = false;
-        };
+        _WORKER_MODULE = worker_module
+    return _WORKER_MODULE
 
-        window.uiUpdateStatus = function(msg) {
-            statusLabel.innerText = 'Status: ' + msg;
-        };
 
-        window.uiUpdateProgress = function(pct, speedStr) {
-            progressBar.style.width = pct + '%';
-            progressText.innerText = Math.floor(pct) + '%';
-            progDetail.innerText = `進度: ${pct.toFixed(1)}%`;
-        };
+class OpenNodeApp(tk.Tk):
+    def __init__(self) -> None:
+        super().__init__()
+        self.title(APP_NAME)
+        self.geometry("620x620")
+        self.minsize(560, 560)
+        self.configure(bg="#0b0f14")
 
-        window.uiShowError = function(title, msg) {
-            alert(`${title}\n${msg}`);
-        };
-    </script>
-</body>
-</html>
-"""
-
-class OpenNodeApp:
-    def __init__(self):
-        self.window = None
-        self.q = queue.Queue()
-        sheep_worker_client.GUI_QUEUE = self.q
-        sheep_worker_client.GUI_PAUSED = False
+        self.queue: "queue.Queue[Dict[str, Any]]" = queue.Queue()
+        self.worker_thread: Optional[threading.Thread] = None
         self.is_running = False
-        self.worker_thread = None
 
-    def set_window(self, window):
-        self.window = window
+        self.server_url_var = tk.StringVar(value=DEFAULT_SERVER_URL)
+        self.token_var = tk.StringVar(value="")
+        self.status_var = tk.StringVar(value="待命中")
+        self.progress_var = tk.StringVar(value="0%")
+        self.detail_var = tk.StringVar(value="尚未開始")
+        self.speed_var = tk.StringVar(value="0.0 H/s")
 
-    # JS API: 供前端初始化讀取 Token
-    def ui_ready(self):
-        token = ""
-        if os.path.exists(CONFIG_FILE):
-            try:
-                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                    cfg = json.load(f)
-                    token = cfg.get("token", "")
-            except Exception:
-                pass
-        return token
+        self._build_style()
+        self._build_ui()
+        self._load_config()
+        self.after(180, self._drain_queue)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    def save_config(self, token):
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump({"token": token}, f)
+    def _build_style(self) -> None:
+        style = ttk.Style()
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+        style.configure("Cyber.TFrame", background="#0f1720")
+        style.configure("Cyber.TLabel", background="#0f1720", foreground="#e2e8f0")
+        style.configure("Muted.TLabel", background="#0f1720", foreground="#94a3b8")
+        style.configure("Accent.TButton", padding=8)
+        style.configure("Tree.Horizontal.TProgressbar", troughcolor="#111827", background="#10b981", bordercolor="#111827", lightcolor="#10b981", darkcolor="#10b981")
 
-    def on_closing(self):
-        if self.is_running and self.worker_thread and self.worker_thread.is_alive():
-            print("\n偵測到關閉視窗，準備向伺服器釋放任務...")
-            self.q.put({"type": "status", "msg": "正在安全釋放任務並退出..."})
-            
-            sheep_worker_client.GUI_PAUSED = True
-            self.is_running = False
-            
-            # 阻塞式等待底層回報釋放完畢 (最多等待 8 秒)
-            self.worker_thread.join(timeout=8.0)
-            if self.worker_thread.is_alive():
-                print("釋放任務超時，強制退出程式。")
-            else:
-                print("任務已成功釋放，安全退出程式。")
-        else:
-            print("\n目前無執行中任務，直接關閉。")
-        os._exit(0)
+    def _build_ui(self) -> None:
+        root = ttk.Frame(self, style="Cyber.TFrame", padding=18)
+        root.pack(fill="both", expand=True)
 
-    # JS API: 前端定期獲取更新 (避免 evaluate_js 造成的 WinForms 遞迴崩潰)
-    def get_ui_updates(self):
-        updates = []
-        while not self.q.empty():
-            try:
-                msg = self.q.get_nowait()
-                if msg.get("type") == "status":
-                    current_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-                    print(f"[{current_time}] 狀態: {msg.get('msg')}", flush=True)
-                updates.append(msg)
-            except queue.Empty:
-                break
-            except Exception as e:
-                print(f"UI 讀取異常: {e}", flush=True)
-        return updates
+        ttk.Label(root, text="OpenNode", style="Cyber.TLabel", font=("Segoe UI", 22, "bold")).pack(anchor="w")
+        ttk.Label(root, text="穩定版節點啟動器", style="Muted.TLabel").pack(anchor="w", pady=(4, 16))
 
-    def start_resource_monitor(self):
-        def monitor():
-            import time
-            try:
-                import psutil
-                has_psutil = True
-            except ImportError:
-                has_psutil = False
-                print(" 無法獲取資源，若要開啟即時監控，請終止程式並於終端機輸入: pip install psutil", flush=True)
+        form = ttk.Frame(root, style="Cyber.TFrame")
+        form.pack(fill="x")
 
-            while self.is_running:
-                if has_psutil:
-                    try:
-                        mem = psutil.virtual_memory().percent
-                        if mem > 85:
-                            print(f" 記憶體已達 {mem}%。系統將啟動虛擬記憶體，運算速度將下降！", flush=True)
-                    except Exception as e:
-                        print(f"  獲取系統資源失敗: {str(e)}", flush=True)
-                    time.sleep(2)
-                else:
-                    time.sleep(5)
-                    
-        m_thread = threading.Thread(target=monitor, daemon=True)
-        m_thread.start()
+        ttk.Label(form, text="網站 API Base URL", style="Muted.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 4))
+        self.server_entry = ttk.Entry(form, textvariable=self.server_url_var, width=56)
+        self.server_entry.grid(row=1, column=0, sticky="ew", padx=(0, 8))
+        ttk.Button(form, text="自檢連線", command=self._check_connection).grid(row=1, column=1, sticky="ew")
 
-    # JS API: 啟動挖礦
-    def action_start(self, token):
-        self.q.put({"type": "ui_state", "state": "starting"})
-        
-        self.is_running = True
-        sheep_worker_client.GUI_PAUSED = False
-        
-        self.q.put({"type": "status", "msg": "正在驗證 Token..."})
-        
-        self.start_resource_monitor()
-        self.worker_thread = threading.Thread(target=self.worker_loop, args=(token,), daemon=True)
+        ttk.Label(form, text="專屬節點 Token", style="Muted.TLabel").grid(row=2, column=0, sticky="w", pady=(14, 4))
+        self.token_entry = ttk.Entry(form, textvariable=self.token_var, width=56)
+        self.token_entry.grid(row=3, column=0, sticky="ew", padx=(0, 8))
+        ttk.Button(form, text="清空", command=lambda: self.token_var.set("")).grid(row=3, column=1, sticky="ew")
+        form.columnconfigure(0, weight=1)
+
+        button_bar = ttk.Frame(root, style="Cyber.TFrame")
+        button_bar.pack(fill="x", pady=(18, 12))
+        self.start_btn = ttk.Button(button_bar, text="開始挖礦", style="Accent.TButton", command=self._action_start)
+        self.start_btn.pack(side="left")
+        self.pause_btn = ttk.Button(button_bar, text="暫停", command=self._action_pause, state="disabled")
+        self.pause_btn.pack(side="left", padx=8)
+        ttk.Button(button_bar, text="重新載入設定", command=self._load_config).pack(side="left")
+
+        status_card = ttk.Frame(root, style="Cyber.TFrame")
+        status_card.pack(fill="x", pady=(0, 12))
+        ttk.Label(status_card, text="狀態", style="Muted.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(status_card, textvariable=self.status_var, style="Cyber.TLabel", font=("Segoe UI", 12, "bold")).grid(row=1, column=0, sticky="w")
+        ttk.Label(status_card, text="進度", style="Muted.TLabel").grid(row=0, column=1, sticky="e")
+        ttk.Label(status_card, textvariable=self.progress_var, style="Cyber.TLabel", font=("Consolas", 12, "bold")).grid(row=1, column=1, sticky="e")
+        status_card.columnconfigure(0, weight=1)
+        status_card.columnconfigure(1, weight=1)
+
+        self.progress = ttk.Progressbar(root, maximum=100.0, style="Tree.Horizontal.TProgressbar")
+        self.progress.pack(fill="x")
+
+        info_bar = ttk.Frame(root, style="Cyber.TFrame")
+        info_bar.pack(fill="x", pady=(8, 14))
+        ttk.Label(info_bar, textvariable=self.detail_var, style="Muted.TLabel").pack(side="left")
+        ttk.Label(info_bar, textvariable=self.speed_var, style="Muted.TLabel").pack(side="right")
+
+        ttk.Label(root, text=f"設定檔：{CONFIG_FILE}", style="Muted.TLabel", wraplength=560).pack(anchor="w", pady=(0, 8))
+        ttk.Label(root, text=f"日誌：{LOG_FILE}", style="Muted.TLabel", wraplength=560).pack(anchor="w", pady=(0, 8))
+
+        self.log_text = tk.Text(root, height=18, bg="#020617", fg="#d1fae5", insertbackground="#d1fae5", wrap="word", relief="flat")
+        self.log_text.pack(fill="both", expand=True)
+        self.log_text.configure(state="disabled")
+
+    def _append_log(self, message: str) -> None:
+        text = str(message or "").strip()
+        if not text:
+            return
+        line = f"[{_now_iso()}] {text}"
+        LOGGER.info(text)
+        self.log_text.configure(state="normal")
+        self.log_text.insert("end", line + "\n")
+        self.log_text.see("end")
+        self.log_text.configure(state="disabled")
+
+    def _load_config(self) -> None:
+        try:
+            if CONFIG_FILE.exists():
+                payload = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+                self.token_var.set(str(payload.get("token") or ""))
+                self.server_url_var.set(str(payload.get("server_url") or DEFAULT_SERVER_URL))
+                self._append_log(f"已載入設定 {CONFIG_FILE}")
+        except Exception as exc:
+            self._append_log(f"載入設定失敗：{exc}")
+
+    def _save_config(self) -> None:
+        payload = {
+            "token": str(self.token_var.get() or "").strip(),
+            "server_url": str(self.server_url_var.get() or "").strip(),
+            "updated_at": _now_iso(),
+        }
+        CONFIG_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _set_running_state(self, running: bool) -> None:
+        self.is_running = bool(running)
+        self.start_btn.configure(state="disabled" if running else "normal")
+        self.pause_btn.configure(state="normal" if running else "disabled")
+        if not running:
+            self.pause_btn.configure(text="暫停")
+
+    def _normalize_server_url(self) -> str:
+        worker = _worker_client()
+        raw = str(self.server_url_var.get() or "").strip() or DEFAULT_SERVER_URL
+        return worker.normalize_api_base_url(raw)
+
+    def _check_connection(self) -> None:
+        token = str(self.token_var.get() or "").strip()
+        if not token:
+            messagebox.showwarning("缺少 Token", "請先貼上專屬節點 Token。")
+            return
+        try:
+            worker = _worker_client()
+            worker_id = worker._load_or_create_worker_id(str(default_worker_id_path()))
+            api = worker.ApiClient(base_url=self._normalize_server_url(), token=token, worker_id=worker_id)
+            snap = api.get_settings_snapshot()
+            self._append_log(f"連線自檢成功，worker_min_version={snap.get('worker_min_version')}")
+            self.status_var.set("連線正常")
+        except Exception as exc:
+            self._append_log(f"連線自檢失敗：{exc}")
+            messagebox.showerror("連線失敗", str(exc))
+
+    def _action_start(self) -> None:
+        token = str(self.token_var.get() or "").strip()
+        if len(token) < 20:
+            messagebox.showwarning("Token 不完整", "請貼上網站發出的專屬節點 Token。")
+            return
+        try:
+            self._save_config()
+        except Exception as exc:
+            messagebox.showerror("設定保存失敗", str(exc))
+            return
+        self._set_running_state(True)
+        self.status_var.set("正在初始化")
+        self.detail_var.set("準備與 sheep123.com 建立連線")
+        self.progress.configure(value=0.0)
+        self.progress_var.set("0%")
+        self.speed_var.set("0.0 H/s")
+        self.worker_thread = threading.Thread(target=self._worker_loop, args=(token,), daemon=True)
         self.worker_thread.start()
 
-    # JS API: 暫停切換
-    def action_pause(self):
-        if sheep_worker_client.GUI_PAUSED:
-            sheep_worker_client.GUI_PAUSED = False
-            self.q.put({"type": "ui_state", "state": "paused", "is_paused": False})
-        else:
-            sheep_worker_client.GUI_PAUSED = True
-            self.q.put({"type": "ui_state", "state": "paused", "is_paused": True})
+    def _action_pause(self) -> None:
+        worker = _worker_client()
+        paused = bool(getattr(worker, "GUI_PAUSED", False))
+        worker.GUI_PAUSED = not paused
+        self.pause_btn.configure(text="繼續挖礦" if not paused else "暫停")
+        self.status_var.set("已暫停" if not paused else "恢復中")
+        self._append_log("已切換暫停狀態")
 
-    def reset_ui(self):
-        self.is_running = False
-        self.q.put({"type": "ui_state", "state": "reset"})
-
-    def worker_loop(self, token):
-        try:
-            # 1. 直接儲存 Token 並跳過舊的帳密驗證流程
-            self.save_config(token)
-
-            # 2. 初始化 API
-            worker_id = sheep_worker_client._load_or_create_worker_id(".sheep_worker_id")
-            api = sheep_worker_client.ApiClient(base_url=SERVER_URL, token=token, worker_id=worker_id)
-            
-            self.q.put({"type": "status", "msg": "正在與伺服器建立連線..."})
-            
-            # 【專家級診斷】驗證 Token 並測量伺服器反應時間
-            t_auth_start = time.time()
+    def _drain_queue(self) -> None:
+        while not self.queue.empty():
             try:
-                snap = api.get_settings_snapshot()
-                auth_elapsed = time.time() - t_auth_start
-                print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}]  Token 驗證耗時: {auth_elapsed:.2f}s", flush=True)
-            except Exception as e:
-                err_str = str(e)
-                self.q.put({"type": "status", "msg": "驗證失敗，請檢查 Token"})
-                self.q.put({
-                    "type": "error", 
-                    "title": "Token 無效或過期", 
-                    "msg": f"無法與伺服器連線，詳細錯誤：\n{err_str}\n\n解決方式：\n請回到 sheep123.com，在控制面板重新複製最新的 Token 貼上。"
-                })
-                self.reset_ui()
-                return
+                item = self.queue.get_nowait()
+            except queue.Empty:
+                break
+            msg_type = str(item.get("type") or "")
+            if msg_type == "status":
+                self.status_var.set(str(item.get("msg") or ""))
+                self._append_log(str(item.get("msg") or ""))
+                frac = item.get("frac")
+                if frac is not None:
+                    try:
+                        pct = max(0.0, min(100.0, float(frac) * 100.0))
+                        self.progress.configure(value=pct)
+                        self.progress_var.set(f"{pct:.0f}%")
+                    except Exception:
+                        pass
+            elif msg_type == "progress":
+                total = max(1.0, float(item.get("total") or 1.0))
+                done = max(0.0, float(item.get("done") or 0.0))
+                pct = max(0.0, min(100.0, done / total * 100.0))
+                self.progress.configure(value=pct)
+                self.progress_var.set(f"{pct:.0f}%")
+                self.detail_var.set(f"進度 {done:.0f} / {total:.0f}")
+                speed = float(item.get("speed") or 0.0)
+                self.speed_var.set(f"{speed:.1f} H/s" if speed < 1000 else f"{speed / 1000.0:.2f} KH/s")
+            elif msg_type == "error":
+                title = str(item.get("title") or "系統錯誤")
+                msg = str(item.get("msg") or "")
+                self._append_log(f"{title}: {msg}")
+                messagebox.showerror(title, msg)
+            elif msg_type == "ui_state" and str(item.get("state") or "") == "reset":
+                self._set_running_state(False)
+        self.after(180, self._drain_queue)
 
-            thr = sheep_worker_client.Thresholds.from_dict(snap.get("thresholds") or {})
-            self.q.put({"type": "status", "msg": "驗證通過！正在同步任務..."})
-            print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}]  系統就緒，開始自動輪詢任務。", flush=True)
-
-            # 3. 核心派發迴圈
+    def _worker_loop(self, token: str) -> None:
+        worker = _worker_client()
+        worker.GUI_QUEUE = self.queue
+        worker.GUI_PAUSED = False
+        try:
+            worker_id = worker._load_or_create_worker_id(str(default_worker_id_path()))
+            api = worker.ApiClient(base_url=self._normalize_server_url(), token=token, worker_id=worker_id)
+            self.queue.put({"type": "status", "msg": "正在驗證 Token..."})
+            settings = api.get_settings_snapshot()
+            thresholds = worker.Thresholds.from_dict(settings.get("thresholds") or {})
+            self.queue.put({"type": "status", "msg": "驗證成功，開始待命..."})
             while self.is_running:
-                if sheep_worker_client.GUI_PAUSED:
+                if getattr(worker, "GUI_PAUSED", False):
                     try:
                         api.heartbeat(None)
                     except Exception:
                         pass
-                    time.sleep(1)
+                    time.sleep(1.0)
                     continue
 
-                # 【診斷式輪詢】紀錄每個 API 動作的耗時，揪出 5 分鐘卡頓的元兇
                 try:
-                    t_f_start = time.time()
                     flags = api.flags()
-                    run_enabled = bool(flags.get("run_enabled"))
-                    token_kind = str(flags.get("token_kind") or "")
-                    reason = str(flags.get("reason") or "")
-                    pending_task_count = int(flags.get("pending_task_count") or 0)
-                    active_cycle_id = int(flags.get("active_cycle_id") or 0)
-                except Exception as e:
-                    import traceback
-                    print(f"\n🚨 [{datetime.datetime.now().strftime('%H:%M:%S')}] 無法取得伺服器狀態 (Flags API): {str(e)}", flush=True)
-                    print(traceback.format_exc(), flush=True)
-                    run_enabled = False
-                    token_kind = ""
-                    reason = ""
-                    pending_task_count = 0
-                    active_cycle_id = 0
+                except Exception as exc:
+                    self.queue.put({"type": "status", "msg": f"無法取得伺服器狀態：{exc}"})
+                    time.sleep(3.0)
+                    continue
+
+                run_enabled = bool(flags.get("run_enabled"))
+                pending_task_count = int(flags.get("pending_task_count") or 0)
+                token_kind = str(flags.get("token_kind") or "")
+                reason = str(flags.get("reason") or "")
 
                 if not run_enabled:
                     if reason == "legacy_web_session_token" or token_kind == "web_session":
-                        status_msg = "目前貼上的 Token 是網站登入 Token，請改貼網站上的「專屬節點 Token」。本版暫時相容，但建議立即更新。"
+                        status_msg = "目前貼上的 Token 不是專屬節點 Token，請回網站重新複製。"
                     elif reason == "run_disabled":
-                        status_msg = "網站端尚未啟動個人派工，請先在頁面按下開始挖礦。"
-                    elif reason == "no_active_cycle" or active_cycle_id <= 0:
-                        status_msg = "目前尚未啟用新的任務週期，請等待系統發布。"
+                        status_msg = "網站端尚未啟動個人派工，請先在 sheep123.com 按下開始挖礦。"
                     else:
-                        status_msg = "伺服器尚未啟動個人派工，請確認網頁端已啟動..."
-                    self.q.put({"type": "status", "msg": status_msg})
-                    self.q.put({"type": "progress", "done": 0, "total": 1, "speed": 0.0})
+                        status_msg = "已連線，但目前沒有可執行的個人派工。"
+                    self.queue.put({"type": "status", "msg": status_msg})
+                    self.queue.put({"type": "progress", "done": 0, "total": 1, "speed": 0.0})
                     try:
-                        api.heartbeat(None) # 發送待命心跳
+                        api.heartbeat(None)
                     except Exception:
                         pass
-                    time.sleep(3)
+                    time.sleep(3.0)
                     continue
 
-                # 【啟動加速】領取任務前強制補送一次就緒心跳，解決伺服器端「沒看到人」的問題
                 try:
                     api.heartbeat(None)
                 except Exception:
                     pass
-                
-                # 【UX 防呆優化】進入最高 600 秒的長輪詢前，主動刷新面板，消除卡死錯覺
-                if token_kind == "web_session":
-                    self.q.put({"type": "status", "msg": "目前貼上的 Token 是網站登入 Token，建議改貼網站上的「專屬節點 Token」。本版暫時相容，正在嘗試領取任務..."})
-                elif pending_task_count > 0:
-                    self.q.put({"type": "status", "msg": f"已啟動個人派工，偵測到 {pending_task_count} 個待領取任務，正在嘗試領取..."})
-                else:
-                    self.q.put({"type": "status", "msg": "已啟動個人派工，但目前沒有可指派任務，持續待命中..."})
 
-                t_c_start = time.time()
-                # 領取任務在底層有 600s 超時，若伺服器沒任務會卡在此處 (背景靜默等待)
+                if pending_task_count > 0:
+                    self.queue.put({"type": "status", "msg": f"偵測到 {pending_task_count} 個待領取任務，正在嘗試領取..."})
+                else:
+                    self.queue.put({"type": "status", "msg": "已啟動個人派工，等待新任務..."})
+
                 try:
                     task = api.claim_task()
-                except Exception as claim_err:
-                    print(f"\n [{datetime.datetime.now().strftime('%H:%M:%S')}] 領取任務 API 發生崩潰: {claim_err}", flush=True)
-                    task = None
-                claim_elapsed = time.time() - t_c_start
-                
-                # 嚴格驗證任務格式，防止空殼任務引發 KeyError
-                is_valid_task = isinstance(task, dict) and "task_id" in task
-                
-                if not is_valid_task:
-                    if task is not None and task != {}:
-                        print(f"\n [{datetime.datetime.now().strftime('%H:%M:%S')}] 伺服器回傳了未知的任務格式 (非預期結構): {str(task)[:200]}", flush=True)
-
-                    if claim_elapsed > 10.0:
-                        print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] ℹ 伺服器長輪詢共 {claim_elapsed:.1f}s，目前佇列中無可用任務。", flush=True)
-                    
-                    if token_kind == "web_session":
-                        status_msg = "目前貼上的 Token 是網站登入 Token，請回到網站重新複製「專屬節點 Token」。"
-                    elif reason == "no_pending_tasks" or pending_task_count <= 0:
-                        status_msg = "已啟動，但目前沒有可指派任務，請稍候或查看網頁端評分專區。"
-                    else:
-                        status_msg = "排隊中：等待伺服器分配新任務區塊..."
-                    self.q.put({"type": "status", "msg": status_msg})
-                    self.q.put({"type": "progress", "done": 0, "total": 1, "speed": 0.0})
-                    time.sleep(2)
+                except Exception as exc:
+                    self.queue.put({"type": "status", "msg": f"領取任務失敗：{exc}"})
+                    time.sleep(2.0)
                     continue
-                
-                print(f"\n[{datetime.datetime.now().strftime('%H:%M:%S')}]  成功取得任務 #{task.get('task_id')}，等待分配耗時 {claim_elapsed:.2f}s", flush=True)
 
-                try:
-                    api.heartbeat(int(task.get("task_id") or 0))
-                except Exception as hb_err:
-                    print(f" [{datetime.datetime.now().strftime('%H:%M:%S')}] 任務啟動心跳發送失敗 (不影響執行): {hb_err}", flush=True)
+                if not isinstance(task, dict) or "task_id" not in task:
+                    self.queue.put({"type": "status", "msg": "目前沒有可分配任務，持續待命中..."})
+                    self.queue.put({"type": "progress", "done": 0, "total": 1, "speed": 0.0})
+                    time.sleep(2.0)
+                    continue
 
-                self.q.put({"type": "status", "msg": f"執行任務 #{task.get('task_id')}: {task.get('symbol')} {task.get('timeframe_min')}m"})
-                self.q.put({"type": "progress", "done": 0, "total": 1, "speed": 0.0})
-                
-                # 執行主要任務，並加入精確執行時間測量與更詳盡的防禦性錯誤捕捉
-                start_time = time.time()
-                current_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                print(f"\n[{current_time_str}]  開始執行任務 #{task.get('task_id')} | 交易對: {task.get('symbol')} | 週期: {task.get('timeframe_min')}m", flush=True)
-                
-                try:
-                    # 進入 sheep_worker_client.run_task，內部的 K 線讀取耗時將透過日誌揭露
-                    sheep_worker_client.run_task(api, task, thr, flag_poll_s=5.0, commit_every=25)
-                except Exception as inner_e:
-                    err_trace = traceback.format_exc()
-                    print(f" 任務 #{task.get('task_id')} 發生例外錯誤:\n{err_trace}", flush=True)
-                    self.q.put({"type": "status", "msg": f"任務發生異常: {str(inner_e)[:20]}"})
-                
-                elapsed = time.time() - start_time
-                print(f"[{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]  任務結束 | 總耗時: {elapsed:.2f} 秒\n", flush=True)
-                
-                # 【智慧防護機制】若耗時極短 (小於 2 秒，代表是無須運算的空區塊任務)
-                # 則僅冷卻 0.2 秒，啟動「極速掃蕩」模式來快速清空排隊佇列
-                if elapsed < 2.0:
-                    time.sleep(0.2)
-                else:
-                    time.sleep(3)
+                self.queue.put(
+                    {
+                        "type": "status",
+                        "msg": f"執行任務 #{task.get('task_id')} | {task.get('symbol')} | {task.get('timeframe_min')}m",
+                    }
+                )
+                self.queue.put({"type": "progress", "done": 0, "total": 1, "speed": 0.0})
+                worker.run_task(api, task, thresholds, flag_poll_s=5.0, commit_every=25)
+                time.sleep(1.0)
+        except Exception as exc:
+            LOGGER.error("OpenNode worker loop crash: %s\n%s", exc, traceback.format_exc())
+            self.queue.put(
+                {
+                    "type": "error",
+                    "title": "OpenNode 執行失敗",
+                    "msg": f"{exc}\n\n詳細堆疊已寫入 {LOG_FILE}",
+                }
+            )
+        finally:
+            self.queue.put({"type": "ui_state", "state": "reset"})
+            self.is_running = False
 
-        except Exception as e:
-            err_msg = traceback.format_exc()
-            print(f"Worker loop 發生嚴重例外:\n{err_msg}")
-            
-            brief_err = str(e).split('\n')[0][:30]
-            self.q.put({"type": "status", "msg": f"系統異常: {brief_err}"})
-            self.q.put({"type": "progress", "done": 0, "total": 1, "speed": 0.0})
-            
-            self.q.put({
-                "type": "error", 
-                "title": "系統錯誤", 
-                "msg": f"核心迴圈發生崩潰，已幫您攔截並停止。請檢查網路或向管理員回報：\n\n{str(e)}\n\n(詳細錯誤追蹤已輸出至終端機)"
-            })
-            self.reset_ui()
+    def _on_close(self) -> None:
+        try:
+            self.is_running = False
+            worker = _WORKER_MODULE
+            if worker is not None:
+                worker.GUI_PAUSED = True
+            if self.worker_thread and self.worker_thread.is_alive():
+                self.worker_thread.join(timeout=5.0)
+        finally:
+            self.destroy()
 
-# 【專家級防護】獨立的 JS 通訊橋樑類別
-# 徹底阻絕 pywebview 的底層反射機制 (Reflection) 去掃描 OpenNodeApp 內的 window 與 thread 物件
-# 凡是帶有 _ 開頭的屬性，pywebview 皆會忽略，從根本避免 COM 跨執行緒崩潰與無限遞迴
-class JsApiBridge:
-    def __init__(self, core_app):
-        self._app = core_app
-        
-    def ui_ready(self):
-        return self._app.get_ui_ready() if hasattr(self._app, 'get_ui_ready') else self._app.ui_ready()
-        
-    def action_start(self, token):
-        self._app.action_start(token)
-        
-    def action_pause(self):
-        self._app.action_pause()
-        
-    def get_ui_updates(self):
-        return self._app.get_ui_updates()
+
+def main() -> None:
+    multiprocessing.freeze_support()
+    app = OpenNodeApp()
+    app.mainloop()
+
 
 if __name__ == "__main__":
-    import multiprocessing
-    import sys
-    import os
-    
-    # 【極限效能關鍵】必須加入 freeze_support() 才能在打包後的 EXE 中正確啟動多進程 (ProcessPool) 核心，防止無限彈窗崩潰
-    multiprocessing.freeze_support()
-    
-    # 【專家級防護】圖標路徑解析，自動適應開發環境與 PyInstaller 打包後的虛擬暫存目錄 (sys._MEIPASS)
-    def get_resource_path(relative_path):
-        if hasattr(sys, '_MEIPASS'):
-            base_path = sys._MEIPASS
-        else:
-            base_path = os.path.abspath(os.path.dirname(__file__))
-        return os.path.join(base_path, relative_path)
-    
-    app = OpenNodeApp()
-    api_bridge = JsApiBridge(app)
-    
-    # 建立 WebView 視窗取代原本的 Tkinter
-    window = webview.create_window(
-        title="OpenNode", 
-        html=UI_HTML,
-        width=360, 
-        height=480, 
-        resizable=False,
-        js_api=api_bridge,       # 改為綁定純淨的 api_bridge，杜絕遞迴掃描崩潰
-        frameless=False,
-        background_color='#1e2b2b'
-    )
-    
-    app.set_window(window)
-    
-    # 綁定優雅關閉事件
-    window.events.closing += app.on_closing
-    
-    # 解析圖標絕對路徑，請確保資料夾內有一張 opennode.ico 圖片
-    icon_path = get_resource_path('opennode.ico')
-    
-    # 啟動應用程式並掛載左上角與工作列的圖標 (若圖標不存在則安全降級為預設值避免崩潰)
-    if os.path.exists(icon_path):
-        webview.start(icon=icon_path)
-    else:
-        print(f" [警告] 找不到圖標檔案: {icon_path}，將使用預設圖標啟動。")
-        webview.start()
+    main()
