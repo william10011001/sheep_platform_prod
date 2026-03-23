@@ -58,8 +58,12 @@ logger = logging.getLogger("api")
 from sheep_platform_rate_limit import RateLimiter
 from sheep_platform_version import semver_gte
 
+_run_init_db_on_boot = str(os.environ.get("SHEEP_INIT_DB_ON_BOOT", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
 if hasattr(db, "init_db"):
-    db.init_db()
+    if _run_init_db_on_boot:
+        db.init_db()
+    else:
+        logger.info("db.init_db() skipped on API boot")
 
 # [極致修復] 自動對齊 Compute 算力節點的系統帳號與權限
 try:

@@ -54,6 +54,7 @@ services:
     environment:
       SHEEP_DB_URL: "${DO_PG_URL}"
       SHEEP_DB_PATH: ""
+      SHEEP_INIT_DB_ON_BOOT: "0"
       SHEEP_API_ROOT_PATH: /sheep123
       SHEEP_GIT_SHA: ${SHEEP_GIT_SHA}
       SHEEP_RUN_SCHEDULER: "0"
@@ -66,6 +67,8 @@ services:
       SHEEP_COMPUTE_PASS: ${SHEEP_BOOTSTRAP_ADMIN_PASS}
     # 關鍵修正 2：解除對 migrate 的強制等待，讓 API 瞬間啟動
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       db:
         condition: service_healthy
     volumes:
