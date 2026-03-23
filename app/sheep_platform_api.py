@@ -2182,12 +2182,15 @@ def landing() -> HTMLResponse:
 def manifest():
     conn = db._conn()
     try:
+        worker_download_url = str(db.get_setting(conn, "worker_download_url", db.DEFAULT_WORKER_DOWNLOAD_URL) or "").strip()
+        if not worker_download_url:
+            worker_download_url = str(db.DEFAULT_WORKER_DOWNLOAD_URL)
         return {
             "server_time": _utc_iso(),
             "worker_min_version": str(db.get_setting(conn, "worker_min_version", "2.0.0")),
             "worker_latest_version": str(db.get_setting(conn, "worker_latest_version", "2.0.0")),
             "worker_min_protocol": int(db.get_setting(conn, "worker_min_protocol", 2)),
-            "worker_download_url": str(db.get_setting(conn, "worker_download_url", "")),
+            "worker_download_url": worker_download_url,
             "worker_download_sha256": str(db.get_setting(conn, "worker_download_sha256", "")),
             "worker_bundle_kind": str(db.get_setting(conn, "worker_bundle_kind", "onedir")),
         }

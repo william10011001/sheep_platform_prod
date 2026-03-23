@@ -206,6 +206,8 @@ def _db_path() -> str:
     return os.path.join(base_dir, "data", "sheep.db")
 
 
+DEFAULT_WORKER_DOWNLOAD_URL = "https://drive.google.com/file/d/13Vvpb7mG5F0ivyuXU58SLfQKAQ3n8zeY/view?usp=sharing"
+
 _DEFAULT_THRESHOLD_SETTINGS: Dict[str, Any] = {
     "min_trades": 30,
     "min_total_return_pct": 3.0,
@@ -213,6 +215,7 @@ _DEFAULT_THRESHOLD_SETTINGS: Dict[str, Any] = {
     "min_sharpe": 0.6,
     "candidate_keep_top_n": 30,
     "default_avatar_data_url": "",
+    "worker_download_url": DEFAULT_WORKER_DOWNLOAD_URL,
 }
 
 _PROFILE_NICKNAME_MAX_LEN = 16

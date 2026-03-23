@@ -981,6 +981,21 @@ def test_dashboard_prefers_previous_publishable_runtime_snapshot_and_backfills_m
     assert item["max_drawdown_pct"] == pytest.approx(3.37)
 
 
+def test_manifest_exposes_default_worker_download_url_and_honors_override(admin_client):
+    client = admin_client["client"]
+    db_module = admin_client["db"]
+
+    manifest = client.get("/manifest")
+    assert manifest.status_code == 200, manifest.text
+    assert manifest.json()["worker_download_url"] == db_module.DEFAULT_WORKER_DOWNLOAD_URL
+
+    db_module.set_setting("worker_download_url", "https://example.com/OpenNode.exe")
+
+    updated_manifest = client.get("/manifest")
+    assert updated_manifest.status_code == 200, updated_manifest.text
+    assert updated_manifest.json()["worker_download_url"] == "https://example.com/OpenNode.exe"
+
+
 def test_dashboard_exposes_review_ready_items_for_rating_panel(admin_client):
     client = admin_client["client"]
     headers = admin_client["headers"]
