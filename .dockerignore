@@ -1,0 +1,17 @@
+*
+!app/
+!app/**
+!deploy/
+!deploy/Dockerfile.api
+!deploy/scripts/
+!deploy/scripts/entrypoint_api.sh
+
+app/__pycache__/
+app/.pytest_cache/
+app/venv/
+app/dist/
+app/build/
+app/data/
+app/.sheep_worker_id
+app/*.pyc
+app/*.pyo

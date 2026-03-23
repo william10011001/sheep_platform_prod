@@ -1,4 +1,10 @@
 
+x-app-build: &app-build
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile.api
+  image: deploy-app:${SHEEP_GIT_SHA:-latest}
+
 services:
   db:
     image: postgres:16-alpine
@@ -25,9 +31,7 @@ services:
       retries: 10
 
   migrate:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile.api
+    <<: *app-build
     command: ["sh", "-lc", "python -c 'import sheep_platform_db; sheep_platform_db.init_db()'"]
     depends_on:
       db:
@@ -47,9 +51,7 @@ services:
     restart: "no"
 
   api:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile.api
+    <<: *app-build
     # 關鍵修正 1：對外開放 8000 埠號，打通 Nginx 的連線通道，徹底解決 502 錯誤
     ports:
       - "8000:8000"
@@ -99,9 +101,7 @@ services:
 
   # [Worker 後台服務] 專職負責任務分配，使用較輕量的 api 鏡像
   worker:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile.api
+    <<: *app-build
     environment:
       SHEEP_DB_URL: "${DO_PG_URL}"
       SHEEP_DB_PATH: ""
@@ -129,9 +129,7 @@ services:
     entrypoint: ["python", "-u", "sheep_worker_daemon.py"]
 
   compute:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile.api
+    <<: *app-build
     environment:
       SHEEP_DB_URL: "${DO_PG_URL}"
       SHEEP_DB_PATH: ""
