@@ -49,6 +49,9 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+_REVIEW_READY_CACHE: Dict[str, Any] = {"ts": 0.0, "values": {}}
+
+
 def _in_docker() -> bool:
     # 目的：判斷目前程式是否在 docker/container 裡，避免把 compose 專用的 host 規則套到本機直跑
     # [專家級修復] 增加環境變數與 DNS 解析的啟發式判斷，防止較新版本的 container 引擎沒有 /.dockerenv
@@ -975,6 +978,9 @@ def init_db() -> None:
                 CREATE INDEX IF NOT EXISTS idx_mining_tasks_status_user ON mining_tasks (status, user_id);
                 CREATE INDEX IF NOT EXISTS idx_mining_tasks_status_id ON mining_tasks (status, id);
                 CREATE INDEX IF NOT EXISTS idx_mining_tasks_user_cycle_status_id ON mining_tasks (user_id, cycle_id, status, id);
+                CREATE INDEX IF NOT EXISTS idx_mining_tasks_completed_review_status ON mining_tasks ((COALESCE(progress_json::jsonb->>'review_status', progress_json::jsonb->>'oos_status', ''))) WHERE status = 'completed';
+                CREATE INDEX IF NOT EXISTS idx_mining_tasks_user_completed_review_status ON mining_tasks (user_id, (COALESCE(progress_json::jsonb->>'review_status', progress_json::jsonb->>'oos_status', ''))) WHERE status = 'completed';
+                CREATE INDEX IF NOT EXISTS idx_mining_tasks_activity_status_user ON mining_tasks (COALESCE(last_heartbeat, updated_at, created_at), status, user_id);
                 CREATE INDEX IF NOT EXISTS idx_users_runnable ON users(disabled, run_enabled, id);
                 CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at);
 
@@ -987,6 +993,7 @@ def init_db() -> None:
                     audit_json TEXT DEFAULT '{}',
                     submitted_at TEXT
                 );
+                CREATE INDEX IF NOT EXISTS idx_submissions_status_user ON submissions(status, user_id);
 
                 CREATE TABLE IF NOT EXISTS candidates (
                     id BIGSERIAL PRIMARY KEY,
@@ -1153,7 +1160,11 @@ def init_db() -> None:
                 "CREATE INDEX IF NOT EXISTS idx_mining_tasks_status_user ON mining_tasks(status, user_id)",
                 "CREATE INDEX IF NOT EXISTS idx_mining_tasks_status_id ON mining_tasks(status, id)",
                 "CREATE INDEX IF NOT EXISTS idx_mining_tasks_user_cycle_status_id ON mining_tasks(user_id, cycle_id, status, id)",
+                "CREATE INDEX IF NOT EXISTS idx_mining_tasks_completed_review_status ON mining_tasks((COALESCE(progress_json::jsonb->>'review_status', progress_json::jsonb->>'oos_status', ''))) WHERE status = 'completed'",
+                "CREATE INDEX IF NOT EXISTS idx_mining_tasks_user_completed_review_status ON mining_tasks(user_id, (COALESCE(progress_json::jsonb->>'review_status', progress_json::jsonb->>'oos_status', ''))) WHERE status = 'completed'",
+                "CREATE INDEX IF NOT EXISTS idx_mining_tasks_activity_status_user ON mining_tasks((COALESCE(last_heartbeat, updated_at, created_at)), status, user_id)",
                 "CREATE INDEX IF NOT EXISTS idx_users_runnable ON users(disabled, run_enabled, id)",
+                "CREATE INDEX IF NOT EXISTS idx_submissions_status_user ON submissions(status, user_id)",
                 "CREATE INDEX IF NOT EXISTS idx_candidates_created_user_score ON candidates(created_at, user_id, score)",
                 "CREATE INDEX IF NOT EXISTS idx_strategies_status_user ON strategies(status, user_id)",
                 "CREATE INDEX IF NOT EXISTS idx_strategies_user_status_created ON strategies(user_id, status, created_at)",
@@ -1268,6 +1279,9 @@ def init_db() -> None:
                 CREATE INDEX IF NOT EXISTS idx_mining_tasks_status_user ON mining_tasks (status, user_id);
                 CREATE INDEX IF NOT EXISTS idx_mining_tasks_status_id ON mining_tasks (status, id);
                 CREATE INDEX IF NOT EXISTS idx_mining_tasks_user_cycle_status_id ON mining_tasks (user_id, cycle_id, status, id);
+                CREATE INDEX IF NOT EXISTS idx_mining_tasks_completed_review_status ON mining_tasks (COALESCE(json_extract(progress_json, '$.review_status'), json_extract(progress_json, '$.oos_status'), '')) WHERE status = 'completed';
+                CREATE INDEX IF NOT EXISTS idx_mining_tasks_user_completed_review_status ON mining_tasks (user_id, COALESCE(json_extract(progress_json, '$.review_status'), json_extract(progress_json, '$.oos_status'), '')) WHERE status = 'completed';
+                CREATE INDEX IF NOT EXISTS idx_mining_tasks_activity_status_user ON mining_tasks (COALESCE(last_heartbeat, updated_at, created_at), status, user_id);
                 CREATE INDEX IF NOT EXISTS idx_users_runnable ON users(disabled, run_enabled, id);
                 
                 CREATE TABLE IF NOT EXISTS submissions (
@@ -1279,6 +1293,7 @@ def init_db() -> None:
                     audit_json TEXT DEFAULT '{}',
                     submitted_at TEXT
                 );
+                CREATE INDEX IF NOT EXISTS idx_submissions_status_user ON submissions(status, user_id);
 
                 CREATE TABLE IF NOT EXISTS candidates (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1444,7 +1459,11 @@ def init_db() -> None:
                 "CREATE INDEX IF NOT EXISTS idx_payouts_created_user ON payouts(created_at, user_id)",
                 "CREATE INDEX IF NOT EXISTS idx_mining_tasks_status_user ON mining_tasks(status, user_id)",
                 "CREATE INDEX IF NOT EXISTS idx_mining_tasks_status_id ON mining_tasks(status, id)",
-                "CREATE INDEX IF NOT EXISTS idx_mining_tasks_user_cycle_status_id ON mining_tasks(user_id, cycle_id, status, id)"
+                "CREATE INDEX IF NOT EXISTS idx_mining_tasks_user_cycle_status_id ON mining_tasks(user_id, cycle_id, status, id)",
+                "CREATE INDEX IF NOT EXISTS idx_mining_tasks_completed_review_status ON mining_tasks(COALESCE(json_extract(progress_json, '$.review_status'), json_extract(progress_json, '$.oos_status'), '')) WHERE status = 'completed'",
+                "CREATE INDEX IF NOT EXISTS idx_mining_tasks_user_completed_review_status ON mining_tasks(user_id, COALESCE(json_extract(progress_json, '$.review_status'), json_extract(progress_json, '$.oos_status'), '')) WHERE status = 'completed'",
+                "CREATE INDEX IF NOT EXISTS idx_mining_tasks_activity_status_user ON mining_tasks(COALESCE(last_heartbeat, updated_at, created_at), status, user_id)",
+                "CREATE INDEX IF NOT EXISTS idx_submissions_status_user ON submissions(status, user_id)"
             ]
             
             for stmt in statements_sqlite:
@@ -2778,6 +2797,7 @@ def count_submissions(user_id: int = 0, status: str = "") -> int:
 
 
 def count_review_ready_tasks(user_id: int = 0) -> int:
+    cache_key = f"user:{int(user_id or 0)}"
     conn = _conn()
     try:
         query = "SELECT COUNT(*) AS c FROM mining_tasks WHERE status = 'completed'"
@@ -2791,15 +2811,30 @@ def count_review_ready_tasks(user_id: int = 0) -> int:
             query += " AND LOWER(COALESCE(json_extract(progress_json, '$.review_status'), json_extract(progress_json, '$.oos_status'), '')) IN ('auto_managed', 'passed')"
         row = conn.execute(query, params).fetchone()
         if row is None:
-            return 0
-        try:
-            return int((dict(row) if not isinstance(row, dict) else row).get("c") or 0)
-        except Exception:
+            total = 0
+        else:
             try:
-                return int(row["c"] or 0)
+                total = int((dict(row) if not isinstance(row, dict) else row).get("c") or 0)
             except Exception:
-                return int(row[0] or 0)
+                try:
+                    total = int(row["c"] or 0)
+                except Exception:
+                    total = int(row[0] or 0)
+        _REVIEW_READY_CACHE["ts"] = time.time()
+        _REVIEW_READY_CACHE.setdefault("values", {})[cache_key] = int(total)
+        return int(total)
     except Exception:
+        try:
+            cached_values = dict(_REVIEW_READY_CACHE.get("values") or {})
+            if cache_key in cached_values:
+                return int(cached_values.get(cache_key) or 0)
+        except Exception:
+            pass
+        if _db_kind() == "postgres":
+            try:
+                return int(count_submissions(user_id=int(user_id or 0), status="approved"))
+            except Exception:
+                return 0
         from sheep_review import normalize_review_fields
 
         try:

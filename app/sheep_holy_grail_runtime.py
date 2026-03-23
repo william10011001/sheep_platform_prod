@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import time
 import traceback
 import hashlib
 from dataclasses import dataclass, field
@@ -103,16 +104,34 @@ class HolyGrailRuntime:
 
     def detect_api_base(self, host_url: str) -> str:
         host_url = str(host_url or "").rstrip("/")
-        prefixes = ["/sheep123", "/api", ""]
-        for prefix in prefixes:
-            test_url = f"{host_url}{prefix}/healthz"
+        if not host_url:
+            return "https://sheep123.com/api"
+        normalized_candidates: List[str] = []
+        if host_url.endswith("/api"):
+            normalized_candidates.append(host_url)
+        elif host_url.endswith("/sheep123"):
+            normalized_candidates.append(f"{host_url[:-9]}/api")
+            normalized_candidates.append(host_url)
+        else:
+            normalized_candidates.append(f"{host_url}/api")
+            normalized_candidates.append(f"{host_url}/sheep123")
+            normalized_candidates.append(host_url)
+        seen: set[str] = set()
+        prefixes = []
+        for candidate in normalized_candidates:
+            candidate = str(candidate or "").rstrip("/")
+            if candidate and candidate not in seen:
+                seen.add(candidate)
+                prefixes.append(candidate)
+        for api_base in prefixes:
+            test_url = f"{api_base}/healthz"
             try:
                 res = requests.get(test_url, verify=False, timeout=5)
                 if res.status_code == 200 and "ok" in res.text.lower():
-                    return f"{host_url}{prefix}"
+                    return api_base
             except requests.exceptions.RequestException:
                 continue
-        return host_url
+        return prefixes[0] if prefixes else f"{host_url}/api"
 
     def _issue_factor_pool_token(self, api_base: str, user: str, password: str) -> str:
         if not user or not password:
@@ -139,15 +158,26 @@ class HolyGrailRuntime:
         page = 1
         page_size = 200
         while True:
-            resp = requests.get(
-                strategies_url,
-                params={"page": page, "page_size": page_size},
-                headers=self._factor_pool_headers(token),
-                verify=False,
-                timeout=60,
-            )
-            if resp.status_code != 200:
-                raise RuntimeError(f"factor-pool fetch failed ({resp.status_code}): {resp.text}")
+            resp = None
+            last_error = ""
+            for attempt in range(3):
+                resp = requests.get(
+                    strategies_url,
+                    params={"page": page, "page_size": page_size},
+                    headers=self._factor_pool_headers(token),
+                    verify=False,
+                    timeout=60,
+                )
+                if resp.status_code == 200:
+                    break
+                last_error = f"factor-pool fetch failed ({resp.status_code}): {resp.text}"
+                if resp.status_code not in {429, 500, 502, 503, 504}:
+                    raise RuntimeError(last_error)
+                if attempt < 2:
+                    self.log(f"[HolyGrail] factor pool page {page} 暫時不可用，{attempt + 1}/3 重試中...")
+                    time.sleep(1.5 * (attempt + 1))
+            if resp is None or resp.status_code != 200:
+                raise RuntimeError(last_error or "factor-pool fetch failed with empty response")
             body = resp.json() or {}
             batch = list(body.get("items") or body.get("strategies") or [])
             if not batch:

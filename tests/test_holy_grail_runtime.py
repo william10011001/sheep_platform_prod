@@ -187,7 +187,7 @@ def test_fetch_factor_pool_data_supports_token_and_pagination(monkeypatch):
     )
     strategies, api_base = runtime.fetch_factor_pool_data()
 
-    assert api_base == "https://example.com/sheep123"
+    assert api_base == "https://example.com/api"
     assert [int(item["strategy_id"]) for item in strategies] == [1, 2, 3]
     assert calls["get_pages"] == [1, 2]
     assert calls["post_calls"] == 0

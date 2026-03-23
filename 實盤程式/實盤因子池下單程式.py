@@ -2625,17 +2625,35 @@ class Trader:
 
 # ============ 因子池自動同步與權重計算 (背景聖杯建構引擎) ============
 def detect_api_base(host_url):
-    host_url = host_url.rstrip('/')
-    prefixes = ["/sheep123", "/api", ""]
-    for p in prefixes:
-        test_url = f"{host_url}{p}/healthz"
+    host_url = str(host_url or "").rstrip('/')
+    if not host_url:
+        return "https://sheep123.com/api"
+    candidates = []
+    if host_url.endswith("/api"):
+        candidates.append(host_url)
+    elif host_url.endswith("/sheep123"):
+        candidates.append(f"{host_url[:-9]}/api")
+        candidates.append(host_url)
+    else:
+        candidates.append(f"{host_url}/api")
+        candidates.append(f"{host_url}/sheep123")
+        candidates.append(host_url)
+    seen = set()
+    normalized = []
+    for candidate in candidates:
+        candidate = str(candidate or "").rstrip("/")
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            normalized.append(candidate)
+    for api_base in normalized:
+        test_url = f"{api_base}/healthz"
         try:
             res = requests.get(test_url, verify=False, timeout=5)
             if res.status_code == 200 and "ok" in res.text.lower():
-                return f"{host_url}{p}"
+                return api_base
         except requests.exceptions.RequestException:
             pass
-    return host_url
+    return normalized[0] if normalized else f"{host_url}/api"
 
 def _new_holy_grail_runtime() -> HolyGrailRuntime:
     return HolyGrailRuntime(bt_module=bt, log=log)

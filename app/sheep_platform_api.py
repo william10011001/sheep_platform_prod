@@ -171,6 +171,10 @@ _register_ip_limiter = RateLimiter(rate_per_minute=0.2, burst=2.0)
 _register_global_limiter = RateLimiter(rate_per_minute=3.0, burst=6.0)
 
 _LIVE_CACHE_TTL_SECONDS = 5.0
+_LIVE_CACHE_MAX_BUCKET_SIZE: Dict[str, int] = {
+    "dashboard": 128,
+    "leaderboard": 32,
+}
 _live_versions: Dict[str, str] = {
     "dashboard": "",
     "leaderboard": "",
@@ -242,7 +246,23 @@ def _cached_live_payload(bucket: str, key: str, loader) -> Dict[str, Any]:
         return dict(cached.get("value") or {})
     value = dict(loader() or {})
     cache_bucket[key] = {"ts": now, "value": value}
+    max_size = int(_LIVE_CACHE_MAX_BUCKET_SIZE.get(bucket) or 0)
+    if max_size > 0 and len(cache_bucket) > max_size:
+        for stale_key, _stale_val in sorted(
+            cache_bucket.items(),
+            key=lambda item: float((item[1] or {}).get("ts") or 0.0),
+        )[:-max_size]:
+            cache_bucket.pop(stale_key, None)
     return dict(value)
+
+
+def _remember_live_snapshot(bucket: str, key: str, value: Dict[str, Any]) -> None:
+    bucket_store = _live_last_nonempty.setdefault(bucket, {})
+    bucket_store[key] = dict(value or {})
+    max_size = int(_LIVE_CACHE_MAX_BUCKET_SIZE.get(bucket) or 0)
+    if max_size > 0 and len(bucket_store) > max_size:
+        for stale_key in list(bucket_store.keys())[:-max_size]:
+            bucket_store.pop(stale_key, None)
 
 
 def _invalidate_live_state(*channels: str) -> None:
@@ -2461,7 +2481,7 @@ def web_leaderboard(period_hours: int = 9999999):
                     stats["_preserved_last_nonempty"] = True
             if _leaderboard_has_rows(stats):
                 clean_stats = {k: v for k, v in stats.items() if not str(k).startswith("_")}
-                _live_last_nonempty.setdefault("leaderboard", {})[cache_key] = dict(clean_stats)
+                _remember_live_snapshot("leaderboard", cache_key, clean_stats)
                 return stats
             if preserved:
                 preserved["_preserved_last_nonempty"] = True
@@ -2562,7 +2582,7 @@ def web_dashboard(request: Request, authorization: Optional[str] = Header(None))
 
     try:
         payload = _cached_live_payload("dashboard", cache_key, _load_dashboard)
-        _live_last_nonempty.setdefault("dashboard", {})[cache_key] = dict(payload)
+        _remember_live_snapshot("dashboard", cache_key, payload)
         return payload
     except Exception as exc:
         preserved = dict((_live_last_nonempty.get("dashboard") or {}).get(cache_key) or {})
