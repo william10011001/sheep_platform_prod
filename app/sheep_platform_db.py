@@ -49,7 +49,7 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-_REVIEW_READY_CACHE: Dict[str, Any] = {"ts": 0.0, "values": {}}
+_REVIEW_READY_CACHE: Dict[str, Any] = {"ts": 0.0, "values": {}, "retry_after": {}}
 
 
 def _in_docker() -> bool:
@@ -2798,6 +2798,26 @@ def count_submissions(user_id: int = 0, status: str = "") -> int:
 
 def count_review_ready_tasks(user_id: int = 0) -> int:
     cache_key = f"user:{int(user_id or 0)}"
+    now_ts = time.time()
+    cached_values = dict(_REVIEW_READY_CACHE.get("values") or {})
+    retry_after = dict(_REVIEW_READY_CACHE.get("retry_after") or {})
+    db_kind = _db_kind()
+
+    if db_kind == "postgres":
+        if now_ts < float(retry_after.get(cache_key) or 0.0) and cache_key in cached_values:
+            return int(cached_values.get(cache_key) or 0)
+        try:
+            total = int(count_submissions(user_id=int(user_id or 0), status="approved"))
+            _REVIEW_READY_CACHE["ts"] = now_ts
+            _REVIEW_READY_CACHE.setdefault("values", {})[cache_key] = int(total)
+            _REVIEW_READY_CACHE.setdefault("retry_after", {}).pop(cache_key, None)
+            return int(total)
+        except Exception:
+            if cache_key in cached_values:
+                return int(cached_values.get(cache_key) or 0)
+            _REVIEW_READY_CACHE.setdefault("retry_after", {})[cache_key] = now_ts + 30.0
+            return 0
+
     conn = _conn()
     try:
         query = "SELECT COUNT(*) AS c FROM mining_tasks WHERE status = 'completed'"
@@ -2805,10 +2825,7 @@ def count_review_ready_tasks(user_id: int = 0) -> int:
         if int(user_id or 0) > 0:
             query += " AND user_id = ?"
             params.append(int(user_id))
-        if _db_kind() == "postgres":
-            query += " AND COALESCE(progress_json::jsonb->>'review_status', progress_json::jsonb->>'oos_status', '') IN ('auto_managed', 'passed')"
-        else:
-            query += " AND LOWER(COALESCE(json_extract(progress_json, '$.review_status'), json_extract(progress_json, '$.oos_status'), '')) IN ('auto_managed', 'passed')"
+        query += " AND LOWER(COALESCE(json_extract(progress_json, '$.review_status'), json_extract(progress_json, '$.oos_status'), '')) IN ('auto_managed', 'passed')"
         row = conn.execute(query, params).fetchone()
         if row is None:
             total = 0
@@ -2820,21 +2837,16 @@ def count_review_ready_tasks(user_id: int = 0) -> int:
                     total = int(row["c"] or 0)
                 except Exception:
                     total = int(row[0] or 0)
-        _REVIEW_READY_CACHE["ts"] = time.time()
+        _REVIEW_READY_CACHE["ts"] = now_ts
         _REVIEW_READY_CACHE.setdefault("values", {})[cache_key] = int(total)
+        _REVIEW_READY_CACHE.setdefault("retry_after", {}).pop(cache_key, None)
         return int(total)
     except Exception:
         try:
-            cached_values = dict(_REVIEW_READY_CACHE.get("values") or {})
             if cache_key in cached_values:
                 return int(cached_values.get(cache_key) or 0)
         except Exception:
             pass
-        if _db_kind() == "postgres":
-            try:
-                return int(count_submissions(user_id=int(user_id or 0), status="approved"))
-            except Exception:
-                return 0
         from sheep_review import normalize_review_fields
 
         try:
@@ -4459,8 +4471,9 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
     """
     conn = _conn()
     try:
+        hours = max(1, min(720, int(period_hours or 720)))
         now_dt = datetime.now(timezone.utc)
-        cutoff_dt = now_dt - timedelta(hours=period_hours)
+        cutoff_dt = now_dt - timedelta(hours=hours)
         cutoff_iso = cutoff_dt.isoformat()
         window_end_iso = _now_iso()
         default_avatar_url = _default_avatar_url_from_conn(conn)
@@ -4482,7 +4495,7 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
                 JOIN users u ON t.user_id = u.id
                 WHERE COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
                   AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <= ?
-                  AND t.status IN ('assigned', 'queued', 'running', 'completed')
+                  AND t.status IN ('running', 'completed')
                 GROUP BY u.id, u.username, u.nickname, u.avatar_url
                 ORDER BY total_done DESC
                 LIMIT 300
@@ -4496,7 +4509,7 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
                     FROM mining_tasks t
                     WHERE COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
                       AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <= ?
-                      AND t.status IN ('assigned', 'queued', 'running', 'completed')
+                        AND t.status IN ('running', 'completed')
                 )
                 SELECT u.username, u.nickname, u.avatar_url,
                        SUM(te.elapsed_s) as total_seconds
@@ -4514,7 +4527,7 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
                 JOIN users u ON t.user_id = u.id
                 WHERE COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
                   AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <= ?
-                  AND t.status IN ('assigned', 'queued', 'running', 'completed')
+                  AND t.status IN ('running', 'completed')
                 GROUP BY u.id, u.username, u.nickname, u.avatar_url
                 ORDER BY total_done DESC
                 LIMIT 300
@@ -4528,7 +4541,7 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
                     FROM mining_tasks t
                     WHERE COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
                       AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <= ?
-                      AND t.status IN ('assigned', 'queued', 'running', 'completed')
+                      AND t.status IN ('running', 'completed')
                     GROUP BY t.id, t.user_id
                 )
                 SELECT u.username, u.nickname, u.avatar_url,
@@ -4581,7 +4594,7 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
             print(f"[DB WARN] Leaderboard time query failed: {e}")
             results["time"] = []
 
-        if not results["combos"] or not results["time"]:
+        if db_kind != "postgres" and (not results["combos"] or not results["time"]):
             try:
                 fallback = _leaderboard_python_fallback(conn, cutoff_iso, window_end_iso)
                 if not results["combos"]:
@@ -5291,11 +5304,10 @@ def get_admin_active_strategies_page(
         conn.close()
 
 
-def list_active_strategy_runtime_rows(limit: int = 20000) -> list:
+def list_active_strategy_runtime_rows(limit: int = 20000, runtime_items: Optional[List[Dict[str, Any]]] = None) -> list:
     conn = _conn()
     try:
-        rows = conn.execute(
-            """
+        query = """
             SELECT st.id as strategy_id, st.status, st.allocation_pct, st.created_at, st.direction, st.params_json, st.external_key,
                    u.id as owner_user_id, u.username, u.nickname, u.avatar_url,
                    p.id as pool_id, p.name as pool_name, p.symbol, p.timeframe_min, p.family,
@@ -5306,11 +5318,57 @@ def list_active_strategy_runtime_rows(limit: int = 20000) -> list:
             LEFT JOIN submissions su ON st.submission_id = su.id
             LEFT JOIN candidates c ON su.candidate_id = c.id
             WHERE st.status = 'active'
+        """
+        params: List[Any] = []
+
+        runtime_items = list(runtime_items or [])
+        if runtime_items:
+            external_keys: List[str] = []
+            signature_filters: List[Tuple[str, str, int, str]] = []
+            seen_keys: set[str] = set()
+            seen_signatures: set[Tuple[str, str, int, str]] = set()
+            for raw in runtime_items:
+                item = dict(raw or {})
+                entry = normalize_runtime_strategy_entry(
+                    item.get("params_json") if isinstance(item.get("params_json"), dict) else item,
+                    default_symbol=str(item.get("symbol") or ""),
+                    default_interval=str(item.get("interval") or item.get("timeframe_min") or ""),
+                )
+                external_key = str(
+                    item.get("external_key") or item.get("strategy_key") or entry.get("strategy_key") or ""
+                ).strip()
+                if external_key and external_key not in seen_keys:
+                    seen_keys.add(external_key)
+                    external_keys.append(external_key)
+                family = str(entry.get("family") or item.get("family") or "").strip()
+                symbol = str(entry.get("symbol") or item.get("symbol") or "").strip().upper()
+                timeframe_min = int(_interval_to_minutes(entry.get("interval") or item.get("interval") or item.get("timeframe_min")))
+                direction = normalize_direction(entry.get("direction") or item.get("direction"), default="long")
+                signature = (family, symbol, timeframe_min, direction)
+                if family and symbol and timeframe_min > 0 and signature not in seen_signatures:
+                    seen_signatures.add(signature)
+                    signature_filters.append(signature)
+
+            where_parts: List[str] = []
+            if external_keys:
+                where_parts.append("st.external_key IN (" + ", ".join(["?"] * len(external_keys)) + ")")
+                params.extend(external_keys)
+            for family, symbol, timeframe_min, direction in signature_filters:
+                where_parts.append(
+                    "(COALESCE(p.family, '') = ? AND COALESCE(p.symbol, '') = ? AND COALESCE(p.timeframe_min, 0) = ? AND COALESCE(st.direction, 'long') = ?)"
+                )
+                params.extend([family, symbol, int(timeframe_min), direction])
+            if not where_parts:
+                return []
+            query += " AND (" + " OR ".join(where_parts) + ")"
+            limit = max(20, min(500, int(limit or 200)))
+
+        query += """
             ORDER BY COALESCE(c.score, 0) DESC, st.created_at DESC, st.id DESC
             LIMIT ?
-            """,
-            (int(limit or 20000),),
-        ).fetchall()
+        """
+        params.append(int(limit or 20000))
+        rows = conn.execute(query, params).fetchall()
         default_avatar_url = _default_avatar_url_from_conn(conn)
         out = []
         for row in rows:

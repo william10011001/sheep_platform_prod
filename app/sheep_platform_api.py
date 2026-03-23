@@ -170,7 +170,7 @@ _register_ip_limiter = RateLimiter(rate_per_minute=0.2, burst=2.0)
 # [極致防護] 全域註冊限制器：防止駭客使用動態代理 IP 池進行分散式機器人攻擊 (全站每分鐘最多允許 3 次註冊)
 _register_global_limiter = RateLimiter(rate_per_minute=3.0, burst=6.0)
 
-_LIVE_CACHE_TTL_SECONDS = 5.0
+_LIVE_CACHE_TTL_SECONDS = 15.0
 _LIVE_CACHE_MAX_BUCKET_SIZE: Dict[str, int] = {
     "dashboard": 128,
     "leaderboard": 32,
@@ -189,7 +189,7 @@ _live_last_nonempty: Dict[str, Dict[str, Dict[str, Any]]] = {
     "leaderboard": {},
 }
 _http_error_telemetry_cache: Dict[str, float] = {}
-_runtime_lookup_cache: Dict[str, Any] = {"ts": 0.0, "lookup": {}, "limit": 0}
+_runtime_lookup_cache: Dict[str, Any] = {"ts": 0.0, "lookup": {}, "key": ""}
 
 
 class _ChatHub:
@@ -275,7 +275,7 @@ def _invalidate_live_state(*channels: str) -> None:
         _live_versions["dashboard"] = now_iso
         _runtime_lookup_cache["ts"] = 0.0
         _runtime_lookup_cache["lookup"] = {}
-        _runtime_lookup_cache["limit"] = 0
+        _runtime_lookup_cache["key"] = ""
     if "leaderboard" in requested:
         _live_cache["leaderboard"].clear()
         _live_versions["leaderboard"] = now_iso
@@ -478,14 +478,32 @@ def _runtime_snapshot_signatures(snapshot: Dict[str, Any]) -> set[Tuple[str, str
 
 
 def _active_strategy_runtime_lookup(limit: int = 20000) -> Dict[Tuple[str, str, str, str, str], Dict[str, Any]]:
+    return _active_strategy_runtime_lookup_for_items(None, limit=limit)
+
+
+def _active_strategy_runtime_lookup_for_items(
+    runtime_items: Optional[List[Dict[str, Any]]],
+    *,
+    limit: int = 20000,
+) -> Dict[Tuple[str, str, str, str, str], Dict[str, Any]]:
+    item_list = [dict(item or {}) for item in list(runtime_items or [])]
     now = time.time()
-    cache_limit = int(_runtime_lookup_cache.get("limit") or 0)
+    cache_key = f"limit:{int(limit or 0)}"
+    if item_list:
+        fingerprints: List[str] = []
+        for item in item_list:
+            try:
+                signature = _runtime_match_signature(item)
+            except Exception:
+                continue
+            fingerprints.append("||".join(signature))
+        cache_key = "items:" + hashlib.sha1("\n".join(sorted(fingerprints)).encode("utf-8")).hexdigest()
     cache_lookup = _runtime_lookup_cache.get("lookup") or {}
-    if cache_lookup and now - float(_runtime_lookup_cache.get("ts") or 0.0) < 60.0 and cache_limit >= int(limit or 0):
+    if cache_lookup and now - float(_runtime_lookup_cache.get("ts") or 0.0) < 60.0 and str(_runtime_lookup_cache.get("key") or "") == cache_key:
         return dict(cache_lookup)
 
     lookup: Dict[Tuple[str, str, str, str, str], Dict[str, Any]] = {}
-    for row in db.list_active_strategy_runtime_rows(limit=limit):
+    for row in db.list_active_strategy_runtime_rows(limit=limit, runtime_items=item_list):
         item = dict(row or {})
         try:
             signature = _runtime_match_signature(item)
@@ -498,7 +516,7 @@ def _active_strategy_runtime_lookup(limit: int = 20000) -> Dict[Tuple[str, str, 
             lookup[signature] = item
     _runtime_lookup_cache["ts"] = now
     _runtime_lookup_cache["lookup"] = dict(lookup)
-    _runtime_lookup_cache["limit"] = int(limit or 0)
+    _runtime_lookup_cache["key"] = cache_key
     return lookup
 
 
@@ -2461,7 +2479,7 @@ def admin_set_default_avatar(request: Request, body: DefaultAvatarUpdateIn, auth
     return {"ok": True, "avatar_url": db.get_default_avatar_url()}
 
 @app.get("/leaderboard")
-def web_leaderboard(period_hours: int = 9999999):
+def web_leaderboard(period_hours: int = 720):
     try:
         cache_key = _live_cache_key("period_hours", int(period_hours or 0))
 
@@ -2525,7 +2543,14 @@ def web_dashboard(request: Request, authorization: Optional[str] = Header(None))
         personal_runtime_items = list(personal_runtime_snapshot.get("items") or [])
         global_runtime_items = list(global_runtime_snapshot.get("items") or [])
         runtime_position_items_raw = list((global_runtime_snapshot.get("summary") or {}).get("position_items") or [])
-        runtime_lookup = _active_strategy_runtime_lookup(limit=25000) if (global_runtime_items or runtime_position_items_raw) else {}
+        runtime_lookup = (
+            _active_strategy_runtime_lookup_for_items(
+                list(global_runtime_items) + list(runtime_position_items_raw),
+                limit=500,
+            )
+            if (global_runtime_items or runtime_position_items_raw)
+            else {}
+        )
         enriched_global_runtime_items = _enrich_runtime_items(global_runtime_items, strategy_lookup=runtime_lookup)
         runtime_position_items = _enrich_runtime_position_items(
             runtime_position_items_raw,
