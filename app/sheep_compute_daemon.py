@@ -71,7 +71,7 @@ def main() -> None:
     pwd = _env_str("SHEEP_COMPUTE_PASS", "")
     ttl_seconds = _env_int("SHEEP_COMPUTE_TTL_SECONDS", 2592000)
     idle_s = max(0.5, min(10.0, _env_float("SHEEP_COMPUTE_IDLE_S", 1.0)))
-    commit_every = max(10, min(100, _env_int("SHEEP_COMPUTE_COMMIT_EVERY", 25)))
+    commit_every = max(25, min(200, _env_int("SHEEP_COMPUTE_COMMIT_EVERY", 100)))
     flag_poll_s = max(2.0, min(30.0, _env_float("SHEEP_COMPUTE_FLAG_POLL_S", 5.0)))
     enable_legacy_oos = _env_str("SHEEP_COMPUTE_ENABLE_LEGACY_OOS", "false").lower() in {"1", "true", "yes", "on"}
 

@@ -969,6 +969,13 @@ def init_db() -> None:
                 CREATE INDEX IF NOT EXISTS idx_mining_tasks_pool_cycle_part ON mining_tasks (pool_id, cycle_id, partition_idx);
                 CREATE INDEX IF NOT EXISTS idx_mining_tasks_cycle_status ON mining_tasks (cycle_id, status);
                 CREATE INDEX IF NOT EXISTS idx_mining_tasks_updated_status ON mining_tasks (updated_at, status);
+                CREATE INDEX IF NOT EXISTS idx_mining_tasks_user_cycle_pool_part ON mining_tasks (user_id, cycle_id, pool_id, partition_idx);
+                CREATE INDEX IF NOT EXISTS idx_mining_tasks_user_cycle_id_desc ON mining_tasks (user_id, cycle_id, id DESC);
+                CREATE INDEX IF NOT EXISTS idx_mining_tasks_activity_at ON mining_tasks (COALESCE(last_heartbeat, updated_at, created_at), user_id);
+                CREATE INDEX IF NOT EXISTS idx_mining_tasks_status_user ON mining_tasks (status, user_id);
+                CREATE INDEX IF NOT EXISTS idx_mining_tasks_status_id ON mining_tasks (status, id);
+                CREATE INDEX IF NOT EXISTS idx_mining_tasks_user_cycle_status_id ON mining_tasks (user_id, cycle_id, status, id);
+                CREATE INDEX IF NOT EXISTS idx_users_runnable ON users(disabled, run_enabled, id);
                 CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at);
 
                 CREATE TABLE IF NOT EXISTS submissions (
@@ -995,6 +1002,7 @@ def init_db() -> None:
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_candidates_created_at ON candidates(created_at);
+                CREATE INDEX IF NOT EXISTS idx_candidates_created_user_score ON candidates(created_at, user_id, score);
 
                 CREATE TABLE IF NOT EXISTS strategies (
                     id BIGSERIAL PRIMARY KEY,
@@ -1010,6 +1018,8 @@ def init_db() -> None:
                     created_at TEXT,
                     expires_at TEXT
                 );
+                CREATE INDEX IF NOT EXISTS idx_strategies_status_user ON strategies(status, user_id);
+                CREATE INDEX IF NOT EXISTS idx_strategies_user_status_created ON strategies(user_id, status, created_at);
 
                 CREATE TABLE IF NOT EXISTS weekly_checks (
                     id BIGSERIAL PRIMARY KEY,
@@ -1022,6 +1032,7 @@ def init_db() -> None:
                     eligible INTEGER,
                     checked_at TEXT
                 );
+                CREATE INDEX IF NOT EXISTS idx_weekly_checks_checked_strategy ON weekly_checks(checked_at, strategy_id);
 
                 CREATE TABLE IF NOT EXISTS payouts (
                     id BIGSERIAL PRIMARY KEY,
@@ -1035,6 +1046,7 @@ def init_db() -> None:
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_payouts_created_at ON payouts(created_at);
+                CREATE INDEX IF NOT EXISTS idx_payouts_created_user ON payouts(created_at, user_id);
 
                 CREATE TABLE IF NOT EXISTS runtime_portfolio_snapshots (
                     id BIGSERIAL PRIMARY KEY,
@@ -1134,7 +1146,19 @@ def init_db() -> None:
                 )
                 """,
                 "CREATE INDEX IF NOT EXISTS idx_workers_last_seen ON workers(last_seen_at)",
-                "CREATE INDEX IF NOT EXISTS idx_worker_events_ts ON worker_events(ts)"
+                "CREATE INDEX IF NOT EXISTS idx_worker_events_ts ON worker_events(ts)",
+                "CREATE INDEX IF NOT EXISTS idx_mining_tasks_user_cycle_pool_part ON mining_tasks(user_id, cycle_id, pool_id, partition_idx)",
+                "CREATE INDEX IF NOT EXISTS idx_mining_tasks_user_cycle_id_desc ON mining_tasks(user_id, cycle_id, id DESC)",
+                "CREATE INDEX IF NOT EXISTS idx_mining_tasks_activity_at ON mining_tasks((COALESCE(last_heartbeat, updated_at, created_at)), user_id)",
+                "CREATE INDEX IF NOT EXISTS idx_mining_tasks_status_user ON mining_tasks(status, user_id)",
+                "CREATE INDEX IF NOT EXISTS idx_mining_tasks_status_id ON mining_tasks(status, id)",
+                "CREATE INDEX IF NOT EXISTS idx_mining_tasks_user_cycle_status_id ON mining_tasks(user_id, cycle_id, status, id)",
+                "CREATE INDEX IF NOT EXISTS idx_users_runnable ON users(disabled, run_enabled, id)",
+                "CREATE INDEX IF NOT EXISTS idx_candidates_created_user_score ON candidates(created_at, user_id, score)",
+                "CREATE INDEX IF NOT EXISTS idx_strategies_status_user ON strategies(status, user_id)",
+                "CREATE INDEX IF NOT EXISTS idx_strategies_user_status_created ON strategies(user_id, status, created_at)",
+                "CREATE INDEX IF NOT EXISTS idx_weekly_checks_checked_strategy ON weekly_checks(checked_at, strategy_id)",
+                "CREATE INDEX IF NOT EXISTS idx_payouts_created_user ON payouts(created_at, user_id)"
             ]
             
             for stmt in statements:
@@ -1238,6 +1262,13 @@ def init_db() -> None:
                 
                 CREATE INDEX IF NOT EXISTS idx_mining_tasks_pool_cycle_part ON mining_tasks (pool_id, cycle_id, partition_idx);
                 CREATE INDEX IF NOT EXISTS idx_mining_tasks_cycle_status ON mining_tasks (cycle_id, status);
+                CREATE INDEX IF NOT EXISTS idx_mining_tasks_user_cycle_pool_part ON mining_tasks (user_id, cycle_id, pool_id, partition_idx);
+                CREATE INDEX IF NOT EXISTS idx_mining_tasks_user_cycle_id_desc ON mining_tasks (user_id, cycle_id, id DESC);
+                CREATE INDEX IF NOT EXISTS idx_mining_tasks_activity_at ON mining_tasks (COALESCE(last_heartbeat, updated_at, created_at), user_id);
+                CREATE INDEX IF NOT EXISTS idx_mining_tasks_status_user ON mining_tasks (status, user_id);
+                CREATE INDEX IF NOT EXISTS idx_mining_tasks_status_id ON mining_tasks (status, id);
+                CREATE INDEX IF NOT EXISTS idx_mining_tasks_user_cycle_status_id ON mining_tasks (user_id, cycle_id, status, id);
+                CREATE INDEX IF NOT EXISTS idx_users_runnable ON users(disabled, run_enabled, id);
                 
                 CREATE TABLE IF NOT EXISTS submissions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1261,6 +1292,8 @@ def init_db() -> None:
                     is_submitted INTEGER DEFAULT 0,
                     created_at TEXT
                 );
+                CREATE INDEX IF NOT EXISTS idx_candidates_created_at ON candidates(created_at);
+                CREATE INDEX IF NOT EXISTS idx_candidates_created_user_score ON candidates(created_at, user_id, score);
                 
                 CREATE TABLE IF NOT EXISTS strategies (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1276,6 +1309,8 @@ def init_db() -> None:
                     created_at TEXT,
                     expires_at TEXT
                 );
+                CREATE INDEX IF NOT EXISTS idx_strategies_status_user ON strategies(status, user_id);
+                CREATE INDEX IF NOT EXISTS idx_strategies_user_status_created ON strategies(user_id, status, created_at);
 
                 CREATE TABLE IF NOT EXISTS weekly_checks (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1288,6 +1323,7 @@ def init_db() -> None:
                     eligible INTEGER,
                     checked_at TEXT
                 );
+                CREATE INDEX IF NOT EXISTS idx_weekly_checks_checked_strategy ON weekly_checks(checked_at, strategy_id);
 
                 CREATE TABLE IF NOT EXISTS payouts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1299,6 +1335,8 @@ def init_db() -> None:
                     txid TEXT,
                     created_at TEXT
                 );
+                CREATE INDEX IF NOT EXISTS idx_payouts_created_at ON payouts(created_at);
+                CREATE INDEX IF NOT EXISTS idx_payouts_created_user ON payouts(created_at, user_id);
 
                 CREATE TABLE IF NOT EXISTS runtime_portfolio_snapshots (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1389,12 +1427,24 @@ def init_db() -> None:
                 "CREATE INDEX IF NOT EXISTS idx_worker_events_ts ON worker_events(ts)",
                 "CREATE INDEX IF NOT EXISTS idx_worker_events_event_ts ON worker_events(event, ts)",
                 "CREATE INDEX IF NOT EXISTS idx_mining_tasks_user_cycle_status_upd ON mining_tasks(user_id, cycle_id, status, updated_at)",
+                "CREATE INDEX IF NOT EXISTS idx_mining_tasks_user_cycle_pool_part ON mining_tasks(user_id, cycle_id, pool_id, partition_idx)",
+                "CREATE INDEX IF NOT EXISTS idx_mining_tasks_user_cycle_id_desc ON mining_tasks(user_id, cycle_id, id DESC)",
+                "CREATE INDEX IF NOT EXISTS idx_mining_tasks_activity_at ON mining_tasks(COALESCE(last_heartbeat, updated_at, created_at), user_id)",
                 "CREATE INDEX IF NOT EXISTS idx_mining_tasks_status_lease ON mining_tasks(status, lease_expires_at)",
                 "CREATE INDEX IF NOT EXISTS idx_mining_tasks_status_fast ON mining_tasks(status)",
+                "CREATE INDEX IF NOT EXISTS idx_users_runnable ON users(disabled, run_enabled, id)",
                 "CREATE INDEX IF NOT EXISTS idx_users_created_at ON users(created_at)",
                 "CREATE INDEX IF NOT EXISTS idx_mining_tasks_updated_status ON mining_tasks(updated_at, status)",
                 "CREATE INDEX IF NOT EXISTS idx_candidates_created_at ON candidates(created_at)",
-                "CREATE INDEX IF NOT EXISTS idx_payouts_created_at ON payouts(created_at)"
+                "CREATE INDEX IF NOT EXISTS idx_candidates_created_user_score ON candidates(created_at, user_id, score)",
+                "CREATE INDEX IF NOT EXISTS idx_strategies_status_user ON strategies(status, user_id)",
+                "CREATE INDEX IF NOT EXISTS idx_strategies_user_status_created ON strategies(user_id, status, created_at)",
+                "CREATE INDEX IF NOT EXISTS idx_weekly_checks_checked_strategy ON weekly_checks(checked_at, strategy_id)",
+                "CREATE INDEX IF NOT EXISTS idx_payouts_created_at ON payouts(created_at)",
+                "CREATE INDEX IF NOT EXISTS idx_payouts_created_user ON payouts(created_at, user_id)",
+                "CREATE INDEX IF NOT EXISTS idx_mining_tasks_status_user ON mining_tasks(status, user_id)",
+                "CREATE INDEX IF NOT EXISTS idx_mining_tasks_status_id ON mining_tasks(status, id)",
+                "CREATE INDEX IF NOT EXISTS idx_mining_tasks_user_cycle_status_id ON mining_tasks(user_id, cycle_id, status, id)"
             ]
             
             for stmt in statements_sqlite:
@@ -2206,15 +2256,12 @@ def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, m
                     break
                 
                 # [改進] 使用集合快速查詢已佔用分區
-                user_tasks = conn.execute("SELECT pool_id, partition_idx FROM mining_tasks WHERE user_id = ? AND cycle_id = ?", (user_id, cycle_id)).fetchall()
-                user_owned = {(int(t["pool_id"]), int(t["partition_idx"])) for t in user_tasks}
-                
-                global_active = conn.execute("SELECT pool_id, partition_idx FROM mining_tasks WHERE cycle_id = ? AND status IN ('assigned', 'running', 'queued', 'completed')", (cycle_id,)).fetchall()
-                global_owned = {(int(t["pool_id"]), int(t["partition_idx"])) for t in global_active}
-                
                 assigned_count = 0
                 pool_list = [dict(p) for p in pools]
                 random.shuffle(pool_list)
+                sample_size = min(len(pool_list), max(32, needed * 8))
+                if sample_size > 0:
+                    pool_list = pool_list[:sample_size]
                 now_str = _now_iso()
                 
                 for p in pool_list:
@@ -2223,12 +2270,19 @@ def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, m
                         
                     pid = int(p["id"])
                     num_parts = int(p["num_partitions"])
-                    
-                    available_parts = [
-                        part_idx
-                        for part_idx in range(num_parts)
-                        if (pid, part_idx) not in user_owned and (pid, part_idx) not in global_owned
-                    ]
+                    if num_parts <= 0:
+                        continue
+
+                    taken_rows = conn.execute(
+                        "SELECT DISTINCT partition_idx FROM mining_tasks WHERE cycle_id = ? AND pool_id = ?",
+                        (cycle_id, pid),
+                    ).fetchall()
+                    taken_parts = {
+                        int(t["partition_idx"])
+                        for t in taken_rows
+                        if t.get("partition_idx") is not None
+                    }
+                    available_parts = [part_idx for part_idx in range(num_parts) if part_idx not in taken_parts]
                     
                     if not available_parts:
                         continue
@@ -2239,7 +2293,7 @@ def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, m
                         try:
                             # [原子性插入] 使用 INSERT ... WHERE NOT EXISTS 防止重複分配
                             if getattr(conn, "kind", "sqlite") == "postgres":
-                                conn.execute("""
+                                cur_insert = conn.execute("""
                                     INSERT INTO mining_tasks (user_id, pool_id, cycle_id, partition_idx, num_partitions, status, created_at, updated_at)
                                     SELECT ?, ?, ?, ?, ?, 'assigned', ?, ?
                                     WHERE NOT EXISTS (
@@ -2251,7 +2305,7 @@ def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, m
                                       pid, chosen_part, cycle_id))
                             else:
                                 # SQLite 版本
-                                conn.execute("""
+                                cur_insert = conn.execute("""
                                     INSERT INTO mining_tasks (user_id, pool_id, cycle_id, partition_idx, num_partitions, status, created_at, updated_at)
                                     SELECT ?, ?, ?, ?, ?, 'assigned', ?, ?
                                     WHERE NOT EXISTS (
@@ -2260,9 +2314,17 @@ def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, m
                                     )
                                 """, (user_id, pid, cycle_id, chosen_part, num_parts, now_str, now_str,
                                       pid, chosen_part, cycle_id))
+                            try:
+                                inserted = int(getattr(cur_insert, "rowcount", 0) or 0)
+                            finally:
+                                try:
+                                    cur_insert.close()
+                                except Exception:
+                                    pass
+                            if inserted <= 0:
+                                continue
                             assigned_count += 1
-                            user_owned.add((pid, chosen_part))
-                            global_owned.add((pid, chosen_part))
+                            taken_parts.add(chosen_part)
                         except Exception as insert_e:
                             # 忽略唯一性衝突（另一個請求搶先了）
                             if "UNIQUE" not in str(insert_e).upper():
@@ -2480,17 +2542,28 @@ def recover_factor_pools_from_local(cycle_id: int, search_roots: Optional[List[s
     report["imported"] = int(imported)
     report["skipped_duplicates"] = int(skipped)
     return report
-def list_tasks_for_user(user_id: int, cycle_id: int = 0) -> list:
+def list_tasks_for_user(user_id: int, cycle_id: int = 0, limit: int = 500) -> list:
     import time, random
     last_err = None
     for attempt in range(15):
         try:
             conn = _conn()
             try:
+                params: List[Any] = [int(user_id)]
+                query = """
+                    SELECT t.*, p.name as pool_name, p.symbol, p.timeframe_min, p.family
+                    FROM mining_tasks t
+                    LEFT JOIN factor_pools p ON t.pool_id = p.id
+                    WHERE t.user_id = ?
+                """
                 if cycle_id > 0:
-                    cur = conn.execute("SELECT t.*, p.name as pool_name, p.symbol, p.timeframe_min, p.family FROM mining_tasks t LEFT JOIN factor_pools p ON t.pool_id = p.id WHERE t.user_id = ? AND t.cycle_id = ?", (user_id, cycle_id))
-                else:
-                    cur = conn.execute("SELECT t.*, p.name as pool_name, p.symbol, p.timeframe_min, p.family FROM mining_tasks t LEFT JOIN factor_pools p ON t.pool_id = p.id WHERE t.user_id = ?", (user_id,))
+                    query += " AND t.cycle_id = ?"
+                    params.append(int(cycle_id))
+                query += " ORDER BY t.id DESC"
+                if int(limit or 0) > 0:
+                    query += " LIMIT ?"
+                    params.append(int(limit))
+                cur = conn.execute(query, params)
                 return [dict(row) for row in cur.fetchall()]
             finally:
                 conn.close()
@@ -2517,6 +2590,67 @@ def count_tasks_for_user(user_id: int, cycle_id: int = 0, statuses: Optional[Lis
             placeholders = ",".join("?" for _ in norm_statuses)
             query += f" AND status IN ({placeholders})"
             params.extend(norm_statuses)
+        row = conn.execute(query, params).fetchone()
+        if row is None:
+            return 0
+        if isinstance(row, dict):
+            return int(row.get("c") or 0)
+        try:
+            return int(row["c"] or 0)
+        except Exception:
+            return int(row[0] or 0)
+    finally:
+        conn.close()
+
+
+def count_review_pipeline_tasks_for_user(user_id: int, cycle_id: int) -> int:
+    conn = _conn()
+    try:
+        pipeline_statuses = ["auto_managed", "queued", "running"]
+        placeholders = ",".join("?" for _ in pipeline_statuses)
+        if getattr(conn, "kind", "sqlite") == "postgres":
+            query = f"""
+                SELECT COUNT(*) AS c
+                FROM mining_tasks t
+                WHERE t.user_id = ?
+                  AND t.cycle_id = ?
+                  AND COALESCE(t.progress_json::jsonb->>'best_any_passed', 'false') IN ('true', '1', 'True')
+                  AND (
+                    CASE
+                      WHEN lower(COALESCE(t.progress_json::jsonb->>'review_status', '')) = 'passed' THEN 'auto_managed'
+                      WHEN lower(COALESCE(t.progress_json::jsonb->>'review_status', '')) IN ('auto_managed', 'queued', 'running', 'rejected', 'error', 'not_eligible')
+                        THEN lower(COALESCE(t.progress_json::jsonb->>'review_status', ''))
+                      WHEN lower(COALESCE(t.progress_json::jsonb->>'oos_status', '')) = 'passed' THEN 'auto_managed'
+                      WHEN lower(COALESCE(t.progress_json::jsonb->>'oos_status', '')) IN ('auto_managed', 'queued', 'running', 'rejected', 'error', 'not_eligible')
+                        THEN lower(COALESCE(t.progress_json::jsonb->>'oos_status', ''))
+                      WHEN lower(COALESCE(t.status, '')) IN ('running', 'syncing') THEN 'running'
+                      WHEN lower(COALESCE(t.status, '')) IN ('assigned', 'queued') THEN 'queued'
+                      ELSE 'auto_managed'
+                    END
+                  ) IN ({placeholders})
+            """
+        else:
+            query = f"""
+                SELECT COUNT(*) AS c
+                FROM mining_tasks t
+                WHERE t.user_id = ?
+                  AND t.cycle_id = ?
+                  AND COALESCE(CAST(json_extract(t.progress_json, '$.best_any_passed') AS TEXT), 'false') IN ('1', 'true', 'True')
+                  AND (
+                    CASE
+                      WHEN lower(COALESCE(CAST(json_extract(t.progress_json, '$.review_status') AS TEXT), '')) = 'passed' THEN 'auto_managed'
+                      WHEN lower(COALESCE(CAST(json_extract(t.progress_json, '$.review_status') AS TEXT), '')) IN ('auto_managed', 'queued', 'running', 'rejected', 'error', 'not_eligible')
+                        THEN lower(COALESCE(CAST(json_extract(t.progress_json, '$.review_status') AS TEXT), ''))
+                      WHEN lower(COALESCE(CAST(json_extract(t.progress_json, '$.oos_status') AS TEXT), '')) = 'passed' THEN 'auto_managed'
+                      WHEN lower(COALESCE(CAST(json_extract(t.progress_json, '$.oos_status') AS TEXT), '')) IN ('auto_managed', 'queued', 'running', 'rejected', 'error', 'not_eligible')
+                        THEN lower(COALESCE(CAST(json_extract(t.progress_json, '$.oos_status') AS TEXT), ''))
+                      WHEN lower(COALESCE(t.status, '')) IN ('running', 'syncing') THEN 'running'
+                      WHEN lower(COALESCE(t.status, '')) IN ('assigned', 'queued') THEN 'queued'
+                      ELSE 'auto_managed'
+                    END
+                  ) IN ({placeholders})
+            """
+        params: List[Any] = [int(user_id), int(cycle_id), *pipeline_statuses]
         row = conn.execute(query, params).fetchone()
         if row is None:
             return 0

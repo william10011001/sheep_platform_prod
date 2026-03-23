@@ -30,6 +30,27 @@ import backtest_runtime_core as bt
 GLOBAL_DF = None
 
 
+def _recommended_process_workers() -> int:
+    env_raw = str(os.environ.get("SHEEP_MAX_WORKERS", "") or "").strip()
+    if env_raw:
+        try:
+            return max(1, min(8, int(env_raw)))
+        except Exception:
+            pass
+
+    cpu_count = 0
+    try:
+        cpu_count = len(os.sched_getaffinity(0))  # type: ignore[attr-defined]
+    except Exception:
+        try:
+            cpu_count = int(os.cpu_count() or 0)
+        except Exception:
+            cpu_count = 0
+
+    cpu_count = max(1, cpu_count or 1)
+    return max(1, min(4, cpu_count))
+
+
 def normalize_api_base_url(base_url: str) -> str:
     raw = str(base_url or "").strip()
     if not raw:
@@ -743,7 +764,7 @@ def run_task(api: ApiClient, task: Dict[str, Any], thr: Thresholds, flag_poll_s:
 
         import concurrent.futures
 
-        max_workers = os.cpu_count() or 4 # 【效能極致壓榨】不再扣除1個核心，解放所有算力！
+        max_workers = _recommended_process_workers()
         
         print("\n" + "="*60, flush=True)
         print(f"[效能診斷] 🛠️ 準備切割任務群，策略: {family}, FastMode: {use_fast_path}", flush=True)

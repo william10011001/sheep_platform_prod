@@ -181,6 +181,7 @@ _live_cache: Dict[str, Dict[str, Dict[str, Any]]] = {
     "leaderboard": {},
 }
 _live_last_nonempty: Dict[str, Dict[str, Dict[str, Any]]] = {
+    "dashboard": {},
     "leaderboard": {},
 }
 _http_error_telemetry_cache: Dict[str, float] = {}
@@ -2481,12 +2482,12 @@ def web_leaderboard(period_hours: int = 9999999):
 def web_dashboard(request: Request, authorization: Optional[str] = Header(None)):
     ctx = _auth_ctx(request, authorization)
     uid = int(ctx["user"]["id"])
+    cache_key = _live_cache_key("user_id", uid)
     def _load_dashboard() -> Dict[str, Any]:
         cycle_id = _get_active_cycle_id()
-        current_cycle_tasks = db.list_tasks_for_user(uid, cycle_id=cycle_id)
-        tasks = [enrich_task_row(t) for t in current_cycle_tasks]
-        strategies = db.list_strategies(user_id=uid, limit=200)
-        payouts = db.list_payouts(user_id=uid, limit=200)
+        recent_tasks = [enrich_task_row(t) for t in db.list_tasks_for_user(uid, cycle_id=cycle_id, limit=10)]
+        strategies = db.list_strategies(user_id=uid, limit=100)
+        payouts = db.list_payouts(user_id=uid, limit=100)
 
         conn = db._conn()
         try:
@@ -2498,7 +2499,7 @@ def web_dashboard(request: Request, authorization: Optional[str] = Header(None))
         personal_active_strategy_count = int(db.count_strategies(user_id=uid, status="active"))
         personal_reviewed_strategy_count = int(db.count_review_ready_tasks(user_id=uid))
         global_reviewed_strategy_count = int(db.count_review_ready_tasks())
-        personal_review_pipeline_count = count_review_pipeline_tasks(tasks)
+        personal_review_pipeline_count = int(db.count_review_pipeline_tasks_for_user(uid, cycle_id=cycle_id))
         personal_runtime_snapshot = db.get_runtime_portfolio_snapshot("personal", user_id=uid) or {}
         global_runtime_snapshot = db.get_runtime_portfolio_snapshot("global") or {}
         personal_runtime_items = list(personal_runtime_snapshot.get("items") or [])
@@ -2552,14 +2553,25 @@ def web_dashboard(request: Request, authorization: Optional[str] = Header(None))
                 "global_active_strategy_mismatch": bool(global_runtime_status.get("count_mismatch")),
             },
             "payouts_unpaid": len([p for p in payouts if p["status"] == "unpaid"]),
-            "recent_tasks": tasks[:10],
+            "recent_tasks": recent_tasks,
             "strategies": strategies,
             "payouts": payouts,
             "min_sharpe": min_sharpe,
             "dashboard_version": _live_versions["dashboard"],
         }
 
-    return _cached_live_payload("dashboard", _live_cache_key("user_id", uid), _load_dashboard)
+    try:
+        payload = _cached_live_payload("dashboard", cache_key, _load_dashboard)
+        _live_last_nonempty.setdefault("dashboard", {})[cache_key] = dict(payload)
+        return payload
+    except Exception as exc:
+        preserved = dict((_live_last_nonempty.get("dashboard") or {}).get(cache_key) or {})
+        if preserved:
+            preserved["_preserved_last_nonempty"] = True
+            preserved["dashboard_warning"] = "stale_fallback"
+            return preserved
+        logger.error(f"Dashboard error for user {uid}: {exc}")
+        raise HTTPException(status_code=500, detail="fetch_dashboard_failed")
 
 
 @app.get("/live/version")
@@ -2580,7 +2592,7 @@ def web_get_tasks(request: Request, authorization: Optional[str] = Header(None))
     cycle_id = _get_active_cycle_id()
 
     # 僅做純資料讀取，嚴禁在此端點觸發 assign_tasks 或任何寫入操作，確保 API 響應在 50ms 內完成
-    tasks = [enrich_task_row(t) for t in db.list_tasks_for_user(uid, cycle_id=cycle_id)]
+    tasks = [enrich_task_row(t) for t in db.list_tasks_for_user(uid, cycle_id=cycle_id, limit=200)]
     run_enabled = db.get_user_run_enabled(uid)
     pending_task_count = _get_user_pending_assignment_count(uid, cycle_id)
     return {
@@ -2597,7 +2609,51 @@ def web_start_tasks(request: Request, authorization: Optional[str] = Header(None
     uid = int(ctx["user"]["id"])
     db.set_user_run_enabled(uid, True)
     cycle_id = _get_active_cycle_id()
-    primed = _prime_user_task_queue(uid, cycle_id)
+    primed = {
+        "assigned_count": 0,
+        "task_count": int(db.count_tasks_for_user(uid, cycle_id=cycle_id, statuses=["assigned", "queued", "running"])),
+        "pending_task_count": int(db.count_tasks_for_user(uid, cycle_id=cycle_id, statuses=["assigned"])),
+        "active_cycle_id": int(cycle_id),
+        "priming": True,
+    }
+    try:
+        import threading
+        result_holder: Dict[str, Any] = {}
+        ready = threading.Event()
+
+        def _prime_in_background() -> None:
+            try:
+                result = dict(_prime_user_task_queue(uid, cycle_id) or {})
+                result_holder.update(result)
+                db.log_sys_event(
+                    "USER_RUN_ENABLED_PRIME_READY",
+                    uid,
+                    "Background task priming completed",
+                    result,
+                )
+                _invalidate_live_state("dashboard")
+            except Exception as exc:
+                db.log_sys_event(
+                    "USER_RUN_ENABLED_PRIME_DEFERRED",
+                    uid,
+                    f"Background task prime failed: {exc}",
+                    {"active_cycle_id": int(cycle_id)},
+                )
+            finally:
+                ready.set()
+
+        thread = threading.Thread(target=_prime_in_background, daemon=True)
+        thread.start()
+        if ready.wait(0.35) and result_holder:
+            primed.update(result_holder)
+            primed["priming"] = False
+    except Exception as exc:
+        db.log_sys_event(
+            "USER_RUN_ENABLED_PRIME_THREAD_FAIL",
+            uid,
+            f"Background task prime thread failed: {exc}",
+            {"ip": _client_ip(request), **primed},
+        )
     db.log_sys_event(
         "USER_RUN_ENABLED",
         uid,

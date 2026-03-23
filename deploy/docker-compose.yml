@@ -135,8 +135,9 @@ services:
       SHEEP_COMPUTE_PASS: ${SHEEP_BOOTSTRAP_ADMIN_PASS}
       SHEEP_COMPUTE_TTL_SECONDS: "2592000"
       SHEEP_COMPUTE_IDLE_S: "1.0"
-      SHEEP_COMPUTE_COMMIT_EVERY: "25"
+      SHEEP_COMPUTE_COMMIT_EVERY: "100"
       SHEEP_COMPUTE_FLAG_POLL_S: "5.0"
+      SHEEP_MAX_WORKERS: "2"
     depends_on:
       api:
         condition: service_healthy
