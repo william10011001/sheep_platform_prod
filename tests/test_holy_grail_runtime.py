@@ -1,4 +1,5 @@
 import importlib
+import importlib.util
 import json
 import subprocess
 import sys
@@ -6,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +18,15 @@ if str(APP_DIR) not in sys.path:
 import sheep_runtime_paths as paths
 import sheep_holy_grail_runtime as holy_runtime_mod
 from sheep_holy_grail_runtime import HolyGrailRuntime, run_holy_grail_build
+
+
+def _load_live_trader_module():
+    script_path = next((ROOT / "實盤程式").glob("*下單程式.py"))
+    spec = importlib.util.spec_from_file_location("sheep_live_trader_runtime_tests", script_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _write_ohlcv(path: Path, rows):
@@ -262,6 +273,64 @@ def test_tema_rsi_python_fallback_produces_trades():
     assert int(reasons[0]) in {2, 3}
     assert int(entry_reasons[0]) == 2
     assert float(equity[-1]) > 1.0
+
+
+def test_cached_runtime_snapshot_preserves_full_strategy_metrics(monkeypatch):
+    live_mod = _load_live_trader_module()
+    captured = {}
+
+    class _TextBox:
+        def __init__(self, text: str):
+            self._text = text
+
+        def get(self, *_args):
+            return self._text
+
+    class _UI:
+        def __init__(self, text: str):
+            self.multi_json_text = _TextBox(text)
+
+    updater = live_mod.FactorPoolUpdater(
+        _UI(
+            json.dumps(
+                [
+                    {
+                        "strategy_id": 321,
+                        "strategy_key": "runtime-321",
+                        "family": "TEMA_RSI",
+                        "symbol": "ETH_USDT",
+                        "direction": "long",
+                        "interval": "1d",
+                        "family_params": {"fast_len": 9, "slow_len": 30},
+                        "stake_pct": 45.35,
+                        "sharpe": 4.19,
+                        "total_return_pct": 57.39,
+                        "max_drawdown_pct": 3.37,
+                    }
+                ],
+                ensure_ascii=False,
+            )
+        )
+    )
+    monkeypatch.setattr(updater, "_collect_runtime_position_items", lambda: [])
+
+    def _capture(scope, payload, runtime_kwargs):
+        captured["scope"] = scope
+        captured["payload"] = payload
+        captured["runtime_kwargs"] = runtime_kwargs
+        return True
+
+    monkeypatch.setattr(updater, "_post_runtime_snapshot", _capture)
+
+    updater._sync_cached_runtime_snapshot("global", {}, reason="startup")
+
+    assert captured["scope"] == "global"
+    item = captured["payload"]["items"][0]
+    assert int(item["strategy_id"]) == 321
+    assert item["strategy_key"] == "runtime-321"
+    assert item["total_return_pct"] == pytest.approx(57.39)
+    assert item["max_drawdown_pct"] == pytest.approx(3.37)
+    assert item["sharpe"] == pytest.approx(4.19)
 
 
 class _DummyBT:

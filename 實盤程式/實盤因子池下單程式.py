@@ -71,7 +71,12 @@ from sheep_runtime_paths import (
     realtime_log_path,
     realtime_state_path,
 )
-from sheep_strategy_schema import normalize_direction, normalize_runtime_strategy_entry, normalize_strategy_batch
+from sheep_strategy_schema import (
+    extract_strategy_entries,
+    normalize_direction,
+    normalize_runtime_strategy_entry,
+    normalize_strategy_batch,
+)
 
 bt, HOLY_GRAIL_IMPORT_ERROR = import_backtest_runtime(PROJECT_ROOT)
 
@@ -2954,19 +2959,36 @@ class FactorPoolUpdater:
             log(f"【網站同步】{scope} cached runtime 快照解析失敗: {exc}")
             return
         items = []
-        for idx, item in enumerate(
-            normalize_strategy_batch(
-                raw_batch,
+        for idx, raw_item in enumerate(extract_strategy_entries(raw_batch), start=1):
+            payload = dict(raw_item or {})
+            normalized = normalize_runtime_strategy_entry(
+                payload,
                 default_symbol="",
                 default_interval="",
-            ),
-            start=1,
-        ):
-            payload = dict(item or {})
+            )
+            payload["strategy_id"] = payload.get("strategy_id") if payload.get("strategy_id") not in (None, "") else normalized.get("strategy_id")
+            payload["family"] = str(payload.get("family") or normalized.get("family") or "").strip()
+            payload["family_params"] = dict(payload.get("family_params") or normalized.get("family_params") or {})
+            payload["direction"] = normalize_direction(payload.get("direction") or normalized.get("direction"), default="long")
+            payload["tp_pct"] = safe_float(payload.get("tp_pct"), safe_float(normalized.get("tp_pct"), 0.0))
+            payload["sl_pct"] = safe_float(payload.get("sl_pct"), safe_float(normalized.get("sl_pct"), 0.0))
+            try:
+                payload["max_hold"] = int(payload.get("max_hold") if payload.get("max_hold") not in (None, "") else normalized.get("max_hold") or 0)
+            except Exception:
+                payload["max_hold"] = int(normalized.get("max_hold") or 0)
+            payload["stake_pct"] = safe_float(payload.get("stake_pct"), safe_float(normalized.get("stake_pct"), 0.0))
+            payload["symbol"] = str(payload.get("symbol") or normalized.get("symbol") or "").strip().upper()
+            payload["interval"] = str(payload.get("interval") or normalized.get("interval") or "").strip()
+            if not isinstance(payload.get("enabled"), bool):
+                payload["enabled"] = bool(normalized.get("enabled", True))
             payload.setdefault("rank", idx)
-            payload.setdefault(
-                "strategy_key",
-                payload.get("strategy_key") or payload.get("strategy_id") or payload.get("name") or f"{payload.get('family', 'UNKNOWN')}_{idx}",
+            payload["strategy_key"] = str(
+                payload.get("strategy_key")
+                or payload.get("external_key")
+                or normalized.get("strategy_key")
+                or payload.get("strategy_id")
+                or payload.get("name")
+                or f"{payload.get('family', 'UNKNOWN')}_{idx}"
             )
             items.append(payload)
         if not items:

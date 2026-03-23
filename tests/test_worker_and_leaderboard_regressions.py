@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -510,3 +511,86 @@ def test_leaderboard_stats_include_time_and_points_fallback(monkeypatch, tmp_pat
     assert round(float(stats["points"][0]["total_usdt"]), 4) == 250.0
     assert stats["qualified_strategies"], stats
     assert int(stats["qualified_strategies"][0]["active_strategy_count"]) >= 1
+
+
+def test_leaderboard_points_fallback_uses_all_time_weekly_checks(monkeypatch, tmp_path):
+    db_path = tmp_path / "leaderboard-alltime-regression.sqlite3"
+    monkeypatch.setenv("SHEEP_DB_URL", "")
+    monkeypatch.setenv("SHEEP_DB_PATH", str(db_path))
+    _reset_db_module()
+    import sheep_platform_db as db
+
+    db.init_db()
+    db.ensure_cycle_rollover()
+    cycle = db.get_active_cycle()
+    user = db.get_user_by_username("sheep")
+    if user is None:
+        db.create_user("sheep", "test-hash", role="user")
+        user = db.get_user_by_username("sheep")
+    assert cycle is not None
+    assert user is not None
+
+    pool_id = db.create_factor_pool(
+        cycle_id=int(cycle["id"]),
+        name="Leaderboard All-Time Pool",
+        symbol="BTC_USDT",
+        timeframe_min=60,
+        years=2,
+        family="trend",
+        grid_spec={"alpha": [1, 2]},
+        risk_spec={"max_leverage": 2},
+        num_partitions=4,
+        seed=13,
+        active=True,
+    )[0]
+
+    now = db._now_iso()
+    conn = db._conn()
+    try:
+        strategy_cur = conn.execute(
+            """
+            INSERT INTO strategies (
+                submission_id, user_id, pool_id, params_json, status,
+                allocation_pct, note, created_at, expires_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                1,
+                int(user["id"]),
+                int(pool_id),
+                json.dumps({"family": "TEMA_Cross"}),
+                "active",
+                10.0,
+                "leaderboard-all-time-points-test",
+                now,
+                "2099-12-31T23:59:59+00:00",
+            ),
+        )
+        conn.commit()
+        strategy_id = int(strategy_cur.lastrowid)
+    finally:
+        conn.close()
+
+    db.set_setting("capital_usdt", 100000.0)
+    db.set_setting("payout_rate", 0.2)
+    db.create_weekly_check(
+        strategy_id=strategy_id,
+        week_start_ts=now,
+        week_end_ts=now,
+        return_pct=12.5,
+        max_drawdown_pct=3.0,
+        trades=20,
+        eligible=True,
+    )
+    old_checked_at = (datetime.now(timezone.utc) - timedelta(days=45)).isoformat()
+    conn = db._conn()
+    try:
+        conn.execute("UPDATE weekly_checks SET checked_at = ? WHERE strategy_id = ?", (old_checked_at, int(strategy_id)))
+        conn.commit()
+    finally:
+        conn.close()
+
+    stats = db.get_leaderboard_stats(period_hours=24)
+
+    assert stats["points"], stats
+    assert round(float(stats["points"][0]["total_usdt"]), 4) == 250.0

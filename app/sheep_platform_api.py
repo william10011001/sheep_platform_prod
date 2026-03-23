@@ -545,16 +545,23 @@ def _enrich_runtime_items(items: List[Dict[str, Any]], *, strategy_lookup: Optio
         item = dict(raw or {})
         match = _find_runtime_strategy_match(item, lookup)
         metrics = dict(match.get("metrics") or {})
-        item["owner_user_id"] = int(match.get("owner_user_id") or 0)
-        item["owner_username"] = str(match.get("username") or "")
-        item["owner_nickname"] = str(match.get("display_name") or match.get("nickname") or match.get("username") or "")
-        item["owner_avatar_url"] = str(match.get("avatar_url") or "")
+        item["owner_user_id"] = int(match.get("owner_user_id") or item.get("owner_user_id") or 0)
+        item["owner_username"] = str(match.get("username") or item.get("owner_username") or "")
+        item["owner_nickname"] = str(
+            match.get("display_name")
+            or match.get("nickname")
+            or match.get("username")
+            or item.get("owner_nickname")
+            or item.get("owner_username")
+            or ""
+        )
+        item["owner_avatar_url"] = str(match.get("avatar_url") or item.get("owner_avatar_url") or "")
         item["strategy_id"] = _as_int(match.get("strategy_id"), _as_int(item.get("strategy_id"), 0))
-        item["external_key"] = str(match.get("external_key") or item.get("strategy_key") or "")
+        item["external_key"] = str(match.get("external_key") or item.get("external_key") or item.get("strategy_key") or "")
         item["total_return_pct"] = _as_float(item.get("total_return_pct"), _as_float(metrics.get("total_return_pct"), 0.0))
         item["max_drawdown_pct"] = _as_float(item.get("max_drawdown_pct"), _as_float(metrics.get("max_drawdown_pct"), 0.0))
         item["score"] = float(match.get("score") or metrics.get("sharpe") or item.get("sharpe") or 0.0)
-        item["display_interval"] = str(item.get("interval") or match.get("timeframe_min") or "")
+        item["display_interval"] = str(item.get("display_interval") or item.get("interval") or match.get("timeframe_min") or "")
         enriched.append(item)
     return enriched
 
@@ -563,6 +570,11 @@ def _find_runtime_strategy_match(
     item: Dict[str, Any],
     strategy_lookup: Dict[Tuple[str, str, str, str, str], Dict[str, Any]],
 ) -> Dict[str, Any]:
+    strategy_id = _as_int(item.get("strategy_id"), 0)
+    if strategy_id > 0:
+        for candidate in strategy_lookup.values():
+            if _as_int(candidate.get("strategy_id"), 0) == strategy_id:
+                return candidate
     strategy_key = str(item.get("strategy_key") or item.get("external_key") or "").strip()
     if strategy_key:
         for candidate in strategy_lookup.values():
@@ -608,17 +620,24 @@ def _enrich_runtime_position_items(
         match = _find_runtime_strategy_match(item, lookup)
         metrics = dict(match.get("metrics") or {})
         item["position_key"] = str(item.get("position_key") or item.get("position_id") or item.get("strategy_key") or "")
-        item["owner_user_id"] = int(match.get("owner_user_id") or 0)
-        item["owner_username"] = str(match.get("username") or "")
-        item["owner_nickname"] = str(match.get("display_name") or match.get("nickname") or match.get("username") or "")
-        item["owner_avatar_url"] = str(match.get("avatar_url") or "")
-        item["strategy_id"] = _as_int(match.get("strategy_id"), 0)
-        item["external_key"] = str(match.get("external_key") or item.get("strategy_key") or "")
+        item["owner_user_id"] = int(match.get("owner_user_id") or item.get("owner_user_id") or 0)
+        item["owner_username"] = str(match.get("username") or item.get("owner_username") or "")
+        item["owner_nickname"] = str(
+            match.get("display_name")
+            or match.get("nickname")
+            or match.get("username")
+            or item.get("owner_nickname")
+            or item.get("owner_username")
+            or ""
+        )
+        item["owner_avatar_url"] = str(match.get("avatar_url") or item.get("owner_avatar_url") or "")
+        item["strategy_id"] = _as_int(match.get("strategy_id"), _as_int(item.get("strategy_id"), 0))
+        item["external_key"] = str(match.get("external_key") or item.get("external_key") or item.get("strategy_key") or "")
         item["family"] = str(item.get("family") or match.get("family") or "")
         item["symbol"] = str(item.get("symbol") or match.get("symbol") or "").upper()
         item["direction"] = normalize_direction(item.get("direction") or match.get("direction"), default="long")
         item["interval"] = str(item.get("interval") or match.get("timeframe_min") or "")
-        item["display_interval"] = str(item.get("interval") or match.get("timeframe_min") or "")
+        item["display_interval"] = str(item.get("display_interval") or item.get("interval") or match.get("timeframe_min") or "")
         item["score"] = _as_float(item.get("score") or match.get("score") or metrics.get("sharpe") or 0.0)
         item["entry_price"] = _as_float(item.get("entry_price") or item.get("entryPrice") or 0.0)
         item["mark_price"] = _as_float(item.get("mark_price") or item.get("markPrice") or 0.0)

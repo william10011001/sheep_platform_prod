@@ -4503,6 +4503,8 @@ def _leaderboard_python_fallback(conn: Any, cutoff_iso: str, window_end_iso: str
             return None
 
     default_avatar_url = _default_avatar_url_from_conn(conn)
+    cutoff_dt = _parse_iso(cutoff_iso)
+    window_end_dt = _parse_iso(window_end_iso)
     query = """
         SELECT recent.id, recent.progress_json, recent.created_at, recent.activity_at,
                u.id as user_id, u.username, u.nickname, u.avatar_url
@@ -4510,22 +4512,27 @@ def _leaderboard_python_fallback(conn: Any, cutoff_iso: str, window_end_iso: str
             SELECT t.id, t.user_id, t.progress_json, t.created_at,
                    COALESCE(t.last_heartbeat, t.updated_at, t.created_at) as activity_at
             FROM mining_tasks t
-            WHERE COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
-              AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <= ?
-              AND t.status IN ('running', 'completed')
-            ORDER BY COALESCE(t.last_heartbeat, t.updated_at, t.created_at) DESC, t.id DESC
+            WHERE t.status IN ('running', 'completed')
+            ORDER BY t.id DESC
             LIMIT ?
         ) recent
         JOIN users u ON recent.user_id = u.id
-        ORDER BY recent.activity_at DESC, recent.id DESC
+        ORDER BY recent.id DESC
     """
-    rows = conn.execute(query, (cutoff_iso, window_end_iso, int(_leaderboard_task_scan_limit()))).fetchall()
+    rows = conn.execute(query, (int(_leaderboard_task_scan_limit()),)).fetchall()
     combos_map: Dict[int, Dict[str, Any]] = {}
     time_map: Dict[int, Dict[str, Any]] = {}
     for row in rows:
         entry = dict(row or {})
         user_bits = _decorate_user_row(entry, default_avatar_url=default_avatar_url)
         progress = parse_json_object(entry.get("progress_json"))
+        activity_dt = _parse_iso(entry.get("activity_at")) or _parse_iso(entry.get("created_at"))
+        if activity_dt is None:
+            continue
+        if cutoff_dt is not None and activity_dt.astimezone(timezone.utc) < cutoff_dt.astimezone(timezone.utc):
+            continue
+        if window_end_dt is not None and activity_dt.astimezone(timezone.utc) > window_end_dt.astimezone(timezone.utc):
+            continue
         try:
             combos_done = max(0.0, float(progress.get("combos_done") or progress.get("done") or progress.get("combos_total") or progress.get("total") or 0.0))
         except Exception:
@@ -4535,7 +4542,6 @@ def _leaderboard_python_fallback(conn: Any, cutoff_iso: str, window_end_iso: str
         except Exception:
             elapsed_s = 0.0
         if elapsed_s <= 0:
-            activity_dt = _parse_iso(entry.get("activity_at"))
             created_dt = _parse_iso(entry.get("created_at"))
             if activity_dt is not None and created_dt is not None:
                 try:
@@ -4757,6 +4763,28 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
                     ]
                 except Exception as e:
                     print(f"[DB WARN] Leaderboard points fallback query failed: {e}")
+
+                if not results["points"]:
+                    sql_points_fallback_all_time = """
+                        SELECT u.username, u.nickname, u.avatar_url,
+                               SUM((COALESCE(wc.return_pct, 0.0) / 100.0) * (COALESCE(st.allocation_pct, 0.0) / 100.0) * ? * ?) as total_usdt
+                        FROM weekly_checks wc
+                        JOIN strategies st ON wc.strategy_id = st.id
+                        JOIN users u ON st.user_id = u.id
+                        WHERE COALESCE(wc.eligible, 0) = 1
+                        GROUP BY u.id, u.username, u.nickname, u.avatar_url
+                        ORDER BY total_usdt DESC
+                        LIMIT 300
+                    """
+                    try:
+                        rows = conn.execute(sql_points_fallback_all_time, (capital_usdt, payout_rate)).fetchall()
+                        results["points"] = [
+                            _decorate_user_row(dict(r), default_avatar_url=default_avatar_url)
+                            for r in rows
+                            if r["total_usdt"] is not None and float(r["total_usdt"]) > 0
+                        ]
+                    except Exception as e:
+                        print(f"[DB WARN] Leaderboard all-time points fallback query failed: {e}")
 
         sql_qualified_strategies = """
             SELECT u.username, u.nickname, u.avatar_url, COUNT(st.id) as active_strategy_count
@@ -5448,11 +5476,20 @@ def list_active_strategy_runtime_rows(limit: int = 20000, runtime_items: Optiona
         runtime_items = list(runtime_items or [])
         if runtime_items:
             external_keys: List[str] = []
+            strategy_ids: List[int] = []
             signature_filters: List[Tuple[str, str, int, str]] = []
             seen_keys: set[str] = set()
+            seen_ids: set[int] = set()
             seen_signatures: set[Tuple[str, str, int, str]] = set()
             for raw in runtime_items:
                 item = dict(raw or {})
+                try:
+                    strategy_id = int(item.get("strategy_id") or 0)
+                except Exception:
+                    strategy_id = 0
+                if strategy_id > 0 and strategy_id not in seen_ids:
+                    seen_ids.add(strategy_id)
+                    strategy_ids.append(strategy_id)
                 entry = normalize_runtime_strategy_entry(
                     item.get("params_json") if isinstance(item.get("params_json"), dict) else item,
                     default_symbol=str(item.get("symbol") or ""),
@@ -5474,6 +5511,9 @@ def list_active_strategy_runtime_rows(limit: int = 20000, runtime_items: Optiona
                     signature_filters.append(signature)
 
             where_parts: List[str] = []
+            if strategy_ids:
+                where_parts.append("st.id IN (" + ", ".join(["?"] * len(strategy_ids)) + ")")
+                params.extend(strategy_ids)
             if external_keys:
                 where_parts.append("st.external_key IN (" + ", ".join(["?"] * len(external_keys)) + ")")
                 params.extend(external_keys)

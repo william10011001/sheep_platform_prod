@@ -790,6 +790,66 @@ def test_runtime_portfolio_sync_preserves_raw_strategy_id_without_active_match(a
     assert item["max_drawdown_pct"] == pytest.approx(3.37)
 
 
+def test_runtime_portfolio_strategy_id_lookup_recovers_owner_identity(admin_client):
+    client = admin_client["client"]
+    headers = admin_client["headers"]
+    db_module = admin_client["db"]
+    user_id = admin_client["user_id"]
+
+    db_module.update_user_profile(user_id, nickname="Sheep Miner")
+    conn = db_module._conn()
+    try:
+        row = conn.execute(
+            "SELECT id FROM strategies WHERE user_id = ? AND status = 'active' ORDER BY id DESC LIMIT 1",
+            (int(user_id),),
+        ).fetchone()
+        assert row is not None
+        strategy_id = int(row["id"])
+    finally:
+        conn.close()
+
+    issued = client.post(
+        "/runtime-sync/token",
+        headers=headers,
+        json={"ttl_seconds": 7200, "rotate_existing": True},
+    )
+    assert issued.status_code == 200, issued.text
+    token = issued.json()["token"]
+
+    sync_resp = client.post(
+        "/runtime/portfolio/sync",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "scope": "global",
+            "summary": {"portfolio_metrics": {"sharpe": 1.1}},
+            "items": [
+                {
+                    "strategy_id": strategy_id,
+                    "strategy_key": "mismatch-runtime-key",
+                    "family": "TEMA_RSI",
+                    "symbol": "ETH_USDT",
+                    "direction": "short",
+                    "interval": "1d",
+                    "family_params": {"fast_len": 9, "slow_len": 30},
+                    "stake_pct": 15.0,
+                    "sharpe": 1.1,
+                    "total_return_pct": 12.34,
+                    "max_drawdown_pct": 2.22,
+                }
+            ],
+        },
+    )
+    assert sync_resp.status_code == 200, sync_resp.text
+
+    dashboard = client.get("/dashboard", headers=headers)
+    assert dashboard.status_code == 200, dashboard.text
+    item = dashboard.json()["global_runtime_portfolio_items"][0]
+    assert int(item["strategy_id"]) == strategy_id
+    assert item["owner_username"] == "sheep"
+    assert item["owner_nickname"] == "Sheep Miner"
+    assert item["owner_avatar_url"]
+
+
 def test_dashboard_exposes_review_ready_items_for_rating_panel(admin_client):
     client = admin_client["client"]
     headers = admin_client["headers"]
