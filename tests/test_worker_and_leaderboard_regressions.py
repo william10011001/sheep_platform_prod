@@ -69,6 +69,96 @@ def test_factor_pool_updater_pauses_cleanly_without_credentials(monkeypatch):
     assert not any("本輪更新失敗" in msg for msg in logs)
 
 
+def test_factor_pool_updater_accepts_token_only_and_syncs_cached_snapshot_on_failure(monkeypatch):
+    module = _load_live_trader_module()
+    logs = []
+    module.log = logs.append
+    module.bt = type("_BT", (), {"NUMBA_OK": False})()
+
+    build_calls = []
+    sync_calls = []
+
+    class _Result:
+        ok = False
+        message = "backtests did not produce any equity curves"
+        warnings = []
+        multi_payload = []
+        portfolio_metrics = {}
+        selected_count = 0
+        candidate_count = 0
+        backtested_count = 0
+        report_paths = {}
+
+    def _fake_build(**kwargs):
+        build_calls.append(dict(kwargs))
+        return _Result()
+
+    class _SyncResp:
+        status_code = 200
+        headers = {"content-type": "application/json"}
+        text = '{"ok": true}'
+
+        def json(self):
+            return {"ok": True, "snapshot": {"strategy_count": 1}}
+
+    def _fake_post(url, json=None, headers=None, timeout=None, verify=None):
+        sync_calls.append({"url": url, "json": json, "headers": headers})
+        return _SyncResp()
+
+    module.run_holy_grail_build = _fake_build
+    monkeypatch.setattr(module.requests, "post", _fake_post)
+
+    class _DummyVar:
+        def __init__(self, value):
+            self._value = value
+
+        def get(self):
+            return self._value
+
+    class _DummyText:
+        def get(self, *_args):
+            return json.dumps(
+                {
+                    "schema_version": 1,
+                    "strategies": [
+                        {
+                            "strategy_key": "cached-short",
+                            "family": "TEMA_RSI",
+                            "symbol": "BTCUSDT",
+                            "direction": "short",
+                            "interval": "4h",
+                            "family_params": {"fast_len": 9, "slow_len": 55},
+                            "tp_pct": 1.2,
+                            "sl_pct": 0.8,
+                            "max_hold_bars": 36,
+                            "stake_pct": 30.0,
+                            "enabled": True,
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+            )
+
+    class _DummyUI:
+        global_stake_pct_var = _DummyVar(95.0)
+        multi_json_text = _DummyText()
+        factor_pool_url_var = _DummyVar("https://example.com")
+        factor_pool_token_var = _DummyVar("runtime-token")
+        factor_pool_user_var = _DummyVar("")
+        factor_pool_pass_var = _DummyVar("")
+
+    updater = module.FactorPoolUpdater(_DummyUI())
+    updater._build_holy_grail()
+
+    assert build_calls, "token-only auth should still trigger Holy Grail build"
+    assert build_calls[0]["factor_pool_token"] == "runtime-token"
+    assert len(sync_calls) == 2
+    assert all(call["headers"] == {"Authorization": "Bearer runtime-token"} for call in sync_calls)
+    assert all(call["json"]["source"].startswith("holy_grail_cached_") for call in sync_calls)
+    assert all(call["json"]["items"][0]["direction"] == "short" for call in sync_calls)
+    assert any("保留上一版有效的對沖組合" in msg for msg in logs)
+
+
 def test_live_trader_accepts_wrapped_multi_strategy_json():
     module = _load_live_trader_module()
 

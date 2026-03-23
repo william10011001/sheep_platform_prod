@@ -2765,27 +2765,100 @@ class FactorPoolUpdater:
             "items": items,
         }
 
-    def _sync_runtime_snapshot(self, scope: str, result, runtime_kwargs: dict):
+    def _has_runtime_sync_auth(self, runtime_kwargs: dict) -> bool:
+        token = str(runtime_kwargs.get("factor_pool_token") or "").strip()
+        user = str(runtime_kwargs.get("factor_pool_user") or "").strip()
+        password = str(runtime_kwargs.get("factor_pool_pass") or "").strip()
+        return bool(token or (user and password))
+
+    def _post_runtime_snapshot(self, scope: str, payload: dict, runtime_kwargs: dict) -> bool:
         sync_url = self._runtime_sync_url(runtime_kwargs.get("factor_pool_url", "https://sheep123.com"))
+        token = str(runtime_kwargs.get("factor_pool_token") or "").strip()
+        user = str(runtime_kwargs.get("factor_pool_user") or "").strip()
+        password = str(runtime_kwargs.get("factor_pool_pass") or "").strip()
+        attempts = []
+        if token:
+            attempts.append(("token", {"Authorization": f"Bearer {token}"}, dict(payload)))
+        if user and password:
+            password_payload = dict(payload)
+            password_payload["username"] = user
+            password_payload["password"] = password
+            attempts.append(("password", {}, password_payload))
+        if not attempts:
+            log(f"【網站同步】{scope} runtime 快照略過：未設定可用的同步憑證。")
+            return False
+
+        last_detail = ""
+        for mode, headers, body in attempts:
+            try:
+                resp = requests.post(sync_url, json=body, headers=headers, timeout=20, verify=False)
+                data = resp.json() if resp.headers.get("content-type", "").lower().startswith("application/json") else {}
+                if resp.status_code == 200 and bool(data.get("ok")):
+                    snapshot = data.get("snapshot") or {}
+                    log(f"【網站同步】{scope} runtime 快照已更新：{int(snapshot.get('strategy_count') or 0)} 組策略。")
+                    return True
+                last_detail = str(data.get("detail") or data.get("error") or resp.text[:300])
+                if mode == "token" and resp.status_code in {401, 403} and len(attempts) > 1:
+                    log(f"【網站同步】{scope} token 已失效，改用帳密重試同步。")
+                    continue
+                log(f"【網站同步】{scope} runtime 快照更新失敗: HTTP {resp.status_code} | {last_detail}")
+                return False
+            except Exception as e:
+                last_detail = str(e)
+                if mode == "token" and len(attempts) > 1:
+                    log(f"【網站同步】{scope} token 同步異常，改用帳密重試：{e}")
+                    continue
+                log(f"【網站同步】{scope} runtime 快照同步異常: {e}")
+                return False
+
+        if last_detail:
+            log(f"【網站同步】{scope} runtime 快照最終仍失敗: {last_detail}")
+        return False
+
+    def _sync_runtime_snapshot(self, scope: str, result, runtime_kwargs: dict):
         payload = self._runtime_sync_payload(scope, result, runtime_kwargs)
+        self._post_runtime_snapshot(scope, payload, runtime_kwargs)
+
+    def _sync_cached_runtime_snapshot(self, scope: str, runtime_kwargs: dict, *, reason: str):
+        cached_json = str(self.last_good_json or "").strip()
+        if not cached_json:
+            return
         try:
-            headers = {}
-            token = str(runtime_kwargs.get("factor_pool_token") or "").strip()
-            if token:
-                headers["Authorization"] = f"Bearer {token}"
-            else:
-                payload["username"] = runtime_kwargs.get("factor_pool_user", "")
-                payload["password"] = runtime_kwargs.get("factor_pool_pass", "")
-            resp = requests.post(sync_url, json=payload, headers=headers, timeout=20, verify=False)
-            data = resp.json() if resp.headers.get("content-type", "").lower().startswith("application/json") else {}
-            if resp.status_code != 200 or not bool(data.get("ok")):
-                detail = data.get("detail") or data.get("error") or resp.text[:300]
-                log(f"【網站同步】{scope} runtime 快照更新失敗: HTTP {resp.status_code} | {detail}")
-                return
-            snapshot = data.get("snapshot") or {}
-            log(f"【網站同步】{scope} runtime 快照已更新：{int(snapshot.get('strategy_count') or 0)} 組策略。")
-        except Exception as e:
-            log(f"【網站同步】{scope} runtime 快照同步異常: {e}")
+            raw_batch = json.loads(cached_json)
+        except Exception as exc:
+            log(f"【網站同步】{scope} cached runtime 快照解析失敗: {exc}")
+            return
+        items = []
+        for idx, item in enumerate(
+            normalize_strategy_batch(
+                raw_batch,
+                default_symbol="",
+                default_interval="",
+            ),
+            start=1,
+        ):
+            payload = dict(item or {})
+            payload.setdefault("rank", idx)
+            payload.setdefault(
+                "strategy_key",
+                payload.get("strategy_key") or payload.get("strategy_id") or payload.get("name") or f"{payload.get('family', 'UNKNOWN')}_{idx}",
+            )
+            items.append(payload)
+        if not items:
+            return
+        payload = {
+            "scope": scope,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "source": f"holy_grail_cached_{reason}",
+            "summary": {
+                "selected_count": len(items),
+                "candidate_count": len(items),
+                "backtested_count": len(items),
+                "fallback_reason": reason,
+            },
+            "items": items,
+        }
+        self._post_runtime_snapshot(scope, payload, runtime_kwargs)
 
     def start(self):
         if bt is None:
@@ -2795,6 +2868,10 @@ class FactorPoolUpdater:
         t = threading.Thread(target=self._loop, daemon=True)
         t.start()
         log("【系統服務】全自動聖杯建構引擎已啟動，每 5 分鐘自動尋找並熱更新對沖組合。")
+        runtime_kwargs = self._factor_pool_runtime_kwargs()
+        if self.last_good_json and self._has_runtime_sync_auth(runtime_kwargs):
+            self._sync_cached_runtime_snapshot("personal", runtime_kwargs, reason="startup")
+            self._sync_cached_runtime_snapshot("global", runtime_kwargs, reason="startup")
 
     def _loop(self):
         while self.running:
@@ -2820,18 +2897,24 @@ class FactorPoolUpdater:
         except Exception:
             base_stake = 95.0
         runtime_kwargs = self._factor_pool_runtime_kwargs()
-        if not runtime_kwargs["factor_pool_user"] or not runtime_kwargs["factor_pool_pass"]:
-            warning = "【聖杯引擎】未設定因子池帳密，背景熱更新暫停；沿用目前策略組合。"
+        if not self._has_runtime_sync_auth(runtime_kwargs):
+            warning = "【聖杯引擎】未設定因子池帳密或同步憑證，背景熱更新暫停；沿用目前策略組合。"
             if warning not in self.seen_warnings:
                 self.seen_warnings.add(warning)
                 log(warning)
             return
+        if not bool(getattr(bt, "NUMBA_OK", True)):
+            warning = "【聖杯引擎】目前 Python 環境未啟用 Numba，已改用純 Python 回測路徑；速度較慢，但仍會持續同步。"
+            if warning not in self.seen_warnings:
+                self.seen_warnings.add(warning)
+                log(warning)
         log("【聖杯引擎】開始拉取實盤因子池進行背景計算...")
         result = run_holy_grail_build(
             bt_module=bt,
             log=log,
             base_stake_pct=float(base_stake),
             factor_pool_url=runtime_kwargs["factor_pool_url"],
+            factor_pool_token=runtime_kwargs["factor_pool_token"],
             factor_pool_user=runtime_kwargs["factor_pool_user"],
             factor_pool_pass=runtime_kwargs["factor_pool_pass"],
         )
@@ -2839,12 +2922,17 @@ class FactorPoolUpdater:
             log(f"【聖杯引擎】本輪更新失敗: {result.message}")
             if self.last_good_json:
                 log("【聖杯引擎】保留上一版有效的對沖組合，不進行熱更新。")
+                self._sync_cached_runtime_snapshot("personal", runtime_kwargs, reason="failure")
+                self._sync_cached_runtime_snapshot("global", runtime_kwargs, reason="failure")
             self._log_runtime_warnings(result.warnings)
             return
 
         new_json_str = (result.multi_strategies_json or "[]").strip()
         if new_json_str in {"", "[]"}:
             log("【聖杯引擎】回測無產生可用組合，保留上一版策略。")
+            if self.last_good_json:
+                self._sync_cached_runtime_snapshot("personal", runtime_kwargs, reason="empty_result")
+                self._sync_cached_runtime_snapshot("global", runtime_kwargs, reason="empty_result")
             return
 
         self.last_good_json = new_json_str

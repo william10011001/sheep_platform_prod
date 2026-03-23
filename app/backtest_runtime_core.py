@@ -4279,6 +4279,122 @@ slippage, max_hold, fee_side=0.0002):
                 entry_reason_record[:tcount])
 
 
+def _simulate_tema_rsi_py(o, h, l, c,
+                          entry_sig,
+                          act_pct_arr, trail_offset_arr, tp_pct_arr, sl_pct_arr, stake_pct_arr,
+                          entry_reason_input_arr,
+                          slippage, max_hold, fee_side):
+    n = len(c)
+    perbar = np.zeros(n, np.float64)
+    max_trades = n
+    entry_idx_arr = np.empty(max_trades, np.int64)
+    exit_idx_arr = np.empty(max_trades, np.int64)
+    entry_px_arr = np.empty(max_trades, np.float64)
+    exit_px_arr = np.empty(max_trades, np.float64)
+    net_ret_arr = np.empty(max_trades, np.float64)
+    bars_held_arr = np.empty(max_trades, np.int32)
+    reason_arr = np.empty(max_trades, np.int8)
+    entry_reason_record = np.empty(max_trades, np.int8)
+
+    tcount = 0
+    in_pos = False
+    entry_idx = -1
+    entry_price = 0.0
+    curr_stake = 1.0
+    curr_fixed_sl = 0.0
+    curr_fixed_tp = 0.0
+    curr_trail_activation_price = 0.0
+    curr_trail_stop_price = 0.0
+    curr_trail_offset = 0.0
+    is_trail_active = False
+
+    for i in range(n):
+        if not in_pos:
+            if bool(entry_sig[i]):
+                entry_idx = i + 1
+                if entry_idx >= n:
+                    break
+                entry_price = float(o[entry_idx])
+                sl_pct = float(sl_pct_arr[i])
+                tp_pct = float(tp_pct_arr[i])
+                curr_stake = float(stake_pct_arr[i])
+                curr_fixed_sl = entry_price * (1.0 - sl_pct)
+                curr_fixed_tp = 1e12 if tp_pct <= -0.99 else entry_price * (1.0 + tp_pct)
+                curr_trail_offset = float(trail_offset_arr[i])
+                act_pct = float(act_pct_arr[i])
+                curr_trail_activation_price = entry_price * (1.0 + act_pct)
+                curr_trail_stop_price = 0.0
+                is_trail_active = False
+                if tcount < max_trades:
+                    entry_reason_record[tcount] = int(entry_reason_input_arr[i])
+                in_pos = True
+        else:
+            current_bar_h = float(h[i])
+            current_bar_l = float(l[i])
+
+            if not is_trail_active:
+                if current_bar_h >= curr_trail_activation_price:
+                    is_trail_active = True
+                    curr_trail_stop_price = current_bar_h - curr_trail_offset
+            else:
+                potential_new_stop = current_bar_h - curr_trail_offset
+                if potential_new_stop > curr_trail_stop_price:
+                    curr_trail_stop_price = potential_new_stop
+
+            exit_type = 0
+            exit_p = 0.0
+            effective_sl = curr_fixed_sl
+            effective_sl_type = 1
+            if is_trail_active and curr_trail_stop_price > effective_sl:
+                effective_sl = curr_trail_stop_price
+                effective_sl_type = 3
+
+            if current_bar_l <= effective_sl:
+                exit_type = effective_sl_type
+                exit_p = effective_sl
+            if exit_type == 0 and current_bar_h >= curr_fixed_tp:
+                exit_type = 2
+                exit_p = curr_fixed_tp
+            if exit_type == 0 and (i - entry_idx + 1) >= int(max_hold):
+                exit_type = 5
+                exit_p = float(c[i])
+
+            if exit_type > 0:
+                exec_entry = max(float(entry_price) + float(slippage), 1e-12)
+                exec_exit = max(float(exit_p) - float(slippage), 1e-12)
+                revenue = exec_exit * (1.0 - float(fee_side))
+                cost = exec_entry * (1.0 + float(fee_side))
+                raw_net_ret = (revenue - cost) / exec_entry
+                net_ret = raw_net_ret * curr_stake
+                perbar[i] += net_ret
+                if tcount < max_trades:
+                    entry_idx_arr[tcount] = entry_idx
+                    exit_idx_arr[tcount] = i
+                    entry_px_arr[tcount] = entry_price
+                    exit_px_arr[tcount] = exit_p
+                    net_ret_arr[tcount] = net_ret
+                    bars_held_arr[tcount] = i - entry_idx + 1
+                    reason_arr[tcount] = exit_type
+                    tcount += 1
+                in_pos = False
+                entry_idx = -1
+
+    equity = np.ones(n, np.float64)
+    for k in range(1, n):
+        equity[k] = equity[k-1] * (1.0 + perbar[k])
+
+    return (perbar,
+            equity,
+            entry_idx_arr[:tcount],
+            exit_idx_arr[:tcount],
+            entry_px_arr[:tcount],
+            exit_px_arr[:tcount],
+            net_ret_arr[:tcount],
+            bars_held_arr[:tcount],
+            reason_arr[:tcount],
+            entry_reason_record[:tcount])
+
+
 def run_backtest(df: pd.DataFrame,
 family: str,
 family_params: Dict,
@@ -4369,6 +4485,16 @@ reverse_mode: bool = False) -> Dict:
                  empty_i64, empty_i64, empty_f64, empty_f64, empty_f64, empty_i32, empty_i8
             )
 
+    elif family == "TEMA_RSI" and zone_arrays is not None and not NUMBA_OK:
+        p_act_arr, p_off_arr, p_tp_arr, p_sl_arr, p_stake_arr, p_reason_in, _ = zone_arrays
+        (perbar, equity,
+         e_idx, x_idx, e_px, x_px, tr_ret, bars_held, reasons, entry_reasons_arr) = _simulate_tema_rsi_py(
+            o, h, l, c, sig.astype(np.bool_),
+            p_act_arr, p_off_arr, p_tp_arr, p_sl_arr, p_stake_arr,
+            p_reason_in,
+            float(slippage), int(max_hold), float(fee_side)
+        )
+
     elif family == "TEMA_RSI" and zone_arrays is not None:
          # 策略模式：TEMA_RSI
         # Unpack arrays: (act_pct, offset, tp, sl, stake, reason_input, ...)
@@ -4424,7 +4550,7 @@ reverse_mode: bool = False) -> Dict:
     use_1m_fill = False
     try:
         from streamlit.runtime.scriptrunner import get_script_run_ctx
-        _ctx = get_script_run_ctx()
+        _ctx = get_script_run_ctx(suppress_warning=True)
     except Exception:
         _ctx = None
 
@@ -8647,7 +8773,7 @@ def app():
     micro_ctx = None
     try:
         from streamlit.runtime.scriptrunner import get_script_run_ctx
-        _ctx = get_script_run_ctx()
+        _ctx = get_script_run_ctx(suppress_warning=True)
     except Exception:
         _ctx = None
 

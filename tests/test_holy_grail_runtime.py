@@ -1,8 +1,10 @@
 import importlib
+import json
 import subprocess
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 
@@ -12,6 +14,7 @@ if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
 import sheep_runtime_paths as paths
+import sheep_holy_grail_runtime as holy_runtime_mod
 from sheep_holy_grail_runtime import HolyGrailRuntime, run_holy_grail_build
 
 
@@ -131,6 +134,134 @@ def test_kline_loader_supports_exact_and_resample(monkeypatch, tmp_path):
     missing = runtime.load_kline_data("SOL_USDT", 240)
     assert missing is None
     assert any("missing kline" in msg.lower() for msg in runtime._warning_messages)
+
+
+def test_fetch_factor_pool_data_supports_token_and_pagination(monkeypatch):
+    calls = {"get_pages": [], "post_calls": 0}
+
+    class _Resp:
+        def __init__(self, status_code=200, body=None):
+            self.status_code = status_code
+            self._body = body or {}
+            self.text = json.dumps(self._body, ensure_ascii=False)
+
+        def json(self):
+            return self._body
+
+    def _fake_get(url, params=None, headers=None, verify=None, timeout=None):
+        if params is None:
+            return _Resp(200, {"ok": True})
+        calls["get_pages"].append(int((params or {}).get("page") or 0))
+        assert headers == {"Authorization": "Bearer static-token", "Content-Type": "application/json"}
+        page = int((params or {}).get("page") or 1)
+        if page == 1:
+            return _Resp(
+                200,
+                {
+                    "items": [{"strategy_id": 1}, {"strategy_id": 2}],
+                    "total": 3,
+                    "has_next": True,
+                },
+            )
+        return _Resp(
+            200,
+            {
+                "items": [{"strategy_id": 3}],
+                "total": 3,
+                "has_next": False,
+            },
+        )
+
+    def _unexpected_post(*args, **kwargs):
+        calls["post_calls"] += 1
+        raise AssertionError("token fetch should not need password login")
+
+    monkeypatch.setattr(holy_runtime_mod.requests, "get", _fake_get)
+    monkeypatch.setattr(holy_runtime_mod.requests, "post", _unexpected_post)
+
+    runtime = HolyGrailRuntime(
+        bt_module=object(),
+        log=lambda _msg: None,
+        factor_pool_url="https://example.com",
+        factor_pool_token="static-token",
+    )
+    strategies, api_base = runtime.fetch_factor_pool_data()
+
+    assert api_base == "https://example.com/sheep123"
+    assert [int(item["strategy_id"]) for item in strategies] == [1, 2, 3]
+    assert calls["get_pages"] == [1, 2]
+    assert calls["post_calls"] == 0
+
+
+def test_flatten_strategies_prefers_active_strategy_payload_and_direction():
+    runtime = HolyGrailRuntime(bt_module=object(), log=lambda _msg: None)
+    df = runtime.flatten_strategies_to_dataframe(
+        [
+            {
+                "strategy_id": 99,
+                "symbol": "BTC_USDT",
+                "timeframe_min": 240,
+                "pool_name": "primary",
+                "score": 8.2,
+                "direction": "short",
+                "params": {
+                    "family": "TEMA_RSI",
+                    "tp": 0.011,
+                    "sl": 0.022,
+                    "max_hold": 55,
+                    "family_params": {"fast_len": 9, "slow_len": 30},
+                },
+                "metrics": {"sharpe": 1.7, "trades": 42},
+                "progress": {
+                    "checkpoint_candidates": [
+                        {
+                            "score": 99.0,
+                            "params": {"family": "WRONG_FAMILY", "family_params": {"fast_len": 1}},
+                            "metrics": {"sharpe": 9.9},
+                        }
+                    ]
+                },
+            }
+        ]
+    )
+
+    assert len(df) == 1
+    row = df.iloc[0].to_dict()
+    assert row["family"] == "TEMA_RSI"
+    assert bool(row["param_reverse_mode"]) is True
+    assert float(row["metric_sharpe"]) == 1.7
+    assert int(row["param_max_hold"]) == 55
+    assert int(row["param_fast_len"]) == 9
+
+
+def test_tema_rsi_python_fallback_produces_trades():
+    import backtest_runtime_core as runtime_core
+
+    result = runtime_core._simulate_tema_rsi_py(
+        np.array([99.0, 100.0, 100.5, 101.0, 102.0], dtype=np.float64),
+        np.array([99.5, 102.5, 101.0, 102.0, 102.5], dtype=np.float64),
+        np.array([98.5, 99.8, 100.0, 100.5, 101.5], dtype=np.float64),
+        np.array([99.2, 101.8, 100.8, 101.5, 102.2], dtype=np.float64),
+        np.array([True, False, False, False, False], dtype=bool),
+        np.array([0.01, 0.01, 0.01, 0.01, 0.01], dtype=np.float64),
+        np.array([0.2, 0.2, 0.2, 0.2, 0.2], dtype=np.float64),
+        np.array([0.02, 0.02, 0.02, 0.02, 0.02], dtype=np.float64),
+        np.array([0.05, 0.05, 0.05, 0.05, 0.05], dtype=np.float64),
+        np.array([1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float64),
+        np.array([2, 0, 0, 0, 0], dtype=np.int8),
+        0.0,
+        10,
+        0.0,
+    )
+
+    perbar, equity, e_idx, x_idx, e_px, x_px, tr_ret, bars_held, reasons, entry_reasons = result
+    assert len(e_idx) == 1
+    assert int(e_idx[0]) == 1
+    assert int(x_idx[0]) == 1
+    assert float(tr_ret[0]) > 0.0
+    assert int(reasons[0]) in {2, 3}
+    assert int(entry_reasons[0]) == 2
+    assert float(equity[-1]) > 1.0
 
 
 class _DummyBT:

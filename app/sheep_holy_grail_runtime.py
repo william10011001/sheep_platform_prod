@@ -60,6 +60,7 @@ class HolyGrailRuntime:
         bt_module: Any,
         log: Optional[Callable[[str], None]] = None,
         factor_pool_url: Optional[str] = None,
+        factor_pool_token: Optional[str] = None,
         factor_pool_user: Optional[str] = None,
         factor_pool_pass: Optional[str] = None,
         years: int = 3,
@@ -67,6 +68,7 @@ class HolyGrailRuntime:
         self.bt = bt_module
         self.log = log or (lambda _msg: None)
         self.factor_pool_url = str(factor_pool_url or "").strip()
+        self.factor_pool_token = str(factor_pool_token or "").strip()
         self.factor_pool_user = str(factor_pool_user or "").strip()
         self.factor_pool_pass = str(factor_pool_pass or "").strip()
         self.years = int(years)
@@ -84,11 +86,12 @@ class HolyGrailRuntime:
         self._warning_messages.append(message)
         self.log(message)
 
-    def _factor_pool_creds(self) -> Tuple[str, str, str]:
+    def _factor_pool_creds(self) -> Tuple[str, str, str, str]:
         host = self.factor_pool_url or str(os.environ.get("SHEEP_FACTOR_POOL_URL", "https://sheep123.com")).strip()
+        token = self.factor_pool_token or str(os.environ.get("SHEEP_FACTOR_POOL_TOKEN", "")).strip()
         user = self.factor_pool_user or str(os.environ.get("SHEEP_FACTOR_POOL_USER", "")).strip()
         password = self.factor_pool_pass or str(os.environ.get("SHEEP_FACTOR_POOL_PASS", "")).strip()
-        return host, user, password
+        return host, token, user, password
 
     @staticmethod
     def _normalize_scalar(value: Any) -> Any:
@@ -111,14 +114,11 @@ class HolyGrailRuntime:
                 continue
         return host_url
 
-    def fetch_factor_pool_data(self) -> Tuple[List[Dict[str, Any]], str]:
-        host, user, password = self._factor_pool_creds()
+    def _issue_factor_pool_token(self, api_base: str, user: str, password: str) -> str:
         if not user or not password:
             raise RuntimeError(
-                "Missing factor pool credentials. Set SHEEP_FACTOR_POOL_USER and SHEEP_FACTOR_POOL_PASS."
+                "Missing factor pool credentials. Set SHEEP_FACTOR_POOL_TOKEN or SHEEP_FACTOR_POOL_USER and SHEEP_FACTOR_POOL_PASS."
             )
-
-        api_base = self.detect_api_base(host)
         login_url = f"{api_base}/token"
         payload = {"username": user, "password": password, "name": "compute"}
         resp = requests.post(login_url, json=payload, verify=False, timeout=15)
@@ -127,16 +127,66 @@ class HolyGrailRuntime:
         token = str((resp.json() or {}).get("token") or "").strip()
         if not token:
             raise RuntimeError("factor-pool login succeeded but token was empty")
+        return token
 
+    @staticmethod
+    def _factor_pool_headers(token: str) -> Dict[str, str]:
+        return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    def _fetch_factor_pool_pages(self, api_base: str, token: str) -> List[Dict[str, Any]]:
         strategies_url = f"{api_base}/admin/strategies"
-        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-        resp = requests.get(strategies_url, headers=headers, verify=False, timeout=60)
-        if resp.status_code != 200:
-            raise RuntimeError(f"factor-pool fetch failed ({resp.status_code}): {resp.text}")
+        collected: List[Dict[str, Any]] = []
+        page = 1
+        page_size = 200
+        while True:
+            resp = requests.get(
+                strategies_url,
+                params={"page": page, "page_size": page_size},
+                headers=self._factor_pool_headers(token),
+                verify=False,
+                timeout=60,
+            )
+            if resp.status_code != 200:
+                raise RuntimeError(f"factor-pool fetch failed ({resp.status_code}): {resp.text}")
+            body = resp.json() or {}
+            batch = list(body.get("items") or body.get("strategies") or [])
+            if not batch:
+                break
+            collected.extend(batch)
+            total = body.get("total")
+            has_next = bool(body.get("has_next"))
+            if has_next:
+                page += 1
+                continue
+            if total not in (None, "") and len(collected) < int(total) and len(batch) >= page_size:
+                page += 1
+                continue
+            break
+        return collected
 
-        body = resp.json() or {}
-        strategies = list(body.get("strategies") or [])
-        return strategies, api_base
+    def fetch_factor_pool_data(self) -> Tuple[List[Dict[str, Any]], str]:
+        host, token, user, password = self._factor_pool_creds()
+        api_base = self.detect_api_base(host)
+        attempts: List[str] = []
+
+        if token:
+            try:
+                return self._fetch_factor_pool_pages(api_base, token), api_base
+            except Exception as exc:
+                attempts.append(str(exc))
+                self.warn_once(
+                    "factor-pool-token-fetch-failed",
+                    f"[HolyGrail] factor pool token fetch failed, retrying with password auth: {exc}",
+                )
+                if not user or not password:
+                    raise
+
+        login_token = self._issue_factor_pool_token(api_base, user, password)
+        try:
+            return self._fetch_factor_pool_pages(api_base, login_token), api_base
+        except Exception as exc:
+            attempts.append(str(exc))
+            raise RuntimeError(" | ".join(attempts))
 
     def flatten_strategies_to_dataframe(self, strategies: Iterable[Dict[str, Any]]) -> pd.DataFrame:
         rows: List[Dict[str, Any]] = []
@@ -147,6 +197,42 @@ class HolyGrailRuntime:
                 "timeframe_min": strat.get("timeframe_min"),
                 "pool_name": strat.get("pool_name"),
             }
+
+            params = dict(strat.get("params") or {})
+            if not params and "params_json" in strat:
+                try:
+                    params = json.loads(str(strat.get("params_json") or "{}"))
+                except Exception:
+                    params = {}
+
+            metrics = dict(strat.get("metrics") or {})
+            if not metrics and "metrics_json" in strat:
+                try:
+                    metrics = json.loads(str(strat.get("metrics_json") or "{}"))
+                except Exception:
+                    metrics = {}
+
+            family_params = dict(params.get("family_params") or {})
+            direction = normalize_direction(
+                strat.get("direction") or params.get("direction") or family_params.get("direction"),
+                reverse=params.get("reverse", family_params.get("reverse")),
+                default="long",
+            )
+            family = str(params.get("family") or strat.get("family") or "").strip()
+            if family:
+                row = dict(base_info)
+                row["cand_score"] = float(strat.get("score") or metrics.get("sharpe") or 0.0)
+                row["family"] = family
+                row["param_tp"] = float(params.get("tp") or 0.0)
+                row["param_sl"] = float(params.get("sl") or 0.0)
+                row["param_max_hold"] = int(params.get("max_hold") or 0)
+                row["param_reverse_mode"] = direction == "short"
+                for key, value in family_params.items():
+                    row[f"param_{key}"] = value
+                for key, value in metrics.items():
+                    row[f"metric_{key}"] = value
+                rows.append(row)
+                continue
 
             progress = strat.get("progress")
             if not progress and "progress_json" in strat:
@@ -175,6 +261,12 @@ class HolyGrailRuntime:
                 row["param_tp"] = params.get("tp", 0)
                 row["param_sl"] = params.get("sl", 0)
                 row["param_max_hold"] = params.get("max_hold", 0)
+                cand_direction = normalize_direction(
+                    params.get("direction"),
+                    reverse=params.get("reverse"),
+                    default=strat.get("direction") or "long",
+                )
+                row["param_reverse_mode"] = cand_direction == "short"
                 for key, value in dict(params.get("family_params") or {}).items():
                     row[f"param_{key}"] = value
                 for key, value in dict(cand.get("metrics") or {}).items():
@@ -904,6 +996,7 @@ def run_holy_grail_build(
     bt_module: Any,
     log: Optional[Callable[[str], None]] = None,
     factor_pool_url: Optional[str] = None,
+    factor_pool_token: Optional[str] = None,
     factor_pool_user: Optional[str] = None,
     factor_pool_pass: Optional[str] = None,
     years: int = 3,
@@ -917,6 +1010,7 @@ def run_holy_grail_build(
         bt_module=bt_module,
         log=log,
         factor_pool_url=factor_pool_url,
+        factor_pool_token=factor_pool_token,
         factor_pool_user=factor_pool_user,
         factor_pool_pass=factor_pool_pass,
         years=years,
