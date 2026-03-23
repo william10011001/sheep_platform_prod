@@ -937,7 +937,7 @@ class HolyGrailRuntime:
                 selected_portfolio.append(final_row)
                 multi_payload.append(
                     {
-                        "strategy_id": curve_key,
+                        "strategy_id": int(row_data.get("strategy_id") or 0),
                         "family": str(row_data.get("family") or ""),
                         "family_params": family_params,
                         "direction": direction,
@@ -948,6 +948,8 @@ class HolyGrailRuntime:
                         "symbol": normalize_symbol(str(row_data.get("symbol") or "")).replace("_", ""),
                         "interval": interval,
                         "sharpe": float(perf.get("sharpe") or 0.0),
+                        "total_return_pct": float(perf.get("total_return_pct") or 0.0),
+                        "max_drawdown_pct": float(perf.get("max_drawdown_pct") or 0.0),
                         "avg_pairwise_corr_to_selected": round(float(candidate.get("avg_pairwise_corr_to_selected") or 0.0), 6),
                         "max_pairwise_corr_to_selected": round(float(candidate.get("max_pairwise_corr_to_selected") or 0.0), 6),
                         "duplicate_group_id": str(candidate.get("duplicate_group_id") or ""),

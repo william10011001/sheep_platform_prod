@@ -387,9 +387,12 @@ def test_shared_runtime_builds_portfolio(monkeypatch, tmp_path):
     result = run_holy_grail_build(bt_module=_DummyBT(), log=lambda _msg: None, base_stake_pct=50.0)
     assert result.ok
     assert result.selected_count == 1
+    assert result.multi_payload[0]["strategy_id"] == 1
     assert result.multi_payload[0]["interval"] == "1h"
     assert result.multi_payload[0]["stake_pct"] == 50.0
     assert result.multi_payload[0]["direction"] == "long"
+    assert result.multi_payload[0]["total_return_pct"] == 5.0
+    assert result.multi_payload[0]["max_drawdown_pct"] == 3.0
     assert Path(result.report_paths["summary_report"]).exists()
 
 

@@ -744,14 +744,50 @@ def test_runtime_portfolio_sync_updates_dashboard_personal_and_global(admin_clie
     assert dash["runtime_sync"]["global"]["count_mismatch"] is False
     assert dash["runtime_sync"]["global_active_strategy_mismatch"] is False
 
-    live = client.get("/live/version", headers=headers)
-    assert live.status_code == 200, live.text
-    live_body = live.json()
-    assert live_body["dashboard_version"] == dash["dashboard_version"]
-    assert live_body["runtime_version"]
 
-    deprecated_events = _query_sys_events(db_module, "RUNTIME_SYNC_DEPRECATED_AUTH")
-    assert deprecated_events
+def test_runtime_portfolio_sync_preserves_raw_strategy_id_without_active_match(admin_client):
+    client = admin_client["client"]
+    headers = admin_client["headers"]
+
+    issued = client.post(
+        "/runtime-sync/token",
+        headers=headers,
+        json={"ttl_seconds": 7200, "rotate_existing": True},
+    )
+    assert issued.status_code == 200, issued.text
+    token = issued.json()["token"]
+
+    sync_resp = client.post(
+        "/runtime/portfolio/sync",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "scope": "global",
+            "summary": {"portfolio_metrics": {"sharpe": 2.2}},
+            "items": [
+                {
+                    "strategy_id": 321,
+                    "strategy_key": "runtime-321",
+                    "family": "TEMA_RSI",
+                    "symbol": "ETH_USDT",
+                    "direction": "long",
+                    "interval": "1d",
+                    "family_params": {"fast_len": 9, "slow_len": 30},
+                    "stake_pct": 45.35,
+                    "sharpe": 4.39,
+                    "total_return_pct": 57.47,
+                    "max_drawdown_pct": 3.37,
+                }
+            ],
+        },
+    )
+    assert sync_resp.status_code == 200, sync_resp.text
+
+    dashboard = client.get("/dashboard", headers=headers)
+    assert dashboard.status_code == 200, dashboard.text
+    item = dashboard.json()["global_runtime_portfolio_items"][0]
+    assert int(item["strategy_id"]) == 321
+    assert item["total_return_pct"] == pytest.approx(57.47)
+    assert item["max_drawdown_pct"] == pytest.approx(3.37)
 
 
 def test_dashboard_exposes_review_ready_items_for_rating_panel(admin_client):

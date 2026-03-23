@@ -531,6 +531,13 @@ def _as_float(value: Any, default: float = 0.0) -> float:
         return float(default)
 
 
+def _as_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
 def _enrich_runtime_items(items: List[Dict[str, Any]], *, strategy_lookup: Optional[Dict[Tuple[str, str, str, str, str], Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     lookup = strategy_lookup or {}
     enriched: List[Dict[str, Any]] = []
@@ -542,7 +549,7 @@ def _enrich_runtime_items(items: List[Dict[str, Any]], *, strategy_lookup: Optio
         item["owner_username"] = str(match.get("username") or "")
         item["owner_nickname"] = str(match.get("display_name") or match.get("nickname") or match.get("username") or "")
         item["owner_avatar_url"] = str(match.get("avatar_url") or "")
-        item["strategy_id"] = int(match.get("strategy_id") or item.get("strategy_id") or 0)
+        item["strategy_id"] = _as_int(match.get("strategy_id"), _as_int(item.get("strategy_id"), 0))
         item["external_key"] = str(match.get("external_key") or item.get("strategy_key") or "")
         item["total_return_pct"] = _as_float(item.get("total_return_pct"), _as_float(metrics.get("total_return_pct"), 0.0))
         item["max_drawdown_pct"] = _as_float(item.get("max_drawdown_pct"), _as_float(metrics.get("max_drawdown_pct"), 0.0))
@@ -605,7 +612,7 @@ def _enrich_runtime_position_items(
         item["owner_username"] = str(match.get("username") or "")
         item["owner_nickname"] = str(match.get("display_name") or match.get("nickname") or match.get("username") or "")
         item["owner_avatar_url"] = str(match.get("avatar_url") or "")
-        item["strategy_id"] = int(match.get("strategy_id") or 0)
+        item["strategy_id"] = _as_int(match.get("strategy_id"), 0)
         item["external_key"] = str(match.get("external_key") or item.get("strategy_key") or "")
         item["family"] = str(item.get("family") or match.get("family") or "")
         item["symbol"] = str(item.get("symbol") or match.get("symbol") or "").upper()

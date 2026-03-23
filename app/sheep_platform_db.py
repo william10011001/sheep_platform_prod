@@ -398,6 +398,10 @@ def _runtime_snapshot_row(row: Any) -> Dict[str, Any]:
 def _runtime_item_row(row: Any) -> Dict[str, Any]:
     data = dict(row or {})
     data["direction"] = normalize_direction(data.get("direction"), default="long")
+    try:
+        data["strategy_id"] = int(data.get("strategy_id") or 0)
+    except Exception:
+        data["strategy_id"] = 0
     data["stake_pct"] = float(data.get("stake_pct") or 0.0)
     data["sharpe"] = float(data.get("sharpe") or 0.0)
     data["total_return_pct"] = float(data.get("total_return_pct") or 0.0)
@@ -1087,6 +1091,7 @@ def init_db() -> None:
                     snapshot_id BIGINT NOT NULL,
                     strategy_key TEXT NOT NULL DEFAULT '',
                     rank INTEGER NOT NULL DEFAULT 0,
+                    strategy_id BIGINT,
                     family TEXT NOT NULL DEFAULT '',
                     symbol TEXT NOT NULL DEFAULT '',
                     direction TEXT NOT NULL DEFAULT 'long',
@@ -1186,6 +1191,7 @@ def init_db() -> None:
                 "CREATE INDEX IF NOT EXISTS idx_strategies_user_status_created ON strategies(user_id, status, created_at)",
                 "CREATE INDEX IF NOT EXISTS idx_weekly_checks_checked_strategy ON weekly_checks(checked_at, strategy_id)",
                 "CREATE INDEX IF NOT EXISTS idx_payouts_created_user ON payouts(created_at, user_id)",
+                "ALTER TABLE runtime_portfolio_items ADD COLUMN IF NOT EXISTS strategy_id BIGINT",
                 "ALTER TABLE runtime_portfolio_items ADD COLUMN IF NOT EXISTS total_return_pct DOUBLE PRECISION NOT NULL DEFAULT 0.0",
                 "ALTER TABLE runtime_portfolio_items ADD COLUMN IF NOT EXISTS max_drawdown_pct DOUBLE PRECISION NOT NULL DEFAULT 0.0",
             ]
@@ -1389,6 +1395,7 @@ def init_db() -> None:
                     snapshot_id INTEGER NOT NULL,
                     strategy_key TEXT NOT NULL DEFAULT '',
                     rank INTEGER NOT NULL DEFAULT 0,
+                    strategy_id INTEGER,
                     family TEXT NOT NULL DEFAULT '',
                     symbol TEXT NOT NULL DEFAULT '',
                     direction TEXT NOT NULL DEFAULT 'long',
@@ -1484,6 +1491,7 @@ def init_db() -> None:
                 "CREATE INDEX IF NOT EXISTS idx_mining_tasks_user_completed_review_status ON mining_tasks(user_id, COALESCE(json_extract(progress_json, '$.review_status'), json_extract(progress_json, '$.oos_status'), '')) WHERE status = 'completed'",
                 "CREATE INDEX IF NOT EXISTS idx_mining_tasks_activity_status_user ON mining_tasks(COALESCE(last_heartbeat, updated_at, created_at), status, user_id)",
                 "CREATE INDEX IF NOT EXISTS idx_submissions_status_user ON submissions(status, user_id)",
+                "ALTER TABLE runtime_portfolio_items ADD COLUMN strategy_id INTEGER",
                 "ALTER TABLE runtime_portfolio_items ADD COLUMN total_return_pct REAL NOT NULL DEFAULT 0.0",
                 "ALTER TABLE runtime_portfolio_items ADD COLUMN max_drawdown_pct REAL NOT NULL DEFAULT 0.0",
             ]
@@ -3425,6 +3433,10 @@ def save_runtime_portfolio_snapshot(
             default_symbol=str((raw_item or {}).get("symbol") or ""),
             default_interval=str((raw_item or {}).get("interval") or ""),
         )
+        try:
+            strategy_id = int(raw_item.get("strategy_id") or entry.get("strategy_id") or 0)
+        except Exception:
+            strategy_id = 0
         params = dict(entry.get("family_params") or {})
         params["direction"] = entry["direction"]
         corr_stats = {
@@ -3436,6 +3448,7 @@ def save_runtime_portfolio_snapshot(
             {
                 "rank": int(raw_item.get("rank") or raw_item.get("selected_rank") or idx),
                 "strategy_key": str(raw_item.get("strategy_key") or raw_item.get("name") or f"{entry.get('family')}_{idx}"),
+                "strategy_id": strategy_id,
                 "family": str(entry.get("family") or "").strip(),
                 "symbol": str(entry.get("symbol") or "").strip().upper(),
                 "direction": str(entry.get("direction") or "long"),
@@ -3507,13 +3520,14 @@ def save_runtime_portfolio_snapshot(
         for item in normalized_items:
             conn.execute(
                 """
-                INSERT INTO runtime_portfolio_items (snapshot_id, rank, strategy_key, family, symbol, direction, interval, stake_pct, sharpe, total_return_pct, max_drawdown_pct, avg_corr, max_corr, params_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO runtime_portfolio_items (snapshot_id, rank, strategy_key, strategy_id, family, symbol, direction, interval, stake_pct, sharpe, total_return_pct, max_drawdown_pct, avg_corr, max_corr, params_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     snapshot_id,
                     int(item["rank"]),
                     item["strategy_key"],
+                    int(item.get("strategy_id") or 0),
                     item["family"],
                     item["symbol"],
                     item["direction"],
@@ -4469,6 +4483,15 @@ def set_default_avatar_url(avatar_url: str) -> str:
 def get_default_avatar_url() -> str:
     return _default_avatar_url_from_conn()
 
+
+def _leaderboard_task_scan_limit() -> int:
+    try:
+        value = int(os.environ.get("SHEEP_LEADERBOARD_TASK_SCAN_LIMIT", "4000") or "4000")
+    except Exception:
+        value = 4000
+    return max(500, min(20000, value))
+
+
 def _leaderboard_python_fallback(conn: Any, cutoff_iso: str, window_end_iso: str) -> Dict[str, List[Dict[str, Any]]]:
     def _parse_iso(value: Any) -> Optional[datetime]:
         text = str(value or "").strip()
@@ -4480,75 +4503,35 @@ def _leaderboard_python_fallback(conn: Any, cutoff_iso: str, window_end_iso: str
             return None
 
     default_avatar_url = _default_avatar_url_from_conn(conn)
-    db_kind = getattr(conn, "kind", _db_kind())
-    if db_kind == "postgres":
-        query = """
-            SELECT t.id, t.created_at,
-                   COALESCE(t.last_heartbeat, t.updated_at, t.created_at) as activity_at,
-                   u.id as user_id, u.username, u.nickname, u.avatar_url,
-                   COALESCE(
-                       NULLIF((t.progress_json::jsonb->>'combos_done'), '')::double precision,
-                       NULLIF((t.progress_json::jsonb->>'done'), '')::double precision,
-                       NULLIF((t.progress_json::jsonb->>'combos_total'), '')::double precision,
-                       NULLIF((t.progress_json::jsonb->>'total'), '')::double precision,
-                       0.0
-                   ) as combos_done,
-                   COALESCE(
-                       NULLIF((t.progress_json::jsonb->>'elapsed_s'), '')::double precision,
-                       NULLIF((t.progress_json::jsonb->>'elapsed'), '')::double precision,
-                       0.0
-                   ) as elapsed_s
+    query = """
+        SELECT recent.id, recent.progress_json, recent.created_at, recent.activity_at,
+               u.id as user_id, u.username, u.nickname, u.avatar_url
+        FROM (
+            SELECT t.id, t.user_id, t.progress_json, t.created_at,
+                   COALESCE(t.last_heartbeat, t.updated_at, t.created_at) as activity_at
             FROM mining_tasks t
-            JOIN users u ON t.user_id = u.id
             WHERE COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
               AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <= ?
               AND t.status IN ('running', 'completed')
-            ORDER BY activity_at DESC, t.id DESC
-            LIMIT 8000
-        """
-    else:
-        query = """
-            SELECT t.id, t.progress_json, t.created_at,
-                   COALESCE(t.last_heartbeat, t.updated_at, t.created_at) as activity_at,
-                   u.id as user_id, u.username, u.nickname, u.avatar_url,
-                   COALESCE(
-                       CAST(json_extract(t.progress_json, '$.combos_done') AS REAL),
-                       CAST(json_extract(t.progress_json, '$.done') AS REAL),
-                       CAST(json_extract(t.progress_json, '$.combos_total') AS REAL),
-                       CAST(json_extract(t.progress_json, '$.total') AS REAL),
-                       0.0
-                   ) as combos_done,
-                   COALESCE(
-                       CAST(json_extract(t.progress_json, '$.elapsed_s') AS REAL),
-                       CAST(json_extract(t.progress_json, '$.elapsed') AS REAL),
-                       0.0
-                   ) as elapsed_s
-            FROM mining_tasks t
-            JOIN users u ON t.user_id = u.id
-            WHERE COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
-              AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <= ?
-              AND t.status IN ('running', 'completed')
-            ORDER BY activity_at DESC, t.id DESC
-            LIMIT 8000
-        """
-    rows = conn.execute(query, (cutoff_iso, window_end_iso)).fetchall()
+            ORDER BY COALESCE(t.last_heartbeat, t.updated_at, t.created_at) DESC, t.id DESC
+            LIMIT ?
+        ) recent
+        JOIN users u ON recent.user_id = u.id
+        ORDER BY recent.activity_at DESC, recent.id DESC
+    """
+    rows = conn.execute(query, (cutoff_iso, window_end_iso, int(_leaderboard_task_scan_limit()))).fetchall()
     combos_map: Dict[int, Dict[str, Any]] = {}
     time_map: Dict[int, Dict[str, Any]] = {}
     for row in rows:
         entry = dict(row or {})
         user_bits = _decorate_user_row(entry, default_avatar_url=default_avatar_url)
+        progress = parse_json_object(entry.get("progress_json"))
         try:
-            combos_done = max(0.0, float(entry.get("combos_done") or 0.0))
+            combos_done = max(0.0, float(progress.get("combos_done") or progress.get("done") or progress.get("combos_total") or progress.get("total") or 0.0))
         except Exception:
             combos_done = 0.0
-        if combos_done <= 0:
-            progress = parse_json_object(entry.get("progress_json"))
-            try:
-                combos_done = max(0.0, float(progress.get("combos_done") or progress.get("done") or progress.get("combos_total") or progress.get("total") or 0.0))
-            except Exception:
-                combos_done = 0.0
         try:
-            elapsed_s = max(0.0, float(entry.get("elapsed_s") or 0.0))
+            elapsed_s = max(0.0, float(progress.get("elapsed_s") or progress.get("elapsed") or 0.0))
         except Exception:
             elapsed_s = 0.0
         if elapsed_s <= 0:
@@ -4618,37 +4601,14 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
 
         db_kind = _db_kind()
         if db_kind == "postgres":
-            sql_combos = """
-                SELECT u.username, u.nickname, u.avatar_url, COUNT(t.id) as task_count,
-                       SUM(COALESCE((t.progress_json::jsonb->>'combos_done')::bigint, 0)) as total_done
-                FROM mining_tasks t
-                JOIN users u ON t.user_id = u.id
-                WHERE COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
-                  AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <= ?
-                  AND t.status IN ('running', 'completed')
-                GROUP BY u.id, u.username, u.nickname, u.avatar_url
-                ORDER BY total_done DESC
-                LIMIT 300
-            """
-            sql_time = """
-                WITH task_elapsed AS (
-                    SELECT
-                        t.id,
-                        t.user_id,
-                        GREATEST(COALESCE(NULLIF((t.progress_json::jsonb->>'elapsed_s'), '')::double precision, 0.0), 0.0) as elapsed_s
-                    FROM mining_tasks t
-                    WHERE COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
-                      AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <= ?
-                        AND t.status IN ('running', 'completed')
-                )
-                SELECT u.username, u.nickname, u.avatar_url,
-                       SUM(te.elapsed_s) as total_seconds
-                FROM task_elapsed te
-                JOIN users u ON te.user_id = u.id
-                GROUP BY u.id, u.username, u.nickname, u.avatar_url
-                ORDER BY total_seconds DESC
-                LIMIT 300
-            """
+            try:
+                recent_rows = _leaderboard_python_fallback(conn, cutoff_iso, window_end_iso)
+                results["combos"] = recent_rows.get("combos") or []
+                results["time"] = recent_rows.get("time") or []
+            except Exception as e:
+                print(f"[DB WARN] Leaderboard recent-task query failed: {e}")
+                results["combos"] = []
+                results["time"] = []
         else:
             sql_combos = """
                 SELECT u.username, u.nickname, u.avatar_url, COUNT(t.id) as task_count,
@@ -4682,17 +4642,16 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
                 ORDER BY total_seconds DESC
                 LIMIT 300
             """
-
-        try:
-            rows = conn.execute(sql_combos, (cutoff_iso, window_end_iso)).fetchall()
-            results["combos"] = [
-                _decorate_user_row(dict(r), default_avatar_url=default_avatar_url)
-                for r in rows
-                if r["total_done"] is not None and float(r["total_done"]) > 0
-            ]
-        except Exception as e:
-            print(f"[DB WARN] Leaderboard combos query failed: {e}")
-            results["combos"] = []
+            try:
+                rows = conn.execute(sql_combos, (cutoff_iso, window_end_iso)).fetchall()
+                results["combos"] = [
+                    _decorate_user_row(dict(r), default_avatar_url=default_avatar_url)
+                    for r in rows
+                    if r["total_done"] is not None and float(r["total_done"]) > 0
+                ]
+            except Exception as e:
+                print(f"[DB WARN] Leaderboard combos query failed: {e}")
+                results["combos"] = []
 
         sql_score = """
             SELECT u.username, u.nickname, u.avatar_url, MAX(c.score) as max_score
@@ -4713,26 +4672,27 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
         except Exception:
             results["score"] = []
 
-        try:
-            rows = conn.execute(sql_time, (cutoff_iso, window_end_iso)).fetchall()
-            results["time"] = [
-                _decorate_user_row(dict(r), default_avatar_url=default_avatar_url)
-                for r in rows
-                if r["total_seconds"] is not None and float(r["total_seconds"]) > 0
-            ]
-        except Exception as e:
-            print(f"[DB WARN] Leaderboard time query failed: {e}")
-            results["time"] = []
-
-        if not results["combos"] or not results["time"]:
+        if db_kind != "postgres":
             try:
-                fallback = _leaderboard_python_fallback(conn, cutoff_iso, window_end_iso)
-                if not results["combos"]:
-                    results["combos"] = fallback.get("combos") or []
-                if not results["time"]:
-                    results["time"] = fallback.get("time") or []
+                rows = conn.execute(sql_time, (cutoff_iso, window_end_iso)).fetchall()
+                results["time"] = [
+                    _decorate_user_row(dict(r), default_avatar_url=default_avatar_url)
+                    for r in rows
+                    if r["total_seconds"] is not None and float(r["total_seconds"]) > 0
+                ]
             except Exception as e:
-                print(f"[DB WARN] Leaderboard python fallback failed: {e}")
+                print(f"[DB WARN] Leaderboard time query failed: {e}")
+                results["time"] = []
+
+            if not results["combos"] or not results["time"]:
+                try:
+                    fallback = _leaderboard_python_fallback(conn, cutoff_iso, window_end_iso)
+                    if not results["combos"]:
+                        results["combos"] = fallback.get("combos") or []
+                    if not results["time"]:
+                        results["time"] = fallback.get("time") or []
+                except Exception as e:
+                    print(f"[DB WARN] Leaderboard python fallback failed: {e}")
 
         sql_points = """
             SELECT u.username, u.nickname, u.avatar_url, SUM(p.amount_usdt) as total_usdt
