@@ -175,9 +175,16 @@ _register_ip_limiter = RateLimiter(rate_per_minute=0.2, burst=2.0)
 _register_global_limiter = RateLimiter(rate_per_minute=3.0, burst=6.0)
 
 _LIVE_CACHE_TTL_SECONDS = 15.0
+_LIVE_CACHE_TTL_BY_BUCKET: Dict[str, float] = {
+    "dashboard": 15.0,
+    "leaderboard": 60.0,
+}
 _LIVE_CACHE_MAX_BUCKET_SIZE: Dict[str, int] = {
     "dashboard": 128,
     "leaderboard": 32,
+}
+_LIVE_INVALIDATE_THROTTLE_SECONDS: Dict[str, float] = {
+    "leaderboard": 45.0,
 }
 _live_versions: Dict[str, str] = {
     "dashboard": "",
@@ -191,6 +198,11 @@ _live_cache: Dict[str, Dict[str, Dict[str, Any]]] = {
 _live_last_nonempty: Dict[str, Dict[str, Dict[str, Any]]] = {
     "dashboard": {},
     "leaderboard": {},
+}
+_live_last_invalidated_at: Dict[str, float] = {
+    "dashboard": 0.0,
+    "leaderboard": 0.0,
+    "runtime": 0.0,
 }
 _http_error_telemetry_cache: Dict[str, float] = {}
 _runtime_lookup_cache: Dict[str, Any] = {"ts": 0.0, "lookup": {}, "key": ""}
@@ -246,7 +258,8 @@ def _cached_live_payload(bucket: str, key: str, loader) -> Dict[str, Any]:
     now = time.time()
     cache_bucket = _live_cache.setdefault(bucket, {})
     cached = cache_bucket.get(key) or {}
-    if cached and now - float(cached.get("ts") or 0.0) < _LIVE_CACHE_TTL_SECONDS:
+    ttl_s = float(_LIVE_CACHE_TTL_BY_BUCKET.get(bucket) or _LIVE_CACHE_TTL_SECONDS)
+    if cached and now - float(cached.get("ts") or 0.0) < ttl_s:
         return dict(cached.get("value") or {})
     value = dict(loader() or {})
     cache_bucket[key] = {"ts": now, "value": value}
@@ -271,20 +284,27 @@ def _remember_live_snapshot(bucket: str, key: str, value: Dict[str, Any]) -> Non
 
 def _invalidate_live_state(*channels: str) -> None:
     now_iso = _utc_iso()
+    now_ts = time.time()
     requested = {str(channel or "").strip().lower() for channel in channels if str(channel or "").strip()}
     if not requested:
         requested = {"dashboard", "leaderboard", "runtime"}
     if "dashboard" in requested or "runtime" in requested:
         _live_cache["dashboard"].clear()
         _live_versions["dashboard"] = now_iso
+        _live_last_invalidated_at["dashboard"] = now_ts
         _runtime_lookup_cache["ts"] = 0.0
         _runtime_lookup_cache["lookup"] = {}
         _runtime_lookup_cache["key"] = ""
     if "leaderboard" in requested:
-        _live_cache["leaderboard"].clear()
-        _live_versions["leaderboard"] = now_iso
+        throttle_s = float(_LIVE_INVALIDATE_THROTTLE_SECONDS.get("leaderboard") or 0.0)
+        last = float(_live_last_invalidated_at.get("leaderboard") or 0.0)
+        if throttle_s <= 0.0 or (now_ts - last) >= throttle_s:
+            _live_cache["leaderboard"].clear()
+            _live_versions["leaderboard"] = now_iso
+            _live_last_invalidated_at["leaderboard"] = now_ts
     if "runtime" in requested:
         _live_versions["runtime"] = now_iso
+        _live_last_invalidated_at["runtime"] = now_ts
 
 
 def _leaderboard_has_rows(payload: Dict[str, Any]) -> bool:

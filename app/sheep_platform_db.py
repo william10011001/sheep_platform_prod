@@ -4500,6 +4500,74 @@ def _leaderboard_task_scan_max_rows() -> int:
     return max(_leaderboard_task_scan_limit(), min(200000, value))
 
 
+def _leaderboard_postgres_recent_agg(conn: Any, cutoff_iso: str, window_end_iso: str) -> Dict[str, List[Dict[str, Any]]]:
+    default_avatar_url = _default_avatar_url_from_conn(conn)
+    sql = """
+        WITH recent_tasks AS MATERIALIZED (
+            SELECT
+                t.user_id,
+                GREATEST(
+                    COALESCE(
+                        NULLIF(t.progress_json::jsonb->>'combos_done', '')::double precision,
+                        NULLIF(t.progress_json::jsonb->>'done', '')::double precision,
+                        NULLIF(t.progress_json::jsonb->>'combos_total', '')::double precision,
+                        NULLIF(t.progress_json::jsonb->>'total', '')::double precision,
+                        0.0
+                    ),
+                    0.0
+                ) AS combos_done,
+                GREATEST(
+                    COALESCE(
+                        NULLIF(t.progress_json::jsonb->>'elapsed_s', '')::double precision,
+                        NULLIF(t.progress_json::jsonb->>'elapsed', '')::double precision,
+                        0.0
+                    ),
+                    CASE
+                        WHEN NULLIF(t.created_at, '') IS NULL THEN 0.0
+                        ELSE GREATEST(
+                            0.0,
+                            EXTRACT(
+                                EPOCH FROM (
+                                    COALESCE(
+                                        NULLIF(t.last_heartbeat, ''),
+                                        NULLIF(t.updated_at, ''),
+                                        NULLIF(t.created_at, '')
+                                    )::timestamptz - NULLIF(t.created_at, '')::timestamptz
+                                )
+                            )
+                        )
+                    END
+                ) AS elapsed_s
+            FROM mining_tasks t
+            WHERE COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
+              AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <= ?
+              AND t.status IN ('running', 'completed')
+        )
+        SELECT
+            u.username,
+            u.nickname,
+            u.avatar_url,
+            COUNT(*) FILTER (WHERE recent_tasks.combos_done > 0) AS task_count,
+            SUM(recent_tasks.combos_done) AS total_done,
+            SUM(recent_tasks.elapsed_s) AS total_seconds
+        FROM recent_tasks
+        JOIN users u ON u.id = recent_tasks.user_id
+        GROUP BY u.id, u.username, u.nickname, u.avatar_url
+        HAVING SUM(recent_tasks.combos_done) > 0 OR SUM(recent_tasks.elapsed_s) > 0
+    """
+    rows = conn.execute(sql, (cutoff_iso, window_end_iso)).fetchall()
+    decorated = [_decorate_user_row(dict(row), default_avatar_url=default_avatar_url) for row in rows or []]
+    combos_rows = sorted(
+        [row for row in decorated if float(row.get("total_done") or 0.0) > 0.0],
+        key=lambda item: (-float(item.get("total_done") or 0.0), str(item.get("username") or "")),
+    )[:300]
+    time_rows = sorted(
+        [row for row in decorated if float(row.get("total_seconds") or 0.0) > 0.0],
+        key=lambda item: (-float(item.get("total_seconds") or 0.0), str(item.get("username") or "")),
+    )[:300]
+    return {"combos": combos_rows, "time": time_rows}
+
+
 def _leaderboard_python_fallback(conn: Any, cutoff_iso: str, window_end_iso: str) -> Dict[str, List[Dict[str, Any]]]:
     def _parse_iso(value: Any) -> Optional[datetime]:
         text = str(value or "").strip()
@@ -4648,13 +4716,19 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
         db_kind = _db_kind()
         if db_kind == "postgres":
             try:
-                recent_rows = _leaderboard_python_fallback(conn, cutoff_iso, window_end_iso)
+                recent_rows = _leaderboard_postgres_recent_agg(conn, cutoff_iso, window_end_iso)
                 results["combos"] = recent_rows.get("combos") or []
                 results["time"] = recent_rows.get("time") or []
             except Exception as e:
-                print(f"[DB WARN] Leaderboard recent-task query failed: {e}")
-                results["combos"] = []
-                results["time"] = []
+                print(f"[DB WARN] Leaderboard postgres aggregate failed: {e}")
+                try:
+                    recent_rows = _leaderboard_python_fallback(conn, cutoff_iso, window_end_iso)
+                    results["combos"] = recent_rows.get("combos") or []
+                    results["time"] = recent_rows.get("time") or []
+                except Exception as fallback_error:
+                    print(f"[DB WARN] Leaderboard recent-task query failed: {fallback_error}")
+                    results["combos"] = []
+                    results["time"] = []
         else:
             sql_combos = """
                 SELECT u.username, u.nickname, u.avatar_url, COUNT(t.id) as task_count,

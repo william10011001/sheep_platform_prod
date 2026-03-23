@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -16,6 +17,10 @@ import sheep_worker_client
 
 def _reset_db_module():
     sys.modules.pop("sheep_platform_db", None)
+
+
+def _reset_api_module():
+    sys.modules.pop("sheep_platform_api", None)
 
 
 def _load_live_trader_module():
@@ -686,3 +691,27 @@ def test_leaderboard_task_fallback_scans_multiple_pages(monkeypatch, tmp_path):
     assert "beta" in combos_users
     assert "sheep" in time_users
     assert "beta" in time_users
+
+
+def test_leaderboard_invalidation_is_throttled(monkeypatch):
+    _reset_api_module()
+    import sheep_platform_api as api
+
+    now = 1_000_000.0
+    monkeypatch.setattr(api.time, "time", lambda: now)
+    api._live_cache["leaderboard"] = {
+        "period_hours::720": {"ts": now, "value": {"combos": [{"username": "sheep"}]}}
+    }
+    api._live_versions["leaderboard"] = "old-version"
+    api._live_last_invalidated_at["leaderboard"] = now
+
+    api._invalidate_live_state("leaderboard")
+
+    assert api._live_versions["leaderboard"] == "old-version"
+    assert "period_hours::720" in api._live_cache["leaderboard"]
+
+    now += 60.0
+    api._invalidate_live_state("leaderboard")
+
+    assert api._live_versions["leaderboard"] != "old-version"
+    assert api._live_cache["leaderboard"] == {}
