@@ -3265,6 +3265,10 @@ def create_factor_pool(
 
     normalized_direction = normalize_direction(direction, reverse=parse_json_object(risk_spec).get("reverse_mode"), default="long")
     normalized_risk_spec = _normalize_risk_spec(normalized_direction, risk_spec)
+    normalized_num_partitions = max(1, int(num_partitions or 1))
+    normalized_seed = int(seed or 42) & 0x7FFFFFFF
+    if normalized_seed <= 0:
+        normalized_seed = 42
     conn = _conn()
     try:
         for s, t in targets:
@@ -3292,8 +3296,8 @@ def create_factor_pool(
                         family,
                         json.dumps(grid_spec, ensure_ascii=False),
                         json.dumps(normalized_risk_spec, ensure_ascii=False),
-                        int(num_partitions),
-                        int(seed),
+                        normalized_num_partitions,
+                        normalized_seed,
                         1 if active else 0,
                         _now_iso(),
                     )
@@ -3316,8 +3320,8 @@ def create_factor_pool(
                         family,
                         json.dumps(grid_spec, ensure_ascii=False),
                         json.dumps(normalized_risk_spec, ensure_ascii=False),
-                        int(num_partitions),
-                        int(seed),
+                        normalized_num_partitions,
+                        normalized_seed,
                         1 if active else 0,
                         _now_iso(),
                     )
@@ -3363,6 +3367,10 @@ def update_factor_pool(
     try:
         normalized_direction = normalize_direction(direction, reverse=parse_json_object(risk_spec).get("reverse_mode"), default="long")
         normalized_risk_spec = _normalize_risk_spec(normalized_direction, risk_spec)
+        normalized_num_partitions = max(1, int(num_partitions or 1))
+        normalized_seed = int(seed or 42) & 0x7FFFFFFF
+        if normalized_seed <= 0:
+            normalized_seed = 42
         conn.execute(
             """
             UPDATE factor_pools
@@ -3379,8 +3387,8 @@ def update_factor_pool(
                 family,
                 json.dumps(grid_spec, ensure_ascii=False),
                 json.dumps(normalized_risk_spec, ensure_ascii=False),
-                num_partitions,
-                seed,
+                normalized_num_partitions,
+                normalized_seed,
                 1 if active else 0,
                 pool_id,
             )

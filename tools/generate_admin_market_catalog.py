@@ -116,7 +116,8 @@ def interval_text(timeframe_min: int) -> str:
 
 
 def stable_seed(key: str) -> int:
-    return int(hashlib.sha1(key.encode("utf-8")).hexdigest()[:8], 16)
+    seed = int(hashlib.sha1(key.encode("utf-8")).hexdigest()[:8], 16) & 0x7FFFFFFF
+    return int(seed or 42)
 
 
 def risk_spec_for(profile: SymbolProfile, timeframe_min: int, direction: str, family: str) -> Dict[str, Any]:

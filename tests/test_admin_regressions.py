@@ -1109,6 +1109,43 @@ def test_admin_catalog_import_dry_run_apply_and_upsert(admin_client):
     assert second_body["strategies"]["update"] >= 1
 
 
+def test_admin_catalog_import_clamps_large_seed(admin_client):
+    client = admin_client["client"]
+    headers = admin_client["headers"]
+
+    payload = {
+        "schema_version": 1,
+        "factor_pools": [
+            {
+                "key": "import_pool_seed_clamp",
+                "name": "Seed Clamp Pool",
+                "family": "TEMA_Cross",
+                "symbol": "ETH_USDT",
+                "direction": "long",
+                "timeframe_min": 60,
+                "years": 3,
+                "grid_spec": {"fast_len": [12], "slow_len": [55]},
+                "risk_spec": {"tp_min": 1.0, "tp_max": 1.0, "tp_step": 1.0, "sl_min": 1.0, "sl_max": 1.0, "sl_step": 1.0, "max_hold_min": 24, "max_hold_max": 24, "max_hold_step": 24},
+                "num_partitions": 4,
+                "seed": 4294967295,
+                "active": True,
+                "auto_expand": False,
+            }
+        ],
+        "strategies": [],
+    }
+
+    apply_res = client.post("/admin/catalog/import?dry_run=false", headers=headers, json=payload)
+    assert apply_res.status_code == 200, apply_res.text
+    body = apply_res.json()
+    assert body["ok"] is True
+
+    pools = client.get("/admin/factor_pools", headers=headers).json()["pools"]
+    imported_pool = next((p for p in pools if p.get("external_key") == "import_pool_seed_clamp"), None)
+    assert imported_pool is not None
+    assert int(imported_pool["seed"]) == 2147483647
+
+
 def test_generated_market_catalog_dry_run_succeeds(admin_client):
     client = admin_client["client"]
     headers = admin_client["headers"]
@@ -1124,6 +1161,15 @@ def test_generated_market_catalog_dry_run_succeeds(admin_client):
     assert body["strategies"]["create"] == len(payload["strategies"])
     assert body["factor_pools"]["errors"] == []
     assert body["strategies"]["errors"] == []
+
+
+def test_generated_market_catalog_uses_postgres_safe_seed_range():
+    catalog_path = ROOT / "catalogs" / "admin_batch_market_catalog_v1.json"
+    payload = json.loads(catalog_path.read_text(encoding="utf-8"))
+    seeds = [int(item.get("seed") or 0) for item in payload["factor_pools"]]
+    assert seeds
+    assert max(seeds) <= 2147483647
+    assert min(seeds) >= 1
 
 
 def test_admin_html_includes_batch_catalog_import_controls(admin_client):
