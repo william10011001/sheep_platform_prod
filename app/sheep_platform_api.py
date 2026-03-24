@@ -3184,6 +3184,13 @@ def web_dashboard(request: Request, authorization: Optional[str] = Header(None))
     uid = int(ctx["user"]["id"])
     cache_key = _live_cache_key("user_id", uid)
     def _load_dashboard() -> Dict[str, Any]:
+        def _dashboard_section(label: str, default: Any, loader):
+            try:
+                return loader()
+            except Exception as section_exc:
+                logger.error(f"Dashboard {label} load failed for user {uid}: {section_exc}")
+                return default
+
         cycle_id = _get_active_cycle_id()
         recent_tasks = [enrich_task_row(t) for t in db.list_tasks_for_user(uid, cycle_id=cycle_id, limit=10)]
         strategies = db.list_strategies(user_id=uid, limit=100)
@@ -3210,22 +3217,30 @@ def web_dashboard(request: Request, authorization: Optional[str] = Header(None))
 
         completed_task_count = int(db.count_tasks_for_user(uid, cycle_id=0, statuses=["completed"]))
         personal_active_strategy_count = int(db.count_strategies(user_id=uid, status="active"))
-        personal_reviewed_strategy_count = int(db.count_review_ready_tasks(user_id=uid))
-        global_reviewed_strategy_count = int(db.count_review_ready_tasks())
-        personal_review_pipeline_count = int(db.count_review_pipeline_tasks_for_user(uid, cycle_id=cycle_id))
-        personal_review_ready_items = list(db.list_review_ready_items_for_user(uid, limit=100) or [])
-        personal_runtime_snapshot = db.get_runtime_portfolio_snapshot("personal", user_id=uid) or {}
-        global_runtime_snapshot = db.get_runtime_portfolio_snapshot("global") or {}
+        personal_reviewed_strategy_count = int(_dashboard_section("personal_review_ready_count", 0, lambda: db.count_review_ready_tasks(user_id=uid)))
+        global_reviewed_strategy_count = int(_dashboard_section("global_review_ready_count", 0, lambda: db.count_review_ready_tasks()))
+        personal_review_pipeline_count = int(
+            _dashboard_section("personal_review_pipeline_count", 0, lambda: db.count_review_pipeline_tasks_for_user(uid, cycle_id=cycle_id))
+        )
+        personal_review_ready_items = list(
+            _dashboard_section("personal_review_ready_items", [], lambda: db.list_review_ready_items_for_user(uid, limit=100) or [])
+        )
+        personal_runtime_snapshot = _dashboard_section("personal_runtime_snapshot", {}, lambda: db.get_runtime_portfolio_snapshot("personal", user_id=uid) or {})
+        global_runtime_snapshot = _dashboard_section("global_runtime_snapshot", {}, lambda: db.get_runtime_portfolio_snapshot("global") or {})
         personal_runtime_items = list(personal_runtime_snapshot.get("items") or [])
         global_runtime_items = list(global_runtime_snapshot.get("items") or [])
         runtime_position_items_raw = list((global_runtime_snapshot.get("summary") or {}).get("position_items") or [])
-        runtime_lookup = (
-            _active_strategy_runtime_lookup_for_items(
-                list(global_runtime_items) + list(runtime_position_items_raw),
-                limit=500,
-            )
-            if (global_runtime_items or runtime_position_items_raw)
-            else {}
+        runtime_lookup = _dashboard_section(
+            "runtime_lookup",
+            {},
+            lambda: (
+                _active_strategy_runtime_lookup_for_items(
+                    list(global_runtime_items) + list(runtime_position_items_raw),
+                    limit=500,
+                )
+                if (global_runtime_items or runtime_position_items_raw)
+                else {}
+            ),
         )
         enriched_global_runtime_items = _enrich_runtime_items(global_runtime_items, strategy_lookup=runtime_lookup)
         runtime_position_items = _enrich_runtime_position_items(

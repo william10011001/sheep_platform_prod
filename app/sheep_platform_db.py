@@ -494,7 +494,9 @@ def _read_task_done_counter(conn: Any, task_id: int) -> int:
 def _refresh_task_done_counter_delta(conn: Any, task_id: int, new_done: Any, *, old_done: Optional[int] = None) -> int:
     previous = _clamp_nonnegative_int(old_done if old_done is not None else _read_task_done_counter(conn, task_id))
     current = _clamp_nonnegative_int(new_done)
-    delta = int(current - previous)
+    # Global mined combos is a lifetime work counter, so task resets/requeues
+    # must not subtract previously accumulated progress.
+    delta = max(0, int(current - previous))
     if delta != 0:
         _bump_global_dashboard_counter(conn, _GLOBAL_COUNTER_GLOBAL_MINED_COMBOS, delta)
     return delta
@@ -564,7 +566,28 @@ def get_global_dashboard_counters() -> Dict[str, int]:
     try:
         total_pool_combos = _get_global_dashboard_counter(conn, _GLOBAL_COUNTER_TOTAL_POOL_COMBOS, None)
         global_mined_combo_count = _get_global_dashboard_counter(conn, _GLOBAL_COUNTER_GLOBAL_MINED_COMBOS, None)
-        if total_pool_combos is None or global_mined_combo_count is None:
+
+        rebuild_needed = total_pool_combos is None or global_mined_combo_count is None
+        if not rebuild_needed and int(total_pool_combos or 0) <= 0:
+            try:
+                rebuild_needed = bool(
+                    conn.execute(
+                        "SELECT 1 FROM factor_pools WHERE COALESCE(param_combo_count, 0) > 0 LIMIT 1"
+                    ).fetchone()
+                )
+            except Exception:
+                rebuild_needed = True
+        if not rebuild_needed and int(global_mined_combo_count or 0) <= 0:
+            try:
+                rebuild_needed = bool(
+                    conn.execute(
+                        "SELECT 1 FROM mining_tasks WHERE COALESCE(progress_combos_done, 0) > 0 LIMIT 1"
+                    ).fetchone()
+                )
+            except Exception:
+                rebuild_needed = True
+
+        if rebuild_needed:
             total_pool_combos = 0
             global_mined_combo_count = 0
             last_pool_id = 0
@@ -1728,6 +1751,7 @@ def init_db() -> None:
             _backfill_direction_columns(conn)
             _backfill_factor_pool_combo_counts(conn)
             _backfill_task_progress_summaries(conn)
+            _activate_catalog_template_strategies(conn)
             conn.commit()
             invalidate_global_dashboard_counters(force=True)
             # 執行完 Postgres 的 DDL 後，直接結束函數，絕對不往下跑 SQLite 的邏圈
@@ -2070,6 +2094,7 @@ def init_db() -> None:
             _backfill_direction_columns(conn)
             _backfill_factor_pool_combo_counts(conn)
             _backfill_task_progress_summaries(conn)
+            _activate_catalog_template_strategies(conn)
             conn.commit()
             invalidate_global_dashboard_counters(force=True)
 
@@ -4266,6 +4291,53 @@ def list_announcements(
         conn.close()
 
 
+def _activate_catalog_template_strategies(conn: Any) -> int:
+    rows = []
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, params_json, allocation_pct
+            FROM strategies
+            WHERE COALESCE(external_key, '') LIKE 'mktv1__%__template'
+            """
+        ).fetchall()
+    except Exception:
+        rows = []
+    if not rows:
+        return 0
+
+    updated = 0
+    for raw_row in rows:
+        row = dict(raw_row or {})
+        strategy_id = int(row.get("id") or 0)
+        if strategy_id <= 0:
+            continue
+        params = _normalize_strategy_params_payload(row.get("params_json"))
+        params["_catalog_enabled"] = True
+        if float(params.get("stake_pct") or 0.0) <= 0.0:
+            params["stake_pct"] = 1.0
+        allocation_pct = float(row.get("allocation_pct") or 0.0)
+        if allocation_pct <= 0.0:
+            allocation_pct = 1.0
+        conn.execute(
+            """
+            UPDATE strategies
+            SET status = 'active',
+                allocation_pct = ?,
+                params_json = ?,
+                expires_at = '2099-12-31T23:59:59Z'
+            WHERE id = ?
+            """,
+            (
+                float(allocation_pct),
+                json.dumps(params, ensure_ascii=False),
+                strategy_id,
+            ),
+        )
+        updated += 1
+    return int(updated)
+
+
 def count_announcements(*, status: str = "", include_drafts: bool = False, q: str = "") -> int:
     conn = _conn()
     try:
@@ -5369,7 +5441,7 @@ def clean_zombie_tasks(timeout_minutes: int = 15) -> int:
                 prog["last_error"] = "zombie_timeout"
                 prog["updated_at"] = now
                 summary = _task_progress_summary(prog)
-                mined_delta += int(summary["combos_done"] - old_done)
+                mined_delta += max(0, int(summary["combos_done"] - old_done))
                 updates_completed.append((attempt, now, json.dumps(prog, ensure_ascii=False), int(summary["combos_done"]), int(summary["combos_total"]), float(summary["elapsed_s"]), tid))
             else:
                 prog["phase"] = "queued"
@@ -5377,7 +5449,7 @@ def clean_zombie_tasks(timeout_minutes: int = 15) -> int:
                 prog["last_error"] = "zombie_timeout"
                 prog["updated_at"] = now
                 summary = _task_progress_summary(prog)
-                mined_delta += int(summary["combos_done"] - old_done)
+                mined_delta += max(0, int(summary["combos_done"] - old_done))
                 updates_assigned.append((attempt, now, json.dumps(prog, ensure_ascii=False), int(summary["combos_done"]), int(summary["combos_total"]), float(summary["elapsed_s"]), tid))
             count += 1
 
@@ -5604,7 +5676,6 @@ def _leaderboard_python_fallback(conn: Any, cutoff_iso: str, window_end_iso: str
         except Exception:
             return None
 
-    default_avatar_url = _default_avatar_url_from_conn(conn)
     cutoff_dt = _parse_iso(cutoff_iso)
     window_end_dt = _parse_iso(window_end_iso)
     combos_map: Dict[int, Dict[str, Any]] = {}
@@ -5613,63 +5684,49 @@ def _leaderboard_python_fallback(conn: Any, cutoff_iso: str, window_end_iso: str
     max_rows = int(_leaderboard_task_scan_max_rows())
     scanned_rows = 0
     before_id = 0
-    before_activity_at = ""
 
     while scanned_rows < max_rows:
-        base_where = """
-            WHERE t.status IN ('running', 'completed')
-              AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
-              AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <= ?
-        """
-        if before_id > 0 and before_activity_at:
+        if before_id > 0:
             query = """
-                SELECT recent.id, recent.progress_json, recent.progress_combos_done, recent.progress_elapsed_s, recent.created_at, recent.activity_at,
-                       u.id as user_id, u.username, u.nickname, u.avatar_url
-                FROM (
-                    SELECT t.id, t.user_id, t.progress_json, t.progress_combos_done, t.progress_elapsed_s, t.created_at,
-                           COALESCE(t.last_heartbeat, t.updated_at, t.created_at) as activity_at
-                    FROM mining_tasks t
-            """ + base_where + """
-                      AND (
-                          COALESCE(t.last_heartbeat, t.updated_at, t.created_at) < ?
-                          OR (
-                              COALESCE(t.last_heartbeat, t.updated_at, t.created_at) = ?
-                              AND t.id < ?
-                          )
-                      )
-                    ORDER BY COALESCE(t.last_heartbeat, t.updated_at, t.created_at) DESC, t.id DESC
-                    LIMIT ?
-                ) recent
-                JOIN users u ON recent.user_id = u.id
-                ORDER BY recent.activity_at DESC, recent.id DESC
+                SELECT
+                    t.id,
+                    t.user_id,
+                    t.progress_json,
+                    t.progress_combos_done,
+                    t.progress_elapsed_s,
+                    t.created_at,
+                    COALESCE(t.last_heartbeat, t.updated_at, t.created_at) as activity_at
+                FROM mining_tasks t
+                WHERE t.status IN ('running', 'completed')
+                  AND t.id < ?
+                ORDER BY t.id DESC
+                LIMIT ?
             """
-            rows = conn.execute(query, (cutoff_iso, window_end_iso, before_activity_at, before_activity_at, before_id, page_size)).fetchall()
+            rows = conn.execute(query, (before_id, page_size)).fetchall()
         else:
             query = """
-                SELECT recent.id, recent.progress_json, recent.progress_combos_done, recent.progress_elapsed_s, recent.created_at, recent.activity_at,
-                       u.id as user_id, u.username, u.nickname, u.avatar_url
-                FROM (
-                    SELECT t.id, t.user_id, t.progress_json, t.progress_combos_done, t.progress_elapsed_s, t.created_at,
-                           COALESCE(t.last_heartbeat, t.updated_at, t.created_at) as activity_at
-                    FROM mining_tasks t
-            """ + base_where + """
-                    ORDER BY COALESCE(t.last_heartbeat, t.updated_at, t.created_at) DESC, t.id DESC
-                    LIMIT ?
-                ) recent
-                JOIN users u ON recent.user_id = u.id
-                ORDER BY recent.activity_at DESC, recent.id DESC
+                SELECT
+                    t.id,
+                    t.user_id,
+                    t.progress_json,
+                    t.progress_combos_done,
+                    t.progress_elapsed_s,
+                    t.created_at,
+                    COALESCE(t.last_heartbeat, t.updated_at, t.created_at) as activity_at
+                FROM mining_tasks t
+                WHERE t.status IN ('running', 'completed')
+                ORDER BY t.id DESC
+                LIMIT ?
             """
-            rows = conn.execute(query, (cutoff_iso, window_end_iso, page_size)).fetchall()
+            rows = conn.execute(query, (page_size,)).fetchall()
         if not rows:
             break
 
         scanned_rows += len(rows)
         before_id = int(rows[-1]["id"] or 0)
-        before_activity_at = str(rows[-1]["activity_at"] or "")
 
         for row in rows:
             entry = dict(row or {})
-            user_bits = _decorate_user_row(entry, default_avatar_url=default_avatar_url)
             activity_dt = _parse_iso(entry.get("activity_at")) or _parse_iso(entry.get("created_at"))
             if activity_dt is None:
                 continue
@@ -5715,9 +5772,7 @@ def _leaderboard_python_fallback(conn: Any, cutoff_iso: str, window_end_iso: str
                 rec = combos_map.setdefault(
                     uid,
                     {
-                        "username": user_bits.get("username"),
-                        "nickname": user_bits.get("nickname"),
-                        "avatar_url": user_bits.get("avatar_url"),
+                        "user_id": uid,
                         "task_count": 0,
                         "total_done": 0.0,
                     },
@@ -5728,9 +5783,7 @@ def _leaderboard_python_fallback(conn: Any, cutoff_iso: str, window_end_iso: str
                 rec = time_map.setdefault(
                     uid,
                     {
-                        "username": user_bits.get("username"),
-                        "nickname": user_bits.get("nickname"),
-                        "avatar_url": user_bits.get("avatar_url"),
+                        "user_id": uid,
                         "total_seconds": 0.0,
                     },
                 )
@@ -5738,8 +5791,46 @@ def _leaderboard_python_fallback(conn: Any, cutoff_iso: str, window_end_iso: str
 
         if len(rows) < page_size or before_id <= 0:
             break
-    combos_rows = sorted(combos_map.values(), key=lambda item: (-float(item.get("total_done") or 0.0), str(item.get("username") or "")))[:300]
-    time_rows = sorted(time_map.values(), key=lambda item: (-float(item.get("total_seconds") or 0.0), str(item.get("username") or "")))[:300]
+
+    user_ids = sorted(set([int(uid) for uid in combos_map.keys()] + [int(uid) for uid in time_map.keys()]))
+    users_by_id: Dict[int, Dict[str, Any]] = {}
+    if user_ids:
+        default_avatar_url = _default_avatar_url_from_conn(conn)
+        chunk_size = 500
+        for start in range(0, len(user_ids), chunk_size):
+            chunk = user_ids[start : start + chunk_size]
+            placeholders = ",".join("?" for _ in chunk)
+            rows = conn.execute(
+                f"SELECT id, username, nickname, avatar_url FROM users WHERE id IN ({placeholders})",
+                chunk,
+            ).fetchall()
+            for raw_row in rows:
+                item = dict(raw_row or {})
+                uid = int(item.get("id") or 0)
+                if uid > 0:
+                    users_by_id[uid] = _decorate_user_row(item, default_avatar_url=default_avatar_url)
+
+    def _attach_user_bits(entry: Dict[str, Any]) -> Dict[str, Any]:
+        uid = int(entry.get("user_id") or 0)
+        user_bits = users_by_id.get(uid) or {
+            "username": f"user-{uid}",
+            "nickname": f"user-{uid}",
+            "avatar_url": "",
+        }
+        merged = dict(entry)
+        merged["username"] = str(user_bits.get("username") or "")
+        merged["nickname"] = str(user_bits.get("nickname") or "")
+        merged["avatar_url"] = str(user_bits.get("avatar_url") or "")
+        return merged
+
+    combos_rows = sorted(
+        [_attach_user_bits(item) for item in combos_map.values()],
+        key=lambda item: (-float(item.get("total_done") or 0.0), str(item.get("username") or "")),
+    )[:300]
+    time_rows = sorted(
+        [_attach_user_bits(item) for item in time_map.values()],
+        key=lambda item: (-float(item.get("total_seconds") or 0.0), str(item.get("username") or "")),
+    )[:300]
     return {"combos": combos_rows, "time": time_rows}
 
 

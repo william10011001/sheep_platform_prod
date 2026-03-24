@@ -621,6 +621,9 @@ def choose_partitions(
 def build_catalog(*, active_pools: bool = False, fine_grain: bool = False) -> Dict[str, Any]:
     factor_pools: List[Dict[str, Any]] = []
     strategies: List[Dict[str, Any]] = []
+    template_enabled = bool(active_pools)
+    template_status = "active" if template_enabled else "disabled"
+    template_stake_pct = 1.0 if template_enabled else 0.0
     for profile in SYMBOLS:
         for timeframe_min in profile.timeframes:
             tf_text = interval_text(timeframe_min)
@@ -634,7 +637,7 @@ def build_catalog(*, active_pools: bool = False, fine_grain: bool = False) -> Di
                     pool_name = f"{profile.symbol} {tf_text} {family} {direction.upper()}"
                     factor_pools.append({"key": key, "name": pool_name, "symbol": profile.symbol, "family": family, "direction": direction, "timeframe_min": int(timeframe_min), "years": int(profile.years), "grid_spec": grid_spec, "risk_spec": risk_spec, "num_partitions": partitions, "seed": stable_seed(key), "active": bool(active_pools), "auto_expand": False})
                     family_params = midpoint_family_params(family, grid_spec, direction)
-                    strategies.append({"key": f"{key}__template", "name": f"{pool_name} Template", "family": family, "symbol": profile.symbol, "direction": direction, "interval": tf_text, "family_params": family_params, "tp_pct": float(family_params.get("tp_pct_strat", 0.0) or 0.0), "sl_pct": float(family_params.get("sl_pct_strat", 0.0) or 0.0), "max_hold_bars": int((int(risk_spec["max_hold_min"]) + int(risk_spec["max_hold_max"])) // 2), "stake_pct": 0.0, "status": "disabled", "enabled": False})
+                    strategies.append({"key": f"{key}__template", "name": f"{pool_name} Template", "family": family, "symbol": profile.symbol, "direction": direction, "interval": tf_text, "family_params": family_params, "tp_pct": float(family_params.get("tp_pct_strat", 0.0) or 0.0), "sl_pct": float(family_params.get("sl_pct_strat", 0.0) or 0.0), "max_hold_bars": int((int(risk_spec["max_hold_min"]) + int(risk_spec["max_hold_max"])) // 2), "stake_pct": float(template_stake_pct), "status": template_status, "enabled": bool(template_enabled)})
     return {"schema_version": 1, "factor_pools": factor_pools, "strategies": strategies}
 
 

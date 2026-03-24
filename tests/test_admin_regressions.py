@@ -1326,6 +1326,71 @@ def test_dashboard_exposes_review_ready_items_for_rating_panel(admin_client):
     assert float(body["personal_review_ready_items"][0]["best_any_score"]) >= 1.8
 
 
+def test_dashboard_gracefully_degrades_optional_sections_on_timeout(admin_client, monkeypatch):
+    client = admin_client["client"]
+    headers = admin_client["headers"]
+    db_module = admin_client["db"]
+
+    def _raise_timeout(*_args, **_kwargs):
+        raise RuntimeError("statement timeout")
+
+    monkeypatch.setattr(db_module, "count_review_pipeline_tasks_for_user", _raise_timeout)
+    monkeypatch.setattr(db_module, "list_review_ready_items_for_user", _raise_timeout)
+    monkeypatch.setattr(db_module, "get_runtime_portfolio_snapshot", _raise_timeout)
+
+    dashboard = client.get("/dashboard", headers=headers)
+    assert dashboard.status_code == 200, dashboard.text
+    body = dashboard.json()
+    assert body["personal_review_pipeline_count"] == 0
+    assert body["personal_review_ready_items"] == []
+    assert body["personal_runtime_portfolio_items"] == []
+    assert body["global_runtime_portfolio_items"] == []
+
+
+def test_global_dashboard_counters_rebuild_when_settings_are_stale_zero(admin_client):
+    db_module = admin_client["db"]
+    user_id = admin_client["user_id"]
+    cycle_id = admin_client["cycle_id"]
+
+    pool_id = db_module.create_factor_pool(
+        cycle_id=int(cycle_id),
+        name="Counter Rebuild Pool",
+        symbol="ETH_USDT",
+        timeframe_min=60,
+        years=2,
+        family="TEMA_Cross",
+        grid_spec={"fast_len": [8, 12], "slow_len": [30, 55]},
+        risk_spec={"tp": [0.01, 0.02], "max_hold": [24, 48]},
+        num_partitions=4,
+        seed=123,
+        active=True,
+    )[0]
+    conn = db_module._conn()
+    try:
+        conn.execute("UPDATE factor_pools SET param_combo_count = ? WHERE id = ?", (256, int(pool_id)))
+        conn.commit()
+    finally:
+        conn.close()
+
+    task_id = _insert_task(
+        db_module,
+        user_id=user_id,
+        pool_id=pool_id,
+        cycle_id=cycle_id,
+        status="completed",
+        progress={"combos_done": 37, "combos_total": 40, "elapsed_s": 180},
+    )
+    db_module.update_task_progress(task_id, {"combos_done": 37, "combos_total": 40, "elapsed_s": 180})
+    db_module.set_setting(db_module._GLOBAL_COUNTER_TOTAL_POOL_COMBOS, 0)
+    db_module.set_setting(db_module._GLOBAL_COUNTER_GLOBAL_MINED_COMBOS, 0)
+    db_module.invalidate_global_dashboard_counters(force=True)
+
+    counters = db_module.get_global_dashboard_counters()
+
+    assert int(counters["total_strategy_pool_combo_count"]) > 0
+    assert int(counters["global_mined_combo_count"]) >= 37
+
+
 def test_admin_catalog_import_dry_run_apply_and_upsert(admin_client):
     client = admin_client["client"]
     headers = admin_client["headers"]
@@ -1485,12 +1550,70 @@ def test_generated_active_fine_catalog_is_active_and_large_enough():
     payload = json.loads(catalog_path.read_text(encoding="utf-8"))
 
     pools = list(payload.get("factor_pools") or [])
+    strategies = list(payload.get("strategies") or [])
     seeds = [int(item.get("seed") or 0) for item in pools]
     assert pools
+    assert strategies
     assert all(bool(item.get("active")) for item in pools)
+    assert all(str(item.get("status") or "").lower() == "active" for item in strategies)
+    assert all(bool(item.get("enabled")) for item in strategies)
+    assert all(float(item.get("stake_pct") or 0.0) > 0.0 for item in strategies)
     assert max(seeds) <= 2147483647
     assert min(seeds) >= 1
     assert int(catalog_combo_total(payload)) >= 10_000_000
+
+
+def test_init_db_auto_activates_catalog_template_strategies(admin_client):
+    db_module = admin_client["db"]
+    user_id = admin_client["user_id"]
+    pool_id = admin_client["pool_id"]
+
+    conn = db_module._conn()
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO strategies (
+                submission_id, user_id, pool_id, external_key, direction, params_json, status,
+                allocation_pct, note, created_at, expires_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                None,
+                int(user_id),
+                int(pool_id),
+                "mktv1__btc_usdt__1h__tema_cross__long__template",
+                "long",
+                json.dumps({"family": "TEMA_Cross"}),
+                "disabled",
+                0.0,
+                "Catalog Import: disabled template",
+                db_module._now_iso(),
+                "",
+            ),
+        )
+        strategy_id = int(cur.lastrowid)
+        conn.commit()
+    finally:
+        conn.close()
+
+    db_module.init_db()
+
+    conn = db_module._conn()
+    try:
+        row = conn.execute(
+            "SELECT status, allocation_pct, params_json FROM strategies WHERE id = ?",
+            (int(strategy_id),),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    assert row is not None
+    body = dict(row)
+    params = json.loads(body["params_json"] or "{}")
+    assert body["status"] == "active"
+    assert float(body["allocation_pct"] or 0.0) == pytest.approx(1.0)
+    assert params.get("_catalog_enabled") is True
+    assert float(params.get("stake_pct") or 0.0) == pytest.approx(1.0)
 
 
 def test_admin_html_includes_batch_catalog_import_controls(admin_client):
