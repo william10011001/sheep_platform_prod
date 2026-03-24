@@ -706,7 +706,7 @@ def test_leaderboard_invalidation_is_throttled(monkeypatch):
     assert api._live_cache["leaderboard"] == {}
 
 
-def test_postgres_leaderboard_uses_python_fallback(monkeypatch, tmp_path):
+def test_postgres_leaderboard_prefers_recent_aggregate(monkeypatch, tmp_path):
     db_path = tmp_path / "leaderboard-postgres-path.sqlite3"
     monkeypatch.setenv("SHEEP_DB_URL", "")
     monkeypatch.setenv("SHEEP_DB_PATH", str(db_path))
@@ -721,7 +721,7 @@ def test_postgres_leaderboard_uses_python_fallback(monkeypatch, tmp_path):
     monkeypatch.setattr(db, "_conn", lambda: real_conn)
     monkeypatch.setattr(
         db,
-        "_leaderboard_python_fallback",
+        "_leaderboard_postgres_recent_agg",
         lambda conn, cutoff_iso, window_end_iso: {
             "combos": [{"username": "miner-a", "total_done": 1234.0}],
             "time": [{"username": "miner-a", "total_seconds": 4321.0}],
@@ -729,8 +729,8 @@ def test_postgres_leaderboard_uses_python_fallback(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(
         db,
-        "_leaderboard_postgres_recent_agg",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("postgres aggregate should not be used")),
+        "_leaderboard_python_fallback",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("python fallback should not be used")),
     )
 
     stats = db.get_leaderboard_stats(period_hours=720)
@@ -739,6 +739,39 @@ def test_postgres_leaderboard_uses_python_fallback(monkeypatch, tmp_path):
     assert stats["time"]
     assert stats["combos"][0]["username"] == "miner-a"
     assert stats["time"][0]["username"] == "miner-a"
+
+
+def test_postgres_leaderboard_falls_back_when_aggregate_fails(monkeypatch, tmp_path):
+    db_path = tmp_path / "leaderboard-postgres-fallback.sqlite3"
+    monkeypatch.setenv("SHEEP_DB_URL", "")
+    monkeypatch.setenv("SHEEP_DB_PATH", str(db_path))
+    _reset_db_module()
+    import sheep_platform_db as db
+
+    db.init_db()
+    db.ensure_cycle_rollover()
+    real_conn = db._conn()
+
+    monkeypatch.setattr(db, "_db_kind", lambda: "postgres")
+    monkeypatch.setattr(db, "_conn", lambda: real_conn)
+    monkeypatch.setattr(
+        db,
+        "_leaderboard_postgres_recent_agg",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("aggregate_timeout")),
+    )
+    monkeypatch.setattr(
+        db,
+        "_leaderboard_python_fallback",
+        lambda conn, cutoff_iso, window_end_iso: {
+            "combos": [{"username": "miner-b", "total_done": 987.0}],
+            "time": [{"username": "miner-b", "total_seconds": 654.0}],
+        },
+    )
+
+    stats = db.get_leaderboard_stats(period_hours=720)
+
+    assert stats["combos"][0]["username"] == "miner-b"
+    assert stats["time"][0]["username"] == "miner-b"
 
 
 def test_leaderboard_python_fallback_prefers_larger_timestamp_elapsed(monkeypatch, tmp_path):

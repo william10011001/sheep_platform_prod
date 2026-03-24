@@ -66,6 +66,9 @@ _GLOBAL_COUNTERS_CACHE: Dict[str, Any] = {
     "lock": threading.Lock(),
 }
 
+_GLOBAL_COUNTER_TOTAL_POOL_COMBOS = "dashboard_total_strategy_pool_combo_count"
+_GLOBAL_COUNTER_GLOBAL_MINED_COMBOS = "dashboard_global_mined_combo_count"
+
 
 def _env_timeout_ms(name: str, default: int) -> int:
     try:
@@ -402,6 +405,101 @@ def _task_progress_summary(progress_like: Any) -> Dict[str, Any]:
     }
 
 
+def _get_setting_int_from_conn(conn: Any, key: str, default: Optional[int] = 0) -> Optional[int]:
+    try:
+        row = conn.execute("SELECT value FROM settings WHERE key = ? LIMIT 1", (str(key or ""),)).fetchone()
+    except Exception:
+        return default
+    if not row:
+        return default
+    raw_value = dict(row or {}).get("value")
+    try:
+        raw_value = json.loads(raw_value)
+    except Exception:
+        pass
+    try:
+        return max(0, int(float(raw_value or 0)))
+    except Exception:
+        return default
+
+
+def _set_setting_int(conn: Any, key: str, value: Any) -> None:
+    set_setting(conn, str(key or ""), _clamp_nonnegative_int(value))
+
+
+def _bump_setting_int(conn: Any, key: str, delta: Any) -> None:
+    delta_int = int(float(delta or 0))
+    if delta_int == 0:
+        return
+    initial_value = str(max(0, delta_int))
+    now = _now_iso()
+    kind = str(getattr(conn, "kind", "sqlite") or "sqlite")
+    if kind == "postgres":
+        conn.execute(
+            """
+            INSERT INTO settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE
+            SET value = (
+                GREATEST(
+                    0::bigint,
+                    COALESCE(NULLIF(settings.value, ''), '0')::bigint + ?::bigint
+                )
+            )::text,
+                updated_at = excluded.updated_at
+            """,
+            (str(key or ""), initial_value, now, int(delta_int)),
+        )
+        return
+    conn.execute(
+        """
+        INSERT INTO settings (key, value, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE
+        SET value = CAST(
+                MAX(
+                    0,
+                    CAST(COALESCE(settings.value, '0') AS INTEGER) + CAST(? AS INTEGER)
+                ) AS TEXT
+            ),
+            updated_at = excluded.updated_at
+        """,
+        (str(key or ""), initial_value, now, int(delta_int)),
+    )
+
+
+def _get_global_dashboard_counter(conn: Any, key: str, default: Optional[int] = None) -> Optional[int]:
+    return _get_setting_int_from_conn(conn, key, default)
+
+
+def _set_global_dashboard_counter(conn: Any, key: str, value: Any) -> None:
+    _set_setting_int(conn, key, value)
+
+
+def _bump_global_dashboard_counter(conn: Any, key: str, delta: Any) -> None:
+    _bump_setting_int(conn, key, delta)
+
+
+def _read_task_done_counter(conn: Any, task_id: int) -> int:
+    try:
+        row = conn.execute(
+            "SELECT progress_combos_done FROM mining_tasks WHERE id = ? LIMIT 1",
+            (int(task_id or 0),),
+        ).fetchone()
+    except Exception:
+        row = None
+    return _clamp_nonnegative_int((dict(row or {}) if row else {}).get("progress_combos_done"))
+
+
+def _refresh_task_done_counter_delta(conn: Any, task_id: int, new_done: Any, *, old_done: Optional[int] = None) -> int:
+    previous = _clamp_nonnegative_int(old_done if old_done is not None else _read_task_done_counter(conn, task_id))
+    current = _clamp_nonnegative_int(new_done)
+    delta = int(current - previous)
+    if delta != 0:
+        _bump_global_dashboard_counter(conn, _GLOBAL_COUNTER_GLOBAL_MINED_COMBOS, delta)
+    return delta
+
+
 def invalidate_global_dashboard_counters(*, force: bool = False) -> None:
     lock = _GLOBAL_COUNTERS_CACHE.get("lock")
     if lock is None:
@@ -464,21 +562,48 @@ def get_global_dashboard_counters() -> Dict[str, int]:
 
     conn = _conn()
     try:
-        pool_row = conn.execute(
-            "SELECT COALESCE(SUM(COALESCE(param_combo_count, 0)), 0) AS total_pool_combos FROM factor_pools"
-        ).fetchone()
-        total_pool_combos = _clamp_nonnegative_int((dict(pool_row) if pool_row else {}).get("total_pool_combos"))
-        kind = str(getattr(conn, "kind", "sqlite") or "sqlite")
-        if kind == "postgres":
-            mined_row = conn.execute(
-                "SELECT COALESCE(SUM(COALESCE(progress_combos_done, 0)), 0) AS global_mined_combo_count FROM mining_tasks"
-            ).fetchone()
-        else:
-            done_expr, _, _ = _get_progress_summary_columns(conn)
-            mined_row = conn.execute(
-                f"SELECT COALESCE(SUM({done_expr}), 0) AS global_mined_combo_count FROM mining_tasks"
-            ).fetchone()
-        global_mined_combo_count = _clamp_nonnegative_int((dict(mined_row) if mined_row else {}).get("global_mined_combo_count"))
+        total_pool_combos = _get_global_dashboard_counter(conn, _GLOBAL_COUNTER_TOTAL_POOL_COMBOS, None)
+        global_mined_combo_count = _get_global_dashboard_counter(conn, _GLOBAL_COUNTER_GLOBAL_MINED_COMBOS, None)
+        if total_pool_combos is None or global_mined_combo_count is None:
+            total_pool_combos = 0
+            global_mined_combo_count = 0
+            last_pool_id = 0
+            last_task_id = 0
+            batch_size = 2000
+            while True:
+                rows = conn.execute(
+                    "SELECT id, param_combo_count FROM factor_pools WHERE id > ? ORDER BY id ASC LIMIT ?",
+                    (int(last_pool_id), int(batch_size)),
+                ).fetchall()
+                if not rows:
+                    break
+                for raw_row in rows:
+                    row = dict(raw_row or {})
+                    pool_id = _clamp_nonnegative_int(row.get("id"))
+                    if pool_id <= 0:
+                        continue
+                    total_pool_combos += _clamp_nonnegative_int(row.get("param_combo_count"))
+                    last_pool_id = max(last_pool_id, pool_id)
+            while True:
+                rows = conn.execute(
+                    "SELECT id, progress_combos_done FROM mining_tasks WHERE id > ? ORDER BY id ASC LIMIT ?",
+                    (int(last_task_id), int(batch_size)),
+                ).fetchall()
+                if not rows:
+                    break
+                for raw_row in rows:
+                    row = dict(raw_row or {})
+                    task_id = _clamp_nonnegative_int(row.get("id"))
+                    if task_id <= 0:
+                        continue
+                    global_mined_combo_count += _clamp_nonnegative_int(row.get("progress_combos_done"))
+                    last_task_id = max(last_task_id, task_id)
+            _set_global_dashboard_counter(conn, _GLOBAL_COUNTER_TOTAL_POOL_COMBOS, total_pool_combos)
+            _set_global_dashboard_counter(conn, _GLOBAL_COUNTER_GLOBAL_MINED_COMBOS, global_mined_combo_count)
+            try:
+                conn.commit()
+            except Exception:
+                conn.rollback()
         value = {
             "total_strategy_pool_combo_count": total_pool_combos,
             "global_mined_combo_count": global_mined_combo_count,
@@ -812,9 +937,10 @@ def _backfill_direction_columns(conn: Any) -> None:
             pass
 
 
-def _backfill_factor_pool_combo_counts(conn: Any) -> None:
+def _backfill_factor_pool_combo_counts(conn: Any) -> int:
     last_id = 0
     batch_size = 500
+    total_combo_count = 0
     while True:
         try:
             rows = conn.execute(
@@ -835,16 +961,24 @@ def _backfill_factor_pool_combo_counts(conn: Any) -> None:
                 conn.execute("UPDATE factor_pools SET param_combo_count = ? WHERE id = ?", (combo_count, pool_id))
             except Exception:
                 pass
+            total_combo_count += int(combo_count or 0)
             last_id = max(last_id, pool_id)
         try:
             conn.commit()
         except Exception:
             pass
+    _set_global_dashboard_counter(conn, _GLOBAL_COUNTER_TOTAL_POOL_COMBOS, total_combo_count)
+    try:
+        conn.commit()
+    except Exception:
+        pass
+    return int(total_combo_count)
 
 
-def _backfill_task_progress_summaries(conn: Any) -> None:
+def _backfill_task_progress_summaries(conn: Any) -> int:
     last_id = 0
     batch_size = 1000
+    total_done = 0
     while True:
         try:
             rows = conn.execute(
@@ -877,11 +1011,18 @@ def _backfill_task_progress_summaries(conn: Any) -> None:
                 )
             except Exception:
                 pass
+            total_done += int(summary["combos_done"] or 0)
             last_id = max(last_id, task_id)
         try:
             conn.commit()
         except Exception:
             pass
+    _set_global_dashboard_counter(conn, _GLOBAL_COUNTER_GLOBAL_MINED_COMBOS, total_done)
+    try:
+        conn.commit()
+    except Exception:
+        pass
+    return int(total_done)
 
 
 class _DBResult:
@@ -2496,15 +2637,26 @@ def ensure_cycle_rollover() -> None:
                 if new_cycle_id <= 0:
                     raise ValueError(f"無法取得新週期的 ID (new_cycle_id={new_cycle_id})，資料庫方言解析異常")
                 
+                source_combo_total = _clamp_nonnegative_int(
+                    (
+                        dict(
+                            conn.execute(
+                                "SELECT COALESCE(SUM(COALESCE(param_combo_count, 0)), 0) AS total FROM factor_pools WHERE cycle_id = ? AND active = 1",
+                                (active["id"],),
+                            ).fetchone()
+                            or {}
+                        )
+                    ).get("total")
+                )
                 try:
                     conn.execute("""
                         INSERT INTO factor_pools (
                             cycle_id, name, external_key, symbol, direction, timeframe_min, years, family, 
-                            grid_spec_json, risk_spec_json, num_partitions, seed, 
+                            grid_spec_json, risk_spec_json, num_partitions, seed, param_combo_count,
                             active, created_at
                         )
                         SELECT ?, name, COALESCE(external_key, ''), symbol, COALESCE(direction, 'long'), timeframe_min, years, family, 
-                               grid_spec_json, risk_spec_json, num_partitions, seed, 
+                               grid_spec_json, risk_spec_json, num_partitions, seed, COALESCE(param_combo_count, 0),
                                1, ?
                         FROM factor_pools src
                         WHERE src.cycle_id = ? AND src.active = 1
@@ -2515,6 +2667,8 @@ def ensure_cycle_rollover() -> None:
                             AND target.symbol = src.symbol
                         )
                     """, (new_cycle_id, now_str, active["id"], new_cycle_id))
+                    if source_combo_total > 0:
+                        _bump_global_dashboard_counter(conn, _GLOBAL_COUNTER_TOTAL_POOL_COMBOS, source_combo_total)
                     
                     # 4. 審計日誌
                     conn.execute(
@@ -2575,11 +2729,24 @@ def list_factor_pools(cycle_id: int) -> list:
                         source_cid = last_p_cycle["cycle_id"]
                         print(f"[DB MAINTENANCE] 偵測到週期 {cycle_id} 缺乏 Pool 資料，啟動從週期 {source_cid} 繼承程序...")
                         try:
+                            source_combo_total = _clamp_nonnegative_int(
+                                (
+                                    dict(
+                                        conn.execute(
+                                            "SELECT COALESCE(SUM(COALESCE(param_combo_count, 0)), 0) AS total FROM factor_pools WHERE cycle_id = ? AND active = 1",
+                                            (source_cid,),
+                                        ).fetchone()
+                                        or {}
+                                    )
+                                ).get("total")
+                            )
                             conn.execute("""
                                 INSERT INTO factor_pools (cycle_id, name, external_key, symbol, direction, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, param_combo_count, active, created_at)
                                 SELECT ?, name, COALESCE(external_key, ''), symbol, COALESCE(direction, 'long'), timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, COALESCE(param_combo_count, 0), active, ?
                                 FROM factor_pools WHERE cycle_id = ? AND active = 1
                             """, (cycle_id, _now_iso(), source_cid))
+                            if source_combo_total > 0:
+                                _bump_global_dashboard_counter(conn, _GLOBAL_COUNTER_TOTAL_POOL_COMBOS, source_combo_total)
                             conn.commit()
                             cur = conn.execute("SELECT * FROM factor_pools WHERE cycle_id = ?", (cycle_id,))
                             rows = [dict(row) for row in cur.fetchall()]
@@ -2989,15 +3156,18 @@ def recover_factor_pools_from_local(cycle_id: int, search_roots: Optional[List[s
                     skipped += 1
                     continue
 
+                combo_count = _param_combo_count_value(family, grid_spec_json, risk_spec_json)
                 conn = _conn()
                 try:
                     conn.execute(
                         """
-                        INSERT INTO factor_pools (cycle_id, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        INSERT INTO factor_pools (cycle_id, name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, param_combo_count, active, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
-                        (int(cycle_id), name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, 1 if active else 0, _now_iso())
+                        (int(cycle_id), name, symbol, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, combo_count, 1 if active else 0, _now_iso())
                     )
+                    if int(combo_count or 0) > 0:
+                        _bump_global_dashboard_counter(conn, _GLOBAL_COUNTER_TOTAL_POOL_COMBOS, combo_count)
                     conn.commit()
                 finally:
                     conn.close()
@@ -3676,6 +3846,7 @@ def create_factor_pool(
         normalized_seed = 42
     conn = _conn()
     try:
+        created_combo_total = 0
         for s, t in targets:
             # 修正：精準檢查是否已存在於該週期，避免重複建立導致任務派發混亂
             exist = conn.execute("SELECT id FROM factor_pools WHERE cycle_id=? AND symbol=? AND timeframe_min=? AND family=?", (cycle_id, s, t, family)).fetchone()
@@ -3709,6 +3880,7 @@ def create_factor_pool(
                     )
                 ).fetchone()
                 ids.append(int((row_pool or {}).get("id") or 0))
+                created_combo_total += int(param_combo_count or 0)
             else:
                 cur = conn.execute(
                     """
@@ -3734,6 +3906,9 @@ def create_factor_pool(
                     )
                 )
                 ids.append(int(cur.lastrowid))
+                created_combo_total += int(param_combo_count or 0)
+        if created_combo_total > 0:
+            _bump_global_dashboard_counter(conn, _GLOBAL_COUNTER_TOTAL_POOL_COMBOS, created_combo_total)
         conn.commit()
         _invalidate_active_pool_cache(cycle_id)
         invalidate_global_dashboard_counters(force=True)
@@ -3775,11 +3950,15 @@ def update_factor_pool(
     conn = _conn()
     try:
         cycle_id = 0
+        old_combo_count = 0
         try:
-            row = conn.execute("SELECT cycle_id FROM factor_pools WHERE id = ?", (int(pool_id),)).fetchone()
-            cycle_id = int((row or {}).get("cycle_id") or 0)
+            row = conn.execute("SELECT cycle_id, param_combo_count FROM factor_pools WHERE id = ?", (int(pool_id),)).fetchone()
+            row_dict = dict(row or {}) if row else {}
+            cycle_id = int(row_dict.get("cycle_id") or 0)
+            old_combo_count = _clamp_nonnegative_int(row_dict.get("param_combo_count"))
         except Exception:
             cycle_id = 0
+            old_combo_count = 0
         normalized_direction = normalize_direction(direction, reverse=parse_json_object(risk_spec).get("reverse_mode"), default="long")
         normalized_risk_spec = _normalize_risk_spec(normalized_direction, risk_spec)
         normalized_num_partitions = max(1, int(num_partitions or 1))
@@ -3810,6 +3989,9 @@ def update_factor_pool(
                 pool_id,
             )
         )
+        delta_combo_count = int(param_combo_count - old_combo_count)
+        if delta_combo_count != 0:
+            _bump_global_dashboard_counter(conn, _GLOBAL_COUNTER_TOTAL_POOL_COMBOS, delta_combo_count)
         conn.commit()
         _invalidate_active_pool_cache(cycle_id or None)
         invalidate_global_dashboard_counters(force=True)
@@ -4658,6 +4840,7 @@ def update_task_progress(task_id: int, progress: dict) -> None:
         try:
             conn = _conn()
             try:
+                old_done = _read_task_done_counter(conn, int(task_id))
                 conn.execute(
                     """
                     UPDATE mining_tasks
@@ -4674,6 +4857,7 @@ def update_task_progress(task_id: int, progress: dict) -> None:
                         task_id,
                     )
                 )
+                _refresh_task_done_counter_delta(conn, int(task_id), summary["combos_done"], old_done=old_done)
                 conn.commit()
                 invalidate_global_dashboard_counters()
                 break
@@ -5161,16 +5345,19 @@ def clean_zombie_tasks(timeout_minutes: int = 15) -> int:
         cutoff_dt = datetime.now(timezone.utc) - timedelta(minutes=timeout_minutes)
         cutoff_iso = cutoff_dt.isoformat()
         rows = conn.execute(
-            "SELECT id, progress_json, status, attempt FROM mining_tasks WHERE (status IN ('running', 'syncing') AND last_heartbeat < ?) OR status = 'error'",
+            "SELECT id, progress_json, progress_combos_done, status, attempt FROM mining_tasks WHERE (status IN ('running', 'syncing') AND last_heartbeat < ?) OR status = 'error'",
             (cutoff_iso,),
         ).fetchall()
 
         now = _now_iso()
         updates_completed: List[Tuple[Any, ...]] = []
         updates_assigned: List[Tuple[Any, ...]] = []
-        for row in rows:
+        mined_delta = 0
+        for raw_row in rows:
+            row = dict(raw_row or {})
             tid = int(row["id"])
             attempt = int(row["attempt"] or 0) + 1
+            old_done = _clamp_nonnegative_int(row.get("progress_combos_done"))
             try:
                 prog = json.loads(row["progress_json"] or "{}")
             except Exception:
@@ -5182,6 +5369,7 @@ def clean_zombie_tasks(timeout_minutes: int = 15) -> int:
                 prog["last_error"] = "zombie_timeout"
                 prog["updated_at"] = now
                 summary = _task_progress_summary(prog)
+                mined_delta += int(summary["combos_done"] - old_done)
                 updates_completed.append((attempt, now, json.dumps(prog, ensure_ascii=False), int(summary["combos_done"]), int(summary["combos_total"]), float(summary["elapsed_s"]), tid))
             else:
                 prog["phase"] = "queued"
@@ -5189,6 +5377,7 @@ def clean_zombie_tasks(timeout_minutes: int = 15) -> int:
                 prog["last_error"] = "zombie_timeout"
                 prog["updated_at"] = now
                 summary = _task_progress_summary(prog)
+                mined_delta += int(summary["combos_done"] - old_done)
                 updates_assigned.append((attempt, now, json.dumps(prog, ensure_ascii=False), int(summary["combos_done"]), int(summary["combos_total"]), float(summary["elapsed_s"]), tid))
             count += 1
 
@@ -5204,7 +5393,8 @@ def clean_zombie_tasks(timeout_minutes: int = 15) -> int:
                 p,
             )
             log_sys_event("ZOMBIE_TASK_RECYCLED", None, f"Zombie task recycled: {p[6]}", {"task_id": p[6], "attempt": p[0]})
-
+        if mined_delta != 0:
+            _bump_global_dashboard_counter(conn, _GLOBAL_COUNTER_GLOBAL_MINED_COMBOS, mined_delta)
         if count > 0:
             conn.commit()
             invalidate_global_dashboard_counters(force=True)
@@ -5347,25 +5537,15 @@ def _leaderboard_task_scan_max_rows() -> int:
 def _leaderboard_postgres_recent_agg(conn: Any, cutoff_iso: str, window_end_iso: str) -> Dict[str, List[Dict[str, Any]]]:
     default_avatar_url = _default_avatar_url_from_conn(conn)
     sql = """
-        WITH recent_tasks AS MATERIALIZED (
+        WITH recent_tasks AS (
             SELECT
                 t.user_id,
                 GREATEST(
-                    COALESCE(
-                        NULLIF(t.progress_json::jsonb->>'combos_done', '')::double precision,
-                        NULLIF(t.progress_json::jsonb->>'done', '')::double precision,
-                        NULLIF(t.progress_json::jsonb->>'combos_total', '')::double precision,
-                        NULLIF(t.progress_json::jsonb->>'total', '')::double precision,
-                        0.0
-                    ),
+                    COALESCE(t.progress_combos_done, 0)::double precision,
                     0.0
                 ) AS combos_done,
                 GREATEST(
-                    COALESCE(
-                        NULLIF(t.progress_json::jsonb->>'elapsed_s', '')::double precision,
-                        NULLIF(t.progress_json::jsonb->>'elapsed', '')::double precision,
-                        0.0
-                    ),
+                    COALESCE(t.progress_elapsed_s, 0.0),
                     CASE
                         WHEN NULLIF(t.created_at, '') IS NULL THEN 0.0
                         ELSE GREATEST(
@@ -5380,12 +5560,14 @@ def _leaderboard_postgres_recent_agg(conn: Any, cutoff_iso: str, window_end_iso:
                                 )
                             )
                         )
-                    END
+                    END,
+                    0.0
                 ) AS elapsed_s
             FROM mining_tasks t
             WHERE COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
               AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <= ?
               AND t.status IN ('running', 'completed')
+              AND (COALESCE(t.progress_combos_done, 0) > 0 OR COALESCE(t.progress_elapsed_s, 0.0) > 0.0)
         )
         SELECT
             u.username,
@@ -5586,13 +5768,19 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
         db_kind = _db_kind()
         if db_kind == "postgres":
             try:
-                recent_rows = _leaderboard_python_fallback(conn, cutoff_iso, window_end_iso)
+                recent_rows = _leaderboard_postgres_recent_agg(conn, cutoff_iso, window_end_iso)
                 results["combos"] = recent_rows.get("combos") or []
                 results["time"] = recent_rows.get("time") or []
-            except Exception as fallback_error:
-                print(f"[DB WARN] Leaderboard recent-task query failed: {fallback_error}")
-                results["combos"] = []
-                results["time"] = []
+            except Exception as agg_error:
+                print(f"[DB WARN] Leaderboard aggregate query failed: {agg_error}")
+                try:
+                    recent_rows = _leaderboard_python_fallback(conn, cutoff_iso, window_end_iso)
+                    results["combos"] = recent_rows.get("combos") or []
+                    results["time"] = recent_rows.get("time") or []
+                except Exception as fallback_error:
+                    print(f"[DB WARN] Leaderboard recent-task query failed: {fallback_error}")
+                    results["combos"] = []
+                    results["time"] = []
         else:
             done_expr, _, elapsed_expr = _get_progress_summary_columns(conn)
             sql_combos = """
@@ -6055,6 +6243,7 @@ def update_task_progress_with_lease(task_id: int, user_id: int, worker_id: str, 
 
     conn = _conn()
     try:
+        old_done = _read_task_done_counter(conn, tid)
         if bool(allow_cross_user):
             cur = conn.execute(
                 """
@@ -6096,9 +6285,13 @@ def update_task_progress_with_lease(task_id: int, user_id: int, worker_id: str, 
                     wid,
                 ),
             )
+        ok = int(cur.rowcount or 0) > 0
+        if ok:
+            _refresh_task_done_counter_delta(conn, tid, summary["combos_done"], old_done=old_done)
         conn.commit()
-        invalidate_global_dashboard_counters()
-        return int(cur.rowcount or 0) > 0
+        if ok:
+            invalidate_global_dashboard_counters()
+        return bool(ok)
     except Exception:
         return False
     finally:
@@ -6116,6 +6309,7 @@ def release_task_with_lease(task_id: int, user_id: int, worker_id: str, lease_id
 
     conn = _conn()
     try:
+        old_done = _read_task_done_counter(conn, tid)
         if bool(allow_cross_user):
             cur = conn.execute(
                 """
@@ -6153,9 +6347,13 @@ def release_task_with_lease(task_id: int, user_id: int, worker_id: str, lease_id
                     wid,
                 ),
             )
+        ok = int(cur.rowcount or 0) > 0
+        if ok:
+            _refresh_task_done_counter_delta(conn, tid, summary["combos_done"], old_done=old_done)
         conn.commit()
-        invalidate_global_dashboard_counters()
-        return int(cur.rowcount or 0) > 0
+        if ok:
+            invalidate_global_dashboard_counters()
+        return bool(ok)
     except Exception:
         return False
     finally:
@@ -6187,9 +6385,11 @@ def finish_task_with_lease(task_id: int, user_id: int, worker_id: str, lease_id:
         if not trow:
             conn.commit()
             return None
+        trow = dict(trow or {})
 
         owner_id = int(trow.get("user_id") or 0)
         pool_id = int(trow.get("pool_id") or 0)
+        old_done = _read_task_done_counter(conn, tid)
 
         cur = conn.execute(
             """
@@ -6213,6 +6413,7 @@ def finish_task_with_lease(task_id: int, user_id: int, worker_id: str, lease_id:
         if int(cur.rowcount or 0) <= 0:
             conn.commit()
             return None
+        _refresh_task_done_counter_delta(conn, tid, summary["combos_done"], old_done=old_done)
 
         best_candidate_id = None
         for c in list(candidates or []):
