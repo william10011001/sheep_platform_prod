@@ -10,6 +10,8 @@ from fastapi.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parents[1]
 APP_DIR = ROOT / "app"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
@@ -1163,6 +1165,23 @@ def test_generated_market_catalog_dry_run_succeeds(admin_client):
     assert body["strategies"]["errors"] == []
 
 
+def test_generated_active_fine_catalog_dry_run_succeeds(admin_client):
+    client = admin_client["client"]
+    headers = admin_client["headers"]
+    catalog_path = ROOT / "catalogs" / "admin_batch_market_catalog_active_fine_v1.json"
+
+    payload = json.loads(catalog_path.read_text(encoding="utf-8"))
+    res = client.post("/admin/catalog/import?dry_run=true", headers=headers, json=payload)
+    assert res.status_code == 200, res.text
+
+    body = res.json()
+    assert body["ok"] is True
+    assert body["factor_pools"]["create"] == len(payload["factor_pools"])
+    assert body["strategies"]["create"] == len(payload["strategies"])
+    assert body["factor_pools"]["errors"] == []
+    assert body["strategies"]["errors"] == []
+
+
 def test_generated_market_catalog_uses_postgres_safe_seed_range():
     catalog_path = ROOT / "catalogs" / "admin_batch_market_catalog_v1.json"
     payload = json.loads(catalog_path.read_text(encoding="utf-8"))
@@ -1170,6 +1189,21 @@ def test_generated_market_catalog_uses_postgres_safe_seed_range():
     assert seeds
     assert max(seeds) <= 2147483647
     assert min(seeds) >= 1
+
+
+def test_generated_active_fine_catalog_is_active_and_large_enough():
+    from tools.generate_admin_market_catalog import catalog_combo_total
+
+    catalog_path = ROOT / "catalogs" / "admin_batch_market_catalog_active_fine_v1.json"
+    payload = json.loads(catalog_path.read_text(encoding="utf-8"))
+
+    pools = list(payload.get("factor_pools") or [])
+    seeds = [int(item.get("seed") or 0) for item in pools]
+    assert pools
+    assert all(bool(item.get("active")) for item in pools)
+    assert max(seeds) <= 2147483647
+    assert min(seeds) >= 1
+    assert int(catalog_combo_total(payload)) >= 10_000_000
 
 
 def test_admin_html_includes_batch_catalog_import_controls(admin_client):

@@ -50,6 +50,12 @@ def _now_iso() -> str:
 
 
 _REVIEW_READY_CACHE: Dict[str, Any] = {"ts": 0.0, "values": {}, "retry_after": {}}
+_ACTIVE_POOL_CACHE: Dict[str, Any] = {
+    "values": {},
+    "expires": {},
+    "ttl": 30.0,
+    "lock": threading.Lock(),
+}
 
 
 def _env_timeout_ms(name: str, default: int) -> int:
@@ -58,6 +64,78 @@ def _env_timeout_ms(name: str, default: int) -> int:
     except Exception:
         value = int(default)
     return max(0, min(3600000, int(value)))
+
+
+def _active_pool_cache_key(cycle_id: int, preferred_family: str = "") -> str:
+    return f"{int(cycle_id)}::{str(preferred_family or '').strip()}"
+
+
+def _invalidate_active_pool_cache(cycle_id: Optional[int] = None) -> None:
+    lock = _ACTIVE_POOL_CACHE.get("lock")
+    if lock is None:
+        return
+    with lock:
+        values = dict(_ACTIVE_POOL_CACHE.get("values") or {})
+        expires = dict(_ACTIVE_POOL_CACHE.get("expires") or {})
+        if cycle_id is None:
+            values.clear()
+            expires.clear()
+        else:
+            prefix = f"{int(cycle_id)}::"
+            for key in [k for k in values.keys() if str(k).startswith(prefix)]:
+                values.pop(key, None)
+                expires.pop(key, None)
+        _ACTIVE_POOL_CACHE["values"] = values
+        _ACTIVE_POOL_CACHE["expires"] = expires
+
+
+def _pool_rows_to_cacheable(rows: Any) -> List[Dict[str, int]]:
+    normalized: List[Dict[str, int]] = []
+    for row in list(rows or []):
+        try:
+            pid = int(row["id"])
+            num_partitions = max(1, int(row["num_partitions"] or 1))
+        except Exception:
+            continue
+        normalized.append({"id": pid, "num_partitions": num_partitions})
+    return normalized
+
+
+def _list_active_assignment_pools(conn: Any, cycle_id: int, preferred_family: str = "") -> List[Dict[str, int]]:
+    cache_key = _active_pool_cache_key(cycle_id, preferred_family)
+    now_ts = time.time()
+    ttl = float(_ACTIVE_POOL_CACHE.get("ttl") or 30.0)
+    lock = _ACTIVE_POOL_CACHE.get("lock")
+    if lock is not None:
+        with lock:
+            expires = dict(_ACTIVE_POOL_CACHE.get("expires") or {})
+            values = dict(_ACTIVE_POOL_CACHE.get("values") or {})
+            if now_ts < float(expires.get(cache_key) or 0.0) and cache_key in values:
+                return [dict(row) for row in list(values.get(cache_key) or [])]
+
+    query = "SELECT id, num_partitions FROM factor_pools WHERE cycle_id = ? AND active = 1"
+    params: List[Any] = [int(cycle_id)]
+    if preferred_family:
+        query += " AND family = ?"
+        params.append(str(preferred_family))
+    rows = conn.execute(query, params).fetchall()
+    normalized = _pool_rows_to_cacheable(rows)
+    if not normalized and preferred_family:
+        rows = conn.execute(
+            "SELECT id, num_partitions FROM factor_pools WHERE cycle_id = ? AND active = 1",
+            (int(cycle_id),),
+        ).fetchall()
+        normalized = _pool_rows_to_cacheable(rows)
+
+    if lock is not None:
+        with lock:
+            values = dict(_ACTIVE_POOL_CACHE.get("values") or {})
+            expires = dict(_ACTIVE_POOL_CACHE.get("expires") or {})
+            values[cache_key] = [dict(row) for row in normalized]
+            expires[cache_key] = now_ts + ttl
+            _ACTIVE_POOL_CACHE["values"] = values
+            _ACTIVE_POOL_CACHE["expires"] = expires
+    return [dict(row) for row in normalized]
 
 
 def _in_docker() -> bool:
@@ -2285,15 +2363,7 @@ def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, m
                     break
                 
                 # 池列表查詢（維持原邏輯）
-                pools_query = "SELECT id, num_partitions FROM factor_pools WHERE cycle_id = ? AND active = 1"
-                params = [cycle_id]
-                if preferred_family:
-                    pools_query += " AND family = ?"
-                    params.append(preferred_family)
-                
-                pools = conn.execute(pools_query, params).fetchall()
-                if not pools and preferred_family:
-                    pools = conn.execute("SELECT id, num_partitions FROM factor_pools WHERE cycle_id = ? AND active = 1", (cycle_id,)).fetchall()
+                pools = _list_active_assignment_pools(conn, cycle_id, preferred_family)
                     
                 if not pools:
                     # 緊急繼承邏輯（維持原樣）
@@ -2309,7 +2379,8 @@ def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, m
                                 FROM factor_pools WHERE cycle_id = ? AND active = 1
                             """, (cycle_id, _now_iso(), source_cid))
                             conn.commit()
-                            pools = conn.execute("SELECT id, num_partitions FROM factor_pools WHERE cycle_id = ? AND active = 1", (cycle_id,)).fetchall()
+                            _invalidate_active_pool_cache(cycle_id)
+                            pools = _list_active_assignment_pools(conn, cycle_id, preferred_family)
                     except Exception as rescue_e:
                         conn.rollback()
                         import traceback
@@ -2322,10 +2393,11 @@ def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, m
                 # [改進] 使用集合快速查詢已佔用分區
                 assigned_count = 0
                 pool_list = [dict(p) for p in pools]
-                random.shuffle(pool_list)
-                sample_size = min(len(pool_list), max(32, needed * 8))
-                if sample_size > 0:
-                    pool_list = pool_list[:sample_size]
+                sample_size = min(len(pool_list), max(64, needed * 12))
+                if sample_size > 0 and sample_size < len(pool_list):
+                    pool_list = random.sample(pool_list, sample_size)
+                else:
+                    random.shuffle(pool_list)
                 now_str = _now_iso()
                 
                 for p in pool_list:
@@ -3328,6 +3400,7 @@ def create_factor_pool(
                 )
                 ids.append(int(cur.lastrowid))
         conn.commit()
+        _invalidate_active_pool_cache(cycle_id)
         return ids
     except Exception as e:
         print(f"[DB ERROR] create_factor_pool fatal: {e}")
@@ -3365,6 +3438,12 @@ def update_factor_pool(
 ) -> None:
     conn = _conn()
     try:
+        cycle_id = 0
+        try:
+            row = conn.execute("SELECT cycle_id FROM factor_pools WHERE id = ?", (int(pool_id),)).fetchone()
+            cycle_id = int((row or {}).get("cycle_id") or 0)
+        except Exception:
+            cycle_id = 0
         normalized_direction = normalize_direction(direction, reverse=parse_json_object(risk_spec).get("reverse_mode"), default="long")
         normalized_risk_spec = _normalize_risk_spec(normalized_direction, risk_spec)
         normalized_num_partitions = max(1, int(num_partitions or 1))
@@ -3394,6 +3473,7 @@ def update_factor_pool(
             )
         )
         conn.commit()
+        _invalidate_active_pool_cache(cycle_id or None)
     finally:
         conn.close()
 

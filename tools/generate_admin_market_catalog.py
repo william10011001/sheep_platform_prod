@@ -10,6 +10,7 @@ from typing import Any, Dict, List
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_PATH = REPO_ROOT / "catalogs" / "admin_batch_market_catalog_v1.json"
+ACTIVE_OUTPUT_PATH = REPO_ROOT / "catalogs" / "admin_batch_market_catalog_active_fine_v1.json"
 
 
 FAMILIES: List[str] = [
@@ -120,7 +121,14 @@ def stable_seed(key: str) -> int:
     return int(seed or 42)
 
 
-def risk_spec_for(profile: SymbolProfile, timeframe_min: int, direction: str, family: str) -> Dict[str, Any]:
+def risk_spec_for(
+    profile: SymbolProfile,
+    timeframe_min: int,
+    direction: str,
+    family: str,
+    *,
+    fine_grain: bool = False,
+) -> Dict[str, Any]:
     risk = float(profile.risk_factor)
     tf = int(timeframe_min)
     hold_map = {
@@ -130,6 +138,8 @@ def risk_spec_for(profile: SymbolProfile, timeframe_min: int, direction: str, fa
         240: (6, 36, 6),
     }
     mh_min, mh_max, mh_step = hold_map.get(tf, (12, 72, 12))
+    if fine_grain:
+        mh_step = max(1, int(math.ceil(float(mh_step) / 2.0)))
     if family in {"TEMA_RSI", "LaguerreRSI_TEMA"}:
         return {
             "max_hold_min": int(mh_min),
@@ -657,19 +667,35 @@ def midpoint_family_params(family: str, grid_spec: Dict[str, Any], direction: st
     raise ValueError(f"unsupported family midpoint: {family}")
 
 
-def choose_partitions(profile: SymbolProfile, family: str, total_combos: int) -> int:
-    if family in {"OB_FVG", "TEMA_RSI"}:
-        target = 120
-    elif family in {"LaguerreRSI_TEMA", "Volatility_Squeeze", "MACD_Cross", "PPO_Cross", "PVO_Cross"}:
-        target = 180
+def choose_partitions(
+    profile: SymbolProfile,
+    family: str,
+    total_combos: int,
+    *,
+    fine_grain: bool = False,
+) -> int:
+    if fine_grain:
+        if family in {"OB_FVG", "TEMA_RSI"}:
+            target = 96
+        elif family in {"LaguerreRSI_TEMA", "Volatility_Squeeze", "MACD_Cross", "PPO_Cross", "PVO_Cross"}:
+            target = 144
+        else:
+            target = 192
+        max_partitions = 128
     else:
-        target = 240
+        if family in {"OB_FVG", "TEMA_RSI"}:
+            target = 120
+        elif family in {"LaguerreRSI_TEMA", "Volatility_Squeeze", "MACD_Cross", "PPO_Cross", "PVO_Cross"}:
+            target = 180
+        else:
+            target = 240
+        max_partitions = 64
     target = int(target / max(0.8, min(1.35, profile.risk_factor)))
     partitions = max(1, math.ceil(int(total_combos) / max(1, target)))
-    return max(4, min(64, int(partitions)))
+    return max(4, min(max_partitions, int(partitions)))
 
 
-def build_catalog() -> Dict[str, Any]:
+def build_catalog(*, active_pools: bool = False, fine_grain: bool = False) -> Dict[str, Any]:
     factor_pools: List[Dict[str, Any]] = []
     strategies: List[Dict[str, Any]] = []
     for profile in SYMBOLS:
@@ -679,23 +705,46 @@ def build_catalog() -> Dict[str, Any]:
                 for direction in profile.directions:
                     key = f"mktv1__{profile.symbol.lower()}__{tf_text}__{family.lower()}__{direction}"
                     grid_spec = grid_spec_for(profile, timeframe_min, direction, family)
-                    risk_spec = risk_spec_for(profile, timeframe_min, direction, family)
+                    risk_spec = risk_spec_for(profile, timeframe_min, direction, family, fine_grain=fine_grain)
                     total_combos = family_combo_count(family, grid_spec) * risk_combo_count(family, risk_spec)
-                    partitions = choose_partitions(profile, family, total_combos)
+                    partitions = choose_partitions(profile, family, total_combos, fine_grain=fine_grain)
                     pool_name = f"{profile.symbol} {tf_text} {family} {direction.upper()}"
-                    factor_pools.append({"key": key, "name": pool_name, "symbol": profile.symbol, "family": family, "direction": direction, "timeframe_min": int(timeframe_min), "years": int(profile.years), "grid_spec": grid_spec, "risk_spec": risk_spec, "num_partitions": partitions, "seed": stable_seed(key), "active": False, "auto_expand": False})
+                    factor_pools.append({"key": key, "name": pool_name, "symbol": profile.symbol, "family": family, "direction": direction, "timeframe_min": int(timeframe_min), "years": int(profile.years), "grid_spec": grid_spec, "risk_spec": risk_spec, "num_partitions": partitions, "seed": stable_seed(key), "active": bool(active_pools), "auto_expand": False})
                     family_params = midpoint_family_params(family, grid_spec, direction)
                     strategies.append({"key": f"{key}__template", "name": f"{pool_name} Template", "family": family, "symbol": profile.symbol, "direction": direction, "interval": tf_text, "family_params": family_params, "tp_pct": float(family_params.get("tp_pct_strat", 0.0) or 0.0), "sl_pct": float(family_params.get("sl_pct_strat", 0.0) or 0.0), "max_hold_bars": int((int(risk_spec["max_hold_min"]) + int(risk_spec["max_hold_max"])) // 2), "stake_pct": 0.0, "status": "disabled", "enabled": False})
     return {"schema_version": 1, "factor_pools": factor_pools, "strategies": strategies}
 
 
+def catalog_combo_total(payload: Dict[str, Any]) -> int:
+    total = 0
+    for pool in list(payload.get("factor_pools") or []):
+        family = str(pool.get("family") or "")
+        grid_spec = dict(pool.get("grid_spec") or {})
+        risk_spec = dict(pool.get("risk_spec") or {})
+        total += int(family_combo_count(family, grid_spec) * risk_combo_count(family, risk_spec))
+    return int(total)
+
+
+def catalog_partition_total(payload: Dict[str, Any]) -> int:
+    return int(sum(int(pool.get("num_partitions") or 0) for pool in list(payload.get("factor_pools") or [])))
+
+
 def main() -> None:
-    payload = build_catalog()
+    payload = build_catalog(active_pools=False, fine_grain=False)
+    active_payload = build_catalog(active_pools=True, fine_grain=True)
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUTPUT_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    ACTIVE_OUTPUT_PATH.write_text(json.dumps(active_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"Wrote {OUTPUT_PATH}")
     print(f"factor_pools={len(payload['factor_pools'])}")
     print(f"strategies={len(payload['strategies'])}")
+    print(f"combos={catalog_combo_total(payload)}")
+    print(f"partitions={catalog_partition_total(payload)}")
+    print(f"Wrote {ACTIVE_OUTPUT_PATH}")
+    print(f"factor_pools={len(active_payload['factor_pools'])}")
+    print(f"strategies={len(active_payload['strategies'])}")
+    print(f"combos={catalog_combo_total(active_payload)}")
+    print(f"partitions={catalog_partition_total(active_payload)}")
 
 
 if __name__ == "__main__":
