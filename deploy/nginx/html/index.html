@@ -235,6 +235,25 @@
                         </button>
                     </div>
                 </form>
+                <div class="mt-8 border-t border-white/10 pt-6 space-y-4">
+                    <div class="flex items-center justify-between gap-3">
+                        <div>
+                            <div class="text-sm font-semibold text-white">最新公告</div>
+                            <div class="mt-1 text-xs text-slate-400">未登入也能即時看到站內更新。</div>
+                        </div>
+                        <button @click="loadPublicAnnouncements()" class="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 hover:bg-white/5">重新整理</button>
+                    </div>
+                    <div class="space-y-3 max-h-[28rem] overflow-auto pr-1">
+                        <button v-for="item in publicAnnouncements" :key="`public-ann-login-${item.id}`" @click="selectAnnouncement(item)" class="w-full rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-left hover:bg-white/[0.06] transition-colors">
+                            <div class="text-xs text-slate-500">{{ formatDate(item.published_at || item.updated_at || item.created_at) }}</div>
+                            <div class="mt-2 text-sm font-semibold text-white">{{ item.title }}</div>
+                            <div class="mt-2 text-xs leading-6 text-slate-400">{{ item.preview_text }}</div>
+                        </button>
+                        <div v-if="publicAnnouncements.length === 0" class="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-sm text-slate-500">
+                            目前尚無公告。
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <div v-else-if="user" class="space-y-6">
@@ -407,7 +426,7 @@
                         </div>
                     </div>
 
-                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
+                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-7 gap-4">
                         <div v-for="card in dashboardSummaryCards" :key="card.key" class="cyber-card p-4 text-center">
                             <div class="flex items-center justify-center gap-2">
                                 <div class="text-xs text-slate-200">{{ card.title }}</div>
@@ -419,6 +438,42 @@
                             <div class="mt-3 text-3xl text-white cyber-num">{{ card.value }}</div>
                             <div v-if="card.meta" class="mt-2 text-[11px] leading-5 text-slate-400">{{ card.meta }}</div>
                             <div v-if="card.warning" class="mt-2 text-[11px] leading-5 text-slate-300">{{ card.warning }}</div>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 xl:grid-cols-[0.95fr_1.05fr] gap-4">
+                        <div class="cyber-card p-4 sm:p-5 space-y-4">
+                            <div class="flex items-center justify-between gap-3">
+                                <div>
+                                    <h3 class="text-lg font-bold text-white">站內公告</h3>
+                                    <div class="mt-1 text-xs text-slate-400">管理員發布後，這裡會即時更新。</div>
+                                </div>
+                                <button @click="loadPublicAnnouncements()" class="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 hover:bg-white/5">重新整理</button>
+                            </div>
+                            <div class="space-y-3">
+                                <button v-for="item in publicAnnouncements.slice(0, 5)" :key="`dash-ann-${item.id}`" @click="selectAnnouncement(item)" class="w-full rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-left hover:bg-white/[0.06] transition-colors">
+                                    <div class="text-xs text-slate-500">{{ formatDate(item.published_at || item.updated_at || item.created_at) }}</div>
+                                    <div class="mt-2 text-sm font-semibold text-white">{{ item.title }}</div>
+                                    <div class="mt-2 text-xs leading-6 text-slate-400">{{ item.preview_text }}</div>
+                                </button>
+                                <div v-if="publicAnnouncements.length === 0" class="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-sm text-slate-500">
+                                    目前尚無公告。
+                                </div>
+                            </div>
+                        </div>
+                        <div class="cyber-card p-4 sm:p-5 space-y-4">
+                            <div>
+                                <div class="text-xs uppercase tracking-[0.2em] text-slate-500">Announcement Preview</div>
+                                <h3 class="mt-2 text-2xl font-bold text-white">{{ selectedAnnouncement?.title || '選擇左側公告查看完整內容' }}</h3>
+                                <div class="mt-2 text-xs text-slate-500">{{ formatDate(selectedAnnouncement?.published_at || selectedAnnouncement?.updated_at || selectedAnnouncement?.created_at) }}</div>
+                            </div>
+                            <div v-if="selectedAnnouncement" class="rounded-2xl border border-white/10 bg-black/20 p-4">
+                                <div class="text-sm leading-7 text-slate-300 whitespace-pre-wrap">{{ selectedAnnouncement.preview_text }}</div>
+                                <div class="mt-4 border-t border-white/10 pt-4 text-sm leading-7 text-slate-200" v-html="selectedAnnouncement.body_html || ''"></div>
+                            </div>
+                            <div v-else class="rounded-2xl border border-dashed border-white/10 px-4 py-12 text-center text-sm text-slate-500">
+                                最新公告會在這裡顯示完整內容。
+                            </div>
                         </div>
                     </div>
 
@@ -838,6 +893,7 @@
                         
                         <div class="flex gap-4 border-b border-white/10 mb-6 overflow-x-auto">
                             <button @click="adminSubTab = 'thresholds'" :class="adminSubTab === 'thresholds' ? 'text-white border-b-2 border-white/40 font-bold' : 'text-gray-400 hover:text-white'" class="pb-2 whitespace-nowrap">達標門檻設定</button>
+                            <button @click="adminSubTab = 'announcements'; loadAdminAnnouncements();" :class="adminSubTab === 'announcements' ? 'text-white border-b-2 border-white/40 font-bold' : 'text-gray-400 hover:text-white'" class="pb-2 whitespace-nowrap">公告管理</button>
                             <button @click="adminSubTab = 'pools'" :class="adminSubTab === 'pools' ? 'text-white border-b-2 border-white/40 font-bold' : 'text-gray-400 hover:text-white'" class="pb-2 whitespace-nowrap">策略池參數修改</button>
                             <button @click="adminSubTab = 'livestrats'" :class="adminSubTab === 'livestrats' ? 'text-white border-b-2 border-white/40 font-bold' : 'text-gray-400 hover:text-white'" class="pb-2 whitespace-nowrap">實盤因子池狀態</button>
                             <button @click="adminSubTab = 'catalogImport'" :class="adminSubTab === 'catalogImport' ? 'text-white border-b-2 border-white/40 font-bold' : 'text-gray-400 hover:text-white'" class="pb-2 whitespace-nowrap">批次 JSON 匯入</button>
@@ -854,6 +910,8 @@
                                 <div><label class="block text-xs text-gray-400 mb-1">最大回撤容忍 (%)</label><input v-model.number="adminThresholds.max_drawdown_pct" type="number" step="0.1" class="cyber-input w-full px-3 py-2 rounded"></div>
                                 <div><label class="block text-xs text-gray-400 mb-1">最小夏普指標 (Sharpe)</label><input v-model.number="adminThresholds.min_sharpe" type="number" step="0.01" class="cyber-input w-full px-3 py-2 rounded"></div>
                                 <div><label class="block text-xs text-gray-400 mb-1">單次任務最多保留候選數</label><input v-model.number="adminThresholds.candidate_keep_top_n" type="number" class="cyber-input w-full px-3 py-2 rounded"></div>
+                                <div><label class="block text-xs text-gray-400 mb-1">全域手續費 (%)</label><input v-model.number="adminThresholds.global_fee_pct" type="number" step="0.001" class="cyber-input w-full px-3 py-2 rounded"></div>
+                                <div><label class="block text-xs text-gray-400 mb-1">全域滑點 (%)</label><input v-model.number="adminThresholds.global_slippage_pct" type="number" step="0.001" class="cyber-input w-full px-3 py-2 rounded"></div>
                             </div>
                             <button @click="saveThresholds" class="mt-4 rounded-xl border border-white/10 px-6 py-2 text-sm font-semibold text-slate-100 hover:bg-white/5">覆寫並儲存全域門檻</button>
 
@@ -869,6 +927,96 @@
                                 <div class="flex flex-wrap gap-2">
                                     <button @click="saveDefaultAvatar" class="rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-100 hover:bg-white/5">設定所有人的預設大頭貼</button>
                                     <button @click="clearDefaultAvatar" class="rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-300 hover:bg-white/5">清除自訂預設頭像</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div v-if="adminSubTab === 'announcements'" class="space-y-6">
+                            <div class="grid grid-cols-1 xl:grid-cols-[1.1fr_0.9fr] gap-4">
+                                <div class="rounded-2xl border border-white/10 bg-black/30 p-4 space-y-4">
+                                    <div class="flex items-center justify-between gap-3">
+                                        <div>
+                                            <div class="text-lg font-bold text-white">公告編輯器</div>
+                                            <div class="mt-1 text-xs text-slate-400">支援標題、預覽文字、內文與草稿/發布狀態。</div>
+                                        </div>
+                                        <button @click="resetAnnouncementEditor()" class="rounded-xl border border-white/10 px-3 py-2 text-xs text-slate-300 hover:bg-white/5">新增草稿</button>
+                                    </div>
+                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                        <div class="md:col-span-2">
+                                            <label class="block text-xs text-gray-400 mb-1">標題</label>
+                                            <input v-model.trim="announcementEditor.title" type="text" class="cyber-input w-full px-3 py-2 rounded" placeholder="輸入公告標題">
+                                        </div>
+                                        <div>
+                                            <label class="block text-xs text-gray-400 mb-1">Slug</label>
+                                            <input v-model.trim="announcementEditor.slug" type="text" class="cyber-input w-full px-3 py-2 rounded" placeholder="可留空自動生成">
+                                        </div>
+                                        <div>
+                                            <label class="block text-xs text-gray-400 mb-1">狀態</label>
+                                            <select v-model="announcementEditor.status" class="cyber-input w-full px-3 py-2 rounded">
+                                                <option value="draft">draft</option>
+                                                <option value="published">published</option>
+                                            </select>
+                                        </div>
+                                        <div class="md:col-span-2">
+                                            <label class="block text-xs text-gray-400 mb-1">預覽文字</label>
+                                            <textarea v-model.trim="announcementEditor.preview_text" class="cyber-input w-full px-3 py-2 rounded h-20" placeholder="列表卡片會顯示這段預覽文字"></textarea>
+                                        </div>
+                                        <div class="md:col-span-2">
+                                            <label class="block text-xs text-gray-400 mb-1">內文 Markdown</label>
+                                            <textarea v-model="announcementEditor.body_markdown" class="cyber-input w-full px-3 py-2 rounded h-64 font-mono text-xs" placeholder="# 公告標題&#10;&#10;輸入完整公告內容"></textarea>
+                                        </div>
+                                    </div>
+                                    <div class="flex flex-wrap gap-2">
+                                        <button @click="saveAnnouncement" class="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-500">儲存公告</button>
+                                        <button v-if="announcementEditor.id" @click="publishAnnouncement(announcementEditor.id)" class="rounded-xl border border-emerald-500/30 px-4 py-2 text-sm text-emerald-300 hover:bg-emerald-500/10">立即發布</button>
+                                        <button v-if="announcementEditor.id" @click="unpublishAnnouncement(announcementEditor.id)" class="rounded-xl border border-amber-500/30 px-4 py-2 text-sm text-amber-300 hover:bg-amber-500/10">撤回為草稿</button>
+                                    </div>
+                                </div>
+
+                                <div class="rounded-2xl border border-white/10 bg-black/30 p-4 space-y-4">
+                                    <div class="flex items-center justify-between gap-3">
+                                        <div>
+                                            <div class="text-lg font-bold text-white">公告清單</div>
+                                            <div class="mt-1 text-xs text-slate-400">公開文章與草稿都會顯示在這裡。</div>
+                                        </div>
+                                        <div class="text-xs text-slate-500">共 {{ adminAnnouncementTotal }}</div>
+                                    </div>
+                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                        <input v-model.trim="adminAnnouncementFilters.q" type="text" class="cyber-input w-full px-3 py-2 rounded text-sm" placeholder="搜尋標題 / 預覽">
+                                        <select v-model="adminAnnouncementFilters.status" class="cyber-input w-full px-3 py-2 rounded text-sm">
+                                            <option value="">全部狀態</option>
+                                            <option value="draft">draft</option>
+                                            <option value="published">published</option>
+                                        </select>
+                                    </div>
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <button @click="loadAdminAnnouncements(true)" class="rounded-xl border border-white/10 px-4 py-2 text-sm text-slate-100 hover:bg-white/5">重新載入</button>
+                                        <div class="ml-auto flex items-center gap-2 text-xs text-slate-400">
+                                            <button @click="changeAdminAnnouncementPage(-1)" :disabled="adminAnnouncementPage <= 1" class="rounded-lg border border-white/10 px-3 py-1.5 transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-40">上一頁</button>
+                                            <span>第 {{ adminAnnouncementPage }} / {{ adminAnnouncementTotalPages }} 頁</span>
+                                            <button @click="changeAdminAnnouncementPage(1)" :disabled="adminAnnouncementPage >= adminAnnouncementTotalPages" class="rounded-lg border border-white/10 px-3 py-1.5 transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-40">下一頁</button>
+                                        </div>
+                                    </div>
+                                    <div class="space-y-3 max-h-[38rem] overflow-auto pr-1">
+                                        <button v-for="item in adminAnnouncements" :key="`admin-ann-${item.id}`" @click="editAnnouncement(item)" class="w-full rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-left hover:bg-white/[0.06] transition-colors">
+                                            <div class="flex items-start justify-between gap-3">
+                                                <div class="min-w-0">
+                                                    <div class="text-sm font-semibold text-white truncate">{{ item.title || '(未命名公告)' }}</div>
+                                                    <div class="mt-1 text-xs text-slate-400">{{ item.preview_text || '尚未填寫預覽文字' }}</div>
+                                                </div>
+                                                <div class="shrink-0 rounded-full px-2.5 py-1 text-[11px]" :class="item.status === 'published' ? 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/20' : 'bg-amber-500/10 text-amber-300 border border-amber-500/20'">
+                                                    {{ item.status }}
+                                                </div>
+                                            </div>
+                                            <div class="mt-3 flex flex-wrap items-center gap-3 text-[11px] text-slate-500">
+                                                <span>{{ formatDate(item.published_at || item.updated_at || item.created_at) }}</span>
+                                                <span>/{{ item.slug }}</span>
+                                            </div>
+                                        </button>
+                                        <div v-if="adminAnnouncements.length === 0" class="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-sm text-slate-500">
+                                            目前沒有符合條件的公告。
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -1115,6 +1263,8 @@
                 const activeHelpKey = ref('');
                 const dashData = reactive({
                     tasks_count: 0,
+                    total_strategy_pool_combo_count: 0,
+                    global_mined_combo_count: 0,
                     strategies_active: 0,
                     personal_live_strategies_active: 0,
                     personal_live_strategies_reviewed_label: '個人過審策略',
@@ -1142,6 +1292,7 @@
                     runtime_position_items: [],
                     runtime_sync: null,
                     payouts_unpaid: 0,
+                    announcements: [],
                     strategies: [],
                     payouts: [],
                     min_sharpe: 0.6
@@ -1155,6 +1306,7 @@
                     dashboard_version: '',
                     leaderboard_version: '',
                     runtime_version: '',
+                    announcement_version: '',
                 });
                 const devtoolsTripped = ref(false);
                 const activeLeaderboardKey = ref('combos');
@@ -1332,7 +1484,7 @@
 
                 // 管理員專屬狀態
                 const adminSubTab = ref('thresholds');
-                const adminThresholds = reactive({ min_trades: 30, min_total_return_pct: 3.0, max_drawdown_pct: 25.0, min_sharpe: 0.6, candidate_keep_top_n: 30 });
+                const adminThresholds = reactive({ min_trades: 30, min_total_return_pct: 3.0, max_drawdown_pct: 25.0, min_sharpe: 0.6, candidate_keep_top_n: 30, global_fee_pct: 0.06, global_slippage_pct: 0.02 });
                 const adminPools = ref([]);
                 const adminStrats = ref([]);
                 const adminError = ref('');
@@ -1345,12 +1497,27 @@
                 const adminStratHasNext = ref(false);
                 const catalogImportText = ref('');
                 const catalogImportResult = ref(null);
+                const publicAnnouncements = ref([]);
+                const selectedAnnouncement = ref(null);
+                const adminAnnouncements = ref([]);
+                const adminAnnouncementTotal = ref(0);
+                const adminAnnouncementPage = ref(1);
+                const adminAnnouncementPageSize = ref(10);
+                const adminAnnouncementFilters = reactive({ q: '', status: '' });
+                const announcementEditor = reactive({ id: 0, title: '', slug: '', preview_text: '', body_markdown: '', status: 'draft' });
+                let announcementSocket = null;
+                let announcementFeedEnabled = false;
+                const adminAnnouncementTotalPages = computed(() => Math.max(1, Math.ceil(Number(adminAnnouncementTotal.value || 0) / Math.max(1, Number(adminAnnouncementPageSize.value || 10)))));
+                const extraDashboardHelpTexts = {
+                    total_pool_combos: '所有策略池目前設定的參數空間總量，也就是真正會被展開搜尋的組合數總和。',
+                    global_mined_combos: '所有使用者歷史上實際已跑過的組合數總和，包含未達標、失敗、重試與重跑。',
+                };
 
                 const closeHelp = () => { activeHelpKey.value = ''; };
                 const toggleHelp = (key) => {
                     activeHelpKey.value = activeHelpKey.value === key ? '' : key;
                 };
-                const dashboardHelpText = (key) => dashboardHelpTexts[key] || '';
+                const dashboardHelpText = (key) => extraDashboardHelpTexts[key] || dashboardHelpTexts[key] || '';
                 const formatPct = (value, appendUnit = true) => {
                     const num = Number(value);
                     if (!Number.isFinite(num)) return '-';
@@ -1367,6 +1534,20 @@
                         title: '已完成任務',
                         value: dashData.tasks_count || 0,
                         meta: '個人挖礦跑好的任務總數',
+                        warning: '',
+                    },
+                    {
+                        key: 'total_pool_combos',
+                        title: '總策略池參數總數',
+                        value: Number(dashData.total_strategy_pool_combo_count || 0).toLocaleString('en-US'),
+                        meta: '全站所有策略池目前參數組合總量',
+                        warning: '',
+                    },
+                    {
+                        key: 'global_mined_combos',
+                        title: '全域已挖出總組合數',
+                        value: Number(dashData.global_mined_combo_count || 0).toLocaleString('en-US'),
+                        meta: '所有使用者累計已實際跑過的組合數',
                         warning: '',
                     },
                     {
@@ -1492,8 +1673,164 @@
                     min_total_return_pct: Number(data.min_total_return_pct ?? 3.0),
                     max_drawdown_pct: Number(data.max_drawdown_pct ?? 25.0),
                     min_sharpe: Number(data.min_sharpe ?? 0.6),
-                    candidate_keep_top_n: Number(data.candidate_keep_top_n ?? data.keep_top_n ?? 30)
+                    candidate_keep_top_n: Number(data.candidate_keep_top_n ?? data.keep_top_n ?? 30),
+                    global_fee_pct: Number(data.global_fee_pct ?? 0.06),
+                    global_slippage_pct: Number(data.global_slippage_pct ?? 0.02)
                 });
+
+                const selectAnnouncement = (item) => {
+                    selectedAnnouncement.value = item ? { ...item } : null;
+                };
+
+                const resetAnnouncementEditor = () => {
+                    announcementEditor.id = 0;
+                    announcementEditor.title = '';
+                    announcementEditor.slug = '';
+                    announcementEditor.preview_text = '';
+                    announcementEditor.body_markdown = '';
+                    announcementEditor.status = 'draft';
+                };
+
+                const editAnnouncement = (item) => {
+                    announcementEditor.id = Number(item?.id || 0);
+                    announcementEditor.title = String(item?.title || '');
+                    announcementEditor.slug = String(item?.slug || '');
+                    announcementEditor.preview_text = String(item?.preview_text || '');
+                    announcementEditor.body_markdown = String(item?.body_markdown || '');
+                    announcementEditor.status = String(item?.status || 'draft');
+                };
+
+                const loadPublicAnnouncements = async () => {
+                    const res = await fetchApi('/announcements?page=1&page_size=8');
+                    publicAnnouncements.value = Array.isArray(res.items) ? res.items : [];
+                    if (publicAnnouncements.value.length > 0) {
+                        const currentId = Number(selectedAnnouncement.value?.id || 0);
+                        const matched = publicAnnouncements.value.find(item => Number(item.id || 0) === currentId);
+                        selectedAnnouncement.value = matched || publicAnnouncements.value[0];
+                    } else {
+                        selectedAnnouncement.value = null;
+                    }
+                    if (res.announcement_version) {
+                        liveVersions.announcement_version = res.announcement_version;
+                    }
+                    return res;
+                };
+
+                const loadAdminAnnouncements = async (resetPage = false) => {
+                    if (!user.value || user.value.role !== 'admin') return;
+                    if (resetPage) adminAnnouncementPage.value = 1;
+                    const params = new URLSearchParams({
+                        page: String(adminAnnouncementPage.value || 1),
+                        page_size: String(adminAnnouncementPageSize.value || 10),
+                    });
+                    if (adminAnnouncementFilters.q) params.set('q', adminAnnouncementFilters.q);
+                    if (adminAnnouncementFilters.status) params.set('status', adminAnnouncementFilters.status);
+                    const res = await fetchApi(`/admin/announcements?${params.toString()}`);
+                    adminAnnouncements.value = Array.isArray(res.items) ? res.items : [];
+                    adminAnnouncementTotal.value = Number(res.total || 0);
+                    return res;
+                };
+
+                const changeAdminAnnouncementPage = async (delta) => {
+                    const nextPage = Math.min(
+                        Math.max(1, adminAnnouncementPage.value + Number(delta || 0)),
+                        adminAnnouncementTotalPages.value
+                    );
+                    if (nextPage === adminAnnouncementPage.value) return;
+                    adminAnnouncementPage.value = nextPage;
+                    await loadAdminAnnouncements(false);
+                };
+
+                const saveAnnouncement = async () => {
+                    try {
+                        adminError.value = '';
+                        const payload = {
+                            title: announcementEditor.title,
+                            slug: announcementEditor.slug,
+                            preview_text: announcementEditor.preview_text,
+                            body_markdown: announcementEditor.body_markdown,
+                            status: announcementEditor.status || 'draft',
+                        };
+                        let res;
+                        if (Number(announcementEditor.id || 0) > 0) {
+                            res = await fetchApi(`/admin/announcements/${announcementEditor.id}`, {
+                                method: 'PUT',
+                                body: JSON.stringify(payload),
+                            });
+                        } else {
+                            res = await fetchApi('/admin/announcements', {
+                                method: 'POST',
+                                body: JSON.stringify(payload),
+                            });
+                        }
+                        if (res?.item) editAnnouncement(res.item);
+                        await Promise.allSettled([loadPublicAnnouncements(), loadAdminAnnouncements()]);
+                        showToast('公告已儲存。', 'success', 3000);
+                    } catch (e) {
+                        showToast(`公告儲存失敗：${e.message}`, 'error', 4000);
+                    }
+                };
+
+                const publishAnnouncement = async (id) => {
+                    try {
+                        const res = await fetchApi(`/admin/announcements/${id}/publish`, { method: 'POST' });
+                        if (res?.item) editAnnouncement(res.item);
+                        await Promise.allSettled([loadPublicAnnouncements(), loadAdminAnnouncements()]);
+                        showToast('公告已發布。', 'success', 3000);
+                    } catch (e) {
+                        showToast(`公告發布失敗：${e.message}`, 'error', 4000);
+                    }
+                };
+
+                const unpublishAnnouncement = async (id) => {
+                    try {
+                        const res = await fetchApi(`/admin/announcements/${id}/unpublish`, { method: 'POST' });
+                        if (res?.item) editAnnouncement(res.item);
+                        await Promise.allSettled([loadPublicAnnouncements(), loadAdminAnnouncements()]);
+                        showToast('公告已撤回為草稿。', 'success', 3000);
+                    } catch (e) {
+                        showToast(`公告撤回失敗：${e.message}`, 'error', 4000);
+                    }
+                };
+
+                const disconnectAnnouncementFeed = () => {
+                    announcementFeedEnabled = false;
+                    if (announcementSocket) {
+                        try { announcementSocket.close(); } catch (_err) {}
+                        announcementSocket = null;
+                    }
+                };
+
+                const connectAnnouncementFeed = () => {
+                    disconnectAnnouncementFeed();
+                    announcementFeedEnabled = true;
+                    try {
+                        const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                        announcementSocket = new WebSocket(`${wsProto}//${window.location.host}${API_BASE}/ws/announcements`);
+                        announcementSocket.onmessage = async (event) => {
+                            try {
+                                const payload = JSON.parse(event.data || '{}');
+                                if (payload?.announcement_version) {
+                                    liveVersions.announcement_version = payload.announcement_version;
+                                }
+                                await loadPublicAnnouncements();
+                                if (user.value?.role === 'admin' && currentTab.value === 'admin' && adminSubTab.value === 'announcements') {
+                                    await loadAdminAnnouncements();
+                                }
+                            } catch (e) {
+                                console.error('[announcement websocket parse failed]', e);
+                            }
+                        };
+                        announcementSocket.onclose = () => {
+                            announcementSocket = null;
+                            setTimeout(() => {
+                                if (announcementFeedEnabled && !announcementSocket) connectAnnouncementFeed();
+                            }, 3000);
+                        };
+                    } catch (e) {
+                        console.error('[announcement websocket connect failed]', e);
+                    }
+                };
 
                 const loadAdminStrategies = async ({ resetPage = false } = {}) => {
                     if (!user.value || user.value.role !== 'admin') return;
@@ -1597,6 +1934,7 @@
                         await Promise.all([
                             loadAdminStrategies({ resetPage: false }),
                             loadAdminDiagnostics(),
+                            loadAdminAnnouncements(false),
                         ]);
                     } catch(e) {
                         adminError.value = `管理資料同步失敗: ${e.message}`;
@@ -1614,7 +1952,9 @@
                                 min_total_return_pct: Number(adminThresholds.min_total_return_pct),
                                 max_drawdown_pct: Number(adminThresholds.max_drawdown_pct),
                                 min_sharpe: Number(adminThresholds.min_sharpe),
-                                candidate_keep_top_n: Number(adminThresholds.candidate_keep_top_n)
+                                candidate_keep_top_n: Number(adminThresholds.candidate_keep_top_n),
+                                global_fee_pct: Number(adminThresholds.global_fee_pct),
+                                global_slippage_pct: Number(adminThresholds.global_slippage_pct),
                             })
                         });
                         await loadAdminData();
@@ -1957,6 +2297,15 @@
                     if (payload?.dashboard_version) {
                         liveVersions.dashboard_version = payload.dashboard_version;
                     }
+                    if (payload?.announcement_version) {
+                        liveVersions.announcement_version = payload.announcement_version;
+                    }
+                    if (Array.isArray(payload?.announcements) && payload.announcements.length > 0) {
+                        publicAnnouncements.value = payload.announcements;
+                        const currentId = Number(selectedAnnouncement.value?.id || 0);
+                        const matched = publicAnnouncements.value.find(item => Number(item.id || 0) === currentId);
+                        selectedAnnouncement.value = matched || publicAnnouncements.value[0];
+                    }
                 };
 
                 const applyLeaderboardData = (payload = {}) => {
@@ -2072,10 +2421,12 @@
                         const dashboardChanged = !!liveVersions.dashboard_version && res.dashboard_version !== liveVersions.dashboard_version;
                         const leaderboardChanged = !!liveVersions.leaderboard_version && res.leaderboard_version !== liveVersions.leaderboard_version;
                         const runtimeChanged = !!liveVersions.runtime_version && res.runtime_version !== liveVersions.runtime_version;
+                        const announcementChanged = !!liveVersions.announcement_version && res.announcement_version !== liveVersions.announcement_version;
 
                         if (!liveVersions.dashboard_version) liveVersions.dashboard_version = res.dashboard_version || '';
                         if (!liveVersions.leaderboard_version) liveVersions.leaderboard_version = res.leaderboard_version || '';
                         if (!liveVersions.runtime_version) liveVersions.runtime_version = res.runtime_version || '';
+                        if (!liveVersions.announcement_version) liveVersions.announcement_version = res.announcement_version || '';
 
                         if (dashboardChanged || runtimeChanged) {
                             await loadDashboardData();
@@ -2083,16 +2434,23 @@
                         if (leaderboardChanged || !leaderboardState.hasLoaded) {
                             await loadLeaderboardData({ silent: true, preserveExisting: true });
                         }
+                        if (announcementChanged) {
+                            await loadPublicAnnouncements();
+                        }
                         if (user.value?.role === 'admin' && currentTab.value === 'admin' && (dashboardChanged || runtimeChanged)) {
                             await Promise.allSettled([
                                 loadAdminStrategies({ resetPage: false }),
                                 loadAdminDiagnostics(),
                             ]);
                         }
+                        if (user.value?.role === 'admin' && currentTab.value === 'admin' && adminSubTab.value === 'announcements' && announcementChanged) {
+                            await loadAdminAnnouncements(false);
+                        }
 
                         liveVersions.dashboard_version = res.dashboard_version || liveVersions.dashboard_version;
                         liveVersions.leaderboard_version = res.leaderboard_version || liveVersions.leaderboard_version;
                         liveVersions.runtime_version = res.runtime_version || liveVersions.runtime_version;
+                        liveVersions.announcement_version = res.announcement_version || liveVersions.announcement_version;
                     } catch (e) {
                         console.error('[live/version 輪詢失敗]', e);
                     }
@@ -2599,10 +2957,22 @@
                     await refreshAdminStrategies(true);
                 });
 
+                watch(adminAnnouncementPageSize, async (next, prev) => {
+                    if (next === prev || !user.value || user.value.role !== 'admin') return;
+                    adminAnnouncementPage.value = 1;
+                    await loadAdminAnnouncements(true);
+                });
+
                 watch(currentTab, async (nextTab) => {
                     if (nextTab === 'leaderboard' && user.value && !leaderboardState.hasLoaded) {
                         try {
                             await loadLeaderboardData({ silent: true, preserveExisting: true });
+                        } catch (_err) {
+                        }
+                    }
+                    if (nextTab === 'admin' && user.value?.role === 'admin' && adminSubTab.value === 'announcements') {
+                        try {
+                            await loadAdminAnnouncements(false);
                         } catch (_err) {
                         }
                     }
@@ -2616,6 +2986,8 @@
 
                 onMounted(() => {
                     checkAuth();
+                    loadPublicAnnouncements().catch(err => console.error('[announcements init failed]', err));
+                    connectAnnouncementFeed();
                     pollTimer = setInterval(safePoll, 3000);
                     devtoolsTimer = setInterval(checkDevtoolsOpen, 1500);
                     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -2627,6 +2999,7 @@
                     if (devtoolsTimer) clearInterval(devtoolsTimer);
                     clearLeaderboardRetry();
                     stopLiveVersionPolling();
+                    disconnectAnnouncementFeed();
                     document.removeEventListener('visibilitychange', handleVisibilityChange);
                     if(tickTimer) clearInterval(tickTimer);
                 });
@@ -2642,10 +3015,12 @@
                     getStatusText, getPhaseText, getProgressState, getScore, getScoreNumber,
                     loadTasks, getShortPoolName, getScoreColorClass, formatDate, formatPct, formatNumber,
                     activeHelpKey, toggleHelp, closeHelp, dashboardSummaryCards, dashboardHelpText,
+                    publicAnnouncements, selectedAnnouncement, loadPublicAnnouncements, selectAnnouncement,
                     activeTasks, activeTaskEmptyStateText, ratingView, setRatingView, paginatedRatingTasks, activeRatingPage, totalRatingPages, changeRatingPage,
                     qualifiedTasks, rejectedArchiveTasks, leaderboardSections, activeLeaderboardKey, activeLeaderboardSection, leaderboardState, leaderboardEmptyStateText, leaderboardStatusText, manualRefreshLeaderboard, formatLeaderboardValue,
                     getReviewStatus, getReviewStatusMeta, getReviewDetail,
                     adminSubTab, adminThresholds, adminPools, adminStrats, adminError, adminDiagnostics, adminStratSummary, adminStratFilters, adminStratPage, adminStratPageSize, adminStratTotal, adminStratHasNext, adminStratTotalPages, adminDefaultAvatar, loadAdminData, refreshAdminStrategies, resetAdminStrategyFilters, changeAdminStratPage, downloadAdminErrors, saveThresholds, savePool, handleDefaultAvatarChange, saveDefaultAvatar, clearDefaultAvatar,
+                    adminAnnouncements, adminAnnouncementTotal, adminAnnouncementPage, adminAnnouncementPageSize, adminAnnouncementTotalPages, adminAnnouncementFilters, announcementEditor, loadAdminAnnouncements, changeAdminAnnouncementPage, resetAnnouncementEditor, editAnnouncement, saveAnnouncement, publishAnnouncement, unpublishAnnouncement,
                     catalogImportText, catalogImportResult, handleCatalogFileChange, runCatalogImport
                 };
             }

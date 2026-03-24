@@ -2885,6 +2885,7 @@ class FactorPoolUpdater:
             "candidate_count": int(result.candidate_count or 0),
             "backtested_count": int(result.backtested_count or 0),
             "report_paths": dict(result.report_paths or {}),
+            "cost_basis": dict(getattr(result, "cost_basis", {}) or {}),
             "position_items": self._collect_runtime_position_items(),
         }
         return {

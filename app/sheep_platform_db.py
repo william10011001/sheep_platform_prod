@@ -31,6 +31,7 @@ from sheep_strategy_schema import (
     parse_json_object,
     unwrap_family_params,
 )
+from sheep_combo_stats import extract_progress_counters, pool_combo_count
 # ─────────────────────────────────────────────────────────────────────────────
 # DB API (sqlite/postgres) — production: Postgres via SHEEP_DB_URL
 # ─────────────────────────────────────────────────────────────────────────────
@@ -54,6 +55,14 @@ _ACTIVE_POOL_CACHE: Dict[str, Any] = {
     "values": {},
     "expires": {},
     "ttl": 30.0,
+    "lock": threading.Lock(),
+}
+_GLOBAL_COUNTERS_CACHE: Dict[str, Any] = {
+    "value": None,
+    "expires_at": 0.0,
+    "ttl": 45.0,
+    "last_invalidated_at": 0.0,
+    "invalidate_throttle": 15.0,
     "lock": threading.Lock(),
 }
 
@@ -292,6 +301,8 @@ _DEFAULT_THRESHOLD_SETTINGS: Dict[str, Any] = {
     "max_drawdown_pct": 25.0,
     "min_sharpe": 0.6,
     "candidate_keep_top_n": 30,
+    "global_fee_pct": 0.06,
+    "global_slippage_pct": 0.02,
     "default_avatar_data_url": "",
     "worker_download_url": DEFAULT_WORKER_DOWNLOAD_URL,
 }
@@ -359,6 +370,121 @@ def _default_avatar_url_from_conn(conn: Any = None) -> str:
         if owns_conn:
             conn.close()
     return _build_default_avatar_data_url("SHEEP")
+
+
+def _clamp_nonnegative_int(value: Any) -> int:
+    try:
+        return max(0, int(float(value or 0)))
+    except Exception:
+        return 0
+
+
+def _clamp_nonnegative_float(value: Any) -> float:
+    try:
+        return max(0.0, float(value or 0.0))
+    except Exception:
+        return 0.0
+
+
+def _param_combo_count_value(family: Any, grid_spec: Any, risk_spec: Any) -> int:
+    try:
+        return max(0, int(pool_combo_count(str(family or ""), grid_spec, risk_spec)))
+    except Exception:
+        return 0
+
+
+def _task_progress_summary(progress_like: Any) -> Dict[str, Any]:
+    counters = extract_progress_counters(progress_like)
+    return {
+        "combos_done": _clamp_nonnegative_int(counters.get("combos_done")),
+        "combos_total": _clamp_nonnegative_int(counters.get("combos_total")),
+        "elapsed_s": round(_clamp_nonnegative_float(counters.get("elapsed_s")), 6),
+    }
+
+
+def invalidate_global_dashboard_counters(*, force: bool = False) -> None:
+    lock = _GLOBAL_COUNTERS_CACHE.get("lock")
+    if lock is None:
+        return
+    now_ts = time.time()
+    throttle = float(_GLOBAL_COUNTERS_CACHE.get("invalidate_throttle") or 0.0)
+    with lock:
+        last = float(_GLOBAL_COUNTERS_CACHE.get("last_invalidated_at") or 0.0)
+        if not force and throttle > 0.0 and (now_ts - last) < throttle:
+            return
+        _GLOBAL_COUNTERS_CACHE["value"] = None
+        _GLOBAL_COUNTERS_CACHE["expires_at"] = 0.0
+        _GLOBAL_COUNTERS_CACHE["last_invalidated_at"] = now_ts
+
+
+def _get_progress_summary_columns(conn: Any) -> Tuple[str, str, str]:
+    kind = str(getattr(conn, "kind", "sqlite") or "sqlite")
+    if kind == "postgres":
+        combos_done_expr = """
+            COALESCE(
+                progress_combos_done,
+                NULLIF(progress_json::jsonb->>'combos_done', '')::bigint,
+                NULLIF(progress_json::jsonb->>'done', '')::bigint,
+                0
+            )
+        """
+        combos_total_expr = """
+            COALESCE(
+                progress_combos_total,
+                NULLIF(progress_json::jsonb->>'combos_total', '')::bigint,
+                NULLIF(progress_json::jsonb->>'total', '')::bigint,
+                0
+            )
+        """
+        elapsed_expr = """
+            COALESCE(
+                progress_elapsed_s,
+                NULLIF(progress_json::jsonb->>'elapsed_s', '')::double precision,
+                NULLIF(progress_json::jsonb->>'elapsed', '')::double precision,
+                0.0
+            )
+        """
+        return combos_done_expr, combos_total_expr, elapsed_expr
+    combos_done_expr = "COALESCE(progress_combos_done, CAST(COALESCE(json_extract(progress_json, '$.combos_done'), json_extract(progress_json, '$.done'), 0) AS INTEGER), 0)"
+    combos_total_expr = "COALESCE(progress_combos_total, CAST(COALESCE(json_extract(progress_json, '$.combos_total'), json_extract(progress_json, '$.total'), 0) AS INTEGER), 0)"
+    elapsed_expr = "COALESCE(progress_elapsed_s, CAST(COALESCE(json_extract(progress_json, '$.elapsed_s'), json_extract(progress_json, '$.elapsed'), 0.0) AS REAL), 0.0)"
+    return combos_done_expr, combos_total_expr, elapsed_expr
+
+
+def get_global_dashboard_counters() -> Dict[str, int]:
+    lock = _GLOBAL_COUNTERS_CACHE.get("lock")
+    now_ts = time.time()
+    ttl = float(_GLOBAL_COUNTERS_CACHE.get("ttl") or 45.0)
+    if lock is not None:
+        with lock:
+            if now_ts < float(_GLOBAL_COUNTERS_CACHE.get("expires_at") or 0.0):
+                cached = dict(_GLOBAL_COUNTERS_CACHE.get("value") or {})
+                if cached:
+                    return cached
+
+    conn = _conn()
+    try:
+        pool_row = conn.execute(
+            "SELECT COALESCE(SUM(COALESCE(param_combo_count, 0)), 0) AS total_pool_combos FROM factor_pools"
+        ).fetchone()
+        total_pool_combos = _clamp_nonnegative_int((dict(pool_row) if pool_row else {}).get("total_pool_combos"))
+        done_expr, _, _ = _get_progress_summary_columns(conn)
+        mined_row = conn.execute(
+            f"SELECT COALESCE(SUM({done_expr}), 0) AS global_mined_combo_count FROM mining_tasks"
+        ).fetchone()
+        global_mined_combo_count = _clamp_nonnegative_int((dict(mined_row) if mined_row else {}).get("global_mined_combo_count"))
+        value = {
+            "total_strategy_pool_combo_count": total_pool_combos,
+            "global_mined_combo_count": global_mined_combo_count,
+        }
+    finally:
+        conn.close()
+
+    if lock is not None:
+        with lock:
+            _GLOBAL_COUNTERS_CACHE["value"] = dict(value)
+            _GLOBAL_COUNTERS_CACHE["expires_at"] = now_ts + ttl
+    return value
 
 
 def _decorate_user_row(row: Any, *, default_avatar_url: str = "") -> Dict[str, Any]:
@@ -498,6 +624,50 @@ def _runtime_item_row(row: Any) -> Dict[str, Any]:
     return data
 
 
+def _announcement_row(row: Any) -> Dict[str, Any]:
+    data = dict(row or {})
+    data["id"] = _clamp_nonnegative_int(data.get("id"))
+    data["slug"] = str(data.get("slug") or "").strip()
+    data["status"] = str(data.get("status") or "draft").strip().lower() or "draft"
+    data["title"] = str(data.get("title") or "").strip()
+    data["preview_text"] = str(data.get("preview_text") or "").strip()
+    data["body_markdown"] = str(data.get("body_markdown") or "")
+    data["body_html"] = str(data.get("body_html") or "")
+    data["author_user_id"] = _clamp_nonnegative_int(data.get("author_user_id"))
+    data["published_at"] = str(data.get("published_at") or "")
+    data["created_at"] = str(data.get("created_at") or "")
+    data["updated_at"] = str(data.get("updated_at") or "")
+    return data
+
+
+def _slugify_announcement(value: Any, fallback: str = "announcement") -> str:
+    text = str(value or "").strip().lower()
+    text = re.sub(r"[^\w\s-]", "", text, flags=re.UNICODE)
+    text = re.sub(r"[\s_]+", "-", text, flags=re.UNICODE).strip("-")
+    return text or str(fallback or "announcement")
+
+
+def _unique_announcement_slug(conn: Any, base_slug: str, *, exclude_id: int = 0) -> str:
+    base = _slugify_announcement(base_slug, "announcement")
+    slug = base
+    suffix = 2
+    while True:
+        if exclude_id > 0:
+            row = conn.execute(
+                "SELECT id FROM announcements WHERE slug = ? AND id <> ? LIMIT 1",
+                (slug, int(exclude_id)),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT id FROM announcements WHERE slug = ? LIMIT 1",
+                (slug,),
+            ).fetchone()
+        if not row:
+            return slug
+        slug = f"{base}-{suffix}"
+        suffix += 1
+
+
 def _runtime_items_have_publishable_metrics(items: List[Dict[str, Any]]) -> bool:
     for raw_item in list(items or []):
         item = dict(raw_item or {})
@@ -632,6 +802,52 @@ def _backfill_direction_columns(conn: Any) -> None:
         )
         try:
             conn.execute("UPDATE candidates SET direction = ? WHERE id = ?", (current_direction, int(row["id"])))
+        except Exception:
+            pass
+
+
+def _backfill_factor_pool_combo_counts(conn: Any) -> None:
+    try:
+        rows = conn.execute("SELECT id, family, grid_spec_json, risk_spec_json FROM factor_pools").fetchall()
+    except Exception:
+        rows = []
+    for raw_row in rows:
+        row = dict(raw_row or {})
+        pool_id = _clamp_nonnegative_int(row.get("id"))
+        if pool_id <= 0:
+            continue
+        combo_count = _param_combo_count_value(row.get("family"), row.get("grid_spec_json"), row.get("risk_spec_json"))
+        try:
+            conn.execute("UPDATE factor_pools SET param_combo_count = ? WHERE id = ?", (combo_count, pool_id))
+        except Exception:
+            pass
+
+
+def _backfill_task_progress_summaries(conn: Any) -> None:
+    try:
+        rows = conn.execute("SELECT id, progress_json FROM mining_tasks").fetchall()
+    except Exception:
+        rows = []
+    for raw_row in rows:
+        row = dict(raw_row or {})
+        task_id = _clamp_nonnegative_int(row.get("id"))
+        if task_id <= 0:
+            continue
+        summary = _task_progress_summary(row.get("progress_json"))
+        try:
+            conn.execute(
+                """
+                UPDATE mining_tasks
+                SET progress_combos_done = ?, progress_combos_total = ?, progress_elapsed_s = ?
+                WHERE id = ?
+                """,
+                (
+                    int(summary["combos_done"]),
+                    int(summary["combos_total"]),
+                    float(summary["elapsed_s"]),
+                    task_id,
+                ),
+            )
         except Exception:
             pass
 
@@ -1062,6 +1278,7 @@ def init_db() -> None:
                     risk_spec_json TEXT,
                     num_partitions INTEGER,
                     seed INTEGER,
+                    param_combo_count BIGINT NOT NULL DEFAULT 0,
                     active INTEGER DEFAULT 1,
                     created_at TEXT
                 );
@@ -1075,6 +1292,9 @@ def init_db() -> None:
                     num_partitions INTEGER,
                     status TEXT DEFAULT 'assigned',
                     progress_json TEXT DEFAULT '{}',
+                    progress_combos_done BIGINT NOT NULL DEFAULT 0,
+                    progress_combos_total BIGINT NOT NULL DEFAULT 0,
+                    progress_elapsed_s DOUBLE PRECISION NOT NULL DEFAULT 0.0,
                     last_heartbeat TEXT,
                     created_at TEXT,
                     updated_at TEXT
@@ -1179,6 +1399,21 @@ def init_db() -> None:
                 );
                 CREATE INDEX IF NOT EXISTS idx_runtime_portfolio_scope_user ON runtime_portfolio_snapshots(scope, user_id, updated_at);
 
+                CREATE TABLE IF NOT EXISTS announcements (
+                    id BIGSERIAL PRIMARY KEY,
+                    slug TEXT NOT NULL UNIQUE,
+                    status TEXT NOT NULL DEFAULT 'draft',
+                    title TEXT NOT NULL,
+                    preview_text TEXT NOT NULL DEFAULT '',
+                    body_markdown TEXT NOT NULL DEFAULT '',
+                    body_html TEXT NOT NULL DEFAULT '',
+                    author_user_id BIGINT,
+                    published_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_announcements_status_published ON announcements(status, published_at DESC, id DESC);
+
                 CREATE TABLE IF NOT EXISTS runtime_portfolio_items (
                     id BIGSERIAL PRIMARY KEY,
                     snapshot_id BIGINT NOT NULL,
@@ -1232,6 +1467,7 @@ def init_db() -> None:
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_updated_at TEXT",
                 "ALTER TABLE factor_pools ADD COLUMN IF NOT EXISTS external_key TEXT DEFAULT ''",
                 "ALTER TABLE factor_pools ADD COLUMN IF NOT EXISTS direction TEXT DEFAULT 'long'",
+                "ALTER TABLE factor_pools ADD COLUMN IF NOT EXISTS param_combo_count BIGINT NOT NULL DEFAULT 0",
                 "ALTER TABLE candidates ADD COLUMN IF NOT EXISTS direction TEXT DEFAULT 'long'",
                 "ALTER TABLE strategies ADD COLUMN IF NOT EXISTS external_key TEXT DEFAULT ''",
                 "ALTER TABLE strategies ADD COLUMN IF NOT EXISTS direction TEXT DEFAULT 'long'",
@@ -1239,6 +1475,9 @@ def init_db() -> None:
                 "ALTER TABLE mining_tasks ADD COLUMN IF NOT EXISTS lease_worker_id TEXT",
                 "ALTER TABLE mining_tasks ADD COLUMN IF NOT EXISTS lease_expires_at TEXT",
                 "ALTER TABLE mining_tasks ADD COLUMN IF NOT EXISTS attempt INTEGER DEFAULT 0",
+                "ALTER TABLE mining_tasks ADD COLUMN IF NOT EXISTS progress_combos_done BIGINT NOT NULL DEFAULT 0",
+                "ALTER TABLE mining_tasks ADD COLUMN IF NOT EXISTS progress_combos_total BIGINT NOT NULL DEFAULT 0",
+                "ALTER TABLE mining_tasks ADD COLUMN IF NOT EXISTS progress_elapsed_s DOUBLE PRECISION NOT NULL DEFAULT 0.0",
                 """
                 CREATE TABLE IF NOT EXISTS workers (
                     worker_id TEXT PRIMARY KEY,
@@ -1284,6 +1523,22 @@ def init_db() -> None:
                 "CREATE INDEX IF NOT EXISTS idx_strategies_user_status_created ON strategies(user_id, status, created_at)",
                 "CREATE INDEX IF NOT EXISTS idx_weekly_checks_checked_strategy ON weekly_checks(checked_at, strategy_id)",
                 "CREATE INDEX IF NOT EXISTS idx_payouts_created_user ON payouts(created_at, user_id)",
+                """
+                CREATE TABLE IF NOT EXISTS announcements (
+                    id BIGSERIAL PRIMARY KEY,
+                    slug TEXT NOT NULL UNIQUE,
+                    status TEXT NOT NULL DEFAULT 'draft',
+                    title TEXT NOT NULL,
+                    preview_text TEXT NOT NULL DEFAULT '',
+                    body_markdown TEXT NOT NULL DEFAULT '',
+                    body_html TEXT NOT NULL DEFAULT '',
+                    author_user_id BIGINT,
+                    published_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_announcements_status_published ON announcements(status, published_at DESC, id DESC)",
                 "ALTER TABLE runtime_portfolio_items ADD COLUMN IF NOT EXISTS strategy_id BIGINT",
                 "ALTER TABLE runtime_portfolio_items ADD COLUMN IF NOT EXISTS total_return_pct DOUBLE PRECISION NOT NULL DEFAULT 0.0",
                 "ALTER TABLE runtime_portfolio_items ADD COLUMN IF NOT EXISTS max_drawdown_pct DOUBLE PRECISION NOT NULL DEFAULT 0.0",
@@ -1298,7 +1553,10 @@ def init_db() -> None:
 
             ensure_default_settings(conn)
             _backfill_direction_columns(conn)
+            _backfill_factor_pool_combo_counts(conn)
+            _backfill_task_progress_summaries(conn)
             conn.commit()
+            invalidate_global_dashboard_counters(force=True)
             # 執行完 Postgres 的 DDL 後，直接結束函數，絕對不往下跑 SQLite 的邏圈
             return
             
@@ -1370,6 +1628,7 @@ def init_db() -> None:
                     risk_spec_json TEXT,
                     num_partitions INTEGER,
                     seed INTEGER,
+                    param_combo_count INTEGER NOT NULL DEFAULT 0,
                     active INTEGER DEFAULT 1,
                     created_at TEXT
                 );
@@ -1383,6 +1642,9 @@ def init_db() -> None:
                     num_partitions INTEGER,
                     status TEXT DEFAULT 'assigned',
                     progress_json TEXT DEFAULT '{}',
+                    progress_combos_done INTEGER NOT NULL DEFAULT 0,
+                    progress_combos_total INTEGER NOT NULL DEFAULT 0,
+                    progress_elapsed_s REAL NOT NULL DEFAULT 0.0,
                     last_heartbeat TEXT,
                     created_at TEXT,
                     updated_at TEXT
@@ -1483,6 +1745,21 @@ def init_db() -> None:
                 );
                 CREATE INDEX IF NOT EXISTS idx_runtime_portfolio_scope_user ON runtime_portfolio_snapshots(scope, user_id, updated_at);
 
+                CREATE TABLE IF NOT EXISTS announcements (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    slug TEXT NOT NULL UNIQUE,
+                    status TEXT NOT NULL DEFAULT 'draft',
+                    title TEXT NOT NULL,
+                    preview_text TEXT NOT NULL DEFAULT '',
+                    body_markdown TEXT NOT NULL DEFAULT '',
+                    body_html TEXT NOT NULL DEFAULT '',
+                    author_user_id INTEGER,
+                    published_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_announcements_status_published ON announcements(status, published_at DESC, id DESC);
+
                 CREATE TABLE IF NOT EXISTS runtime_portfolio_items (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     snapshot_id INTEGER NOT NULL,
@@ -1524,6 +1801,7 @@ def init_db() -> None:
                 "ALTER TABLE users ADD COLUMN profile_updated_at TEXT",
                 "ALTER TABLE factor_pools ADD COLUMN external_key TEXT DEFAULT ''",
                 "ALTER TABLE factor_pools ADD COLUMN direction TEXT DEFAULT 'long'",
+                "ALTER TABLE factor_pools ADD COLUMN param_combo_count INTEGER NOT NULL DEFAULT 0",
                 "ALTER TABLE candidates ADD COLUMN direction TEXT DEFAULT 'long'",
                 "ALTER TABLE strategies ADD COLUMN external_key TEXT DEFAULT ''",
                 "ALTER TABLE strategies ADD COLUMN direction TEXT DEFAULT 'long'",
@@ -1531,6 +1809,9 @@ def init_db() -> None:
                 "ALTER TABLE mining_tasks ADD COLUMN lease_worker_id TEXT",
                 "ALTER TABLE mining_tasks ADD COLUMN lease_expires_at TEXT",
                 "ALTER TABLE mining_tasks ADD COLUMN attempt INTEGER DEFAULT 0",
+                "ALTER TABLE mining_tasks ADD COLUMN progress_combos_done INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE mining_tasks ADD COLUMN progress_combos_total INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE mining_tasks ADD COLUMN progress_elapsed_s REAL NOT NULL DEFAULT 0.0",
                 """
                 CREATE TABLE IF NOT EXISTS workers (
                     worker_id TEXT PRIMARY KEY,
@@ -1579,6 +1860,22 @@ def init_db() -> None:
                 "CREATE INDEX IF NOT EXISTS idx_payouts_created_user ON payouts(created_at, user_id)",
                 "CREATE INDEX IF NOT EXISTS idx_mining_tasks_status_user ON mining_tasks(status, user_id)",
                 "CREATE INDEX IF NOT EXISTS idx_mining_tasks_status_id ON mining_tasks(status, id)",
+                """
+                CREATE TABLE IF NOT EXISTS announcements (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    slug TEXT NOT NULL UNIQUE,
+                    status TEXT NOT NULL DEFAULT 'draft',
+                    title TEXT NOT NULL,
+                    preview_text TEXT NOT NULL DEFAULT '',
+                    body_markdown TEXT NOT NULL DEFAULT '',
+                    body_html TEXT NOT NULL DEFAULT '',
+                    author_user_id INTEGER,
+                    published_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """,
+                "CREATE INDEX IF NOT EXISTS idx_announcements_status_published ON announcements(status, published_at DESC, id DESC)",
                 "CREATE INDEX IF NOT EXISTS idx_mining_tasks_user_cycle_status_id ON mining_tasks(user_id, cycle_id, status, id)",
                 "CREATE INDEX IF NOT EXISTS idx_mining_tasks_completed_review_status ON mining_tasks(COALESCE(json_extract(progress_json, '$.review_status'), json_extract(progress_json, '$.oos_status'), '')) WHERE status = 'completed'",
                 "CREATE INDEX IF NOT EXISTS idx_mining_tasks_user_completed_review_status ON mining_tasks(user_id, COALESCE(json_extract(progress_json, '$.review_status'), json_extract(progress_json, '$.oos_status'), '')) WHERE status = 'completed'",
@@ -1598,7 +1895,10 @@ def init_db() -> None:
 
             ensure_default_settings(conn)
             _backfill_direction_columns(conn)
+            _backfill_factor_pool_combo_counts(conn)
+            _backfill_task_progress_summaries(conn)
             conn.commit()
+            invalidate_global_dashboard_counters(force=True)
 
     finally:
         conn.close()
@@ -2244,8 +2544,8 @@ def list_factor_pools(cycle_id: int) -> list:
                         print(f"[DB MAINTENANCE] 偵測到週期 {cycle_id} 缺乏 Pool 資料，啟動從週期 {source_cid} 繼承程序...")
                         try:
                             conn.execute("""
-                                INSERT INTO factor_pools (cycle_id, name, external_key, symbol, direction, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, created_at)
-                                SELECT ?, name, COALESCE(external_key, ''), symbol, COALESCE(direction, 'long'), timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, ?
+                                INSERT INTO factor_pools (cycle_id, name, external_key, symbol, direction, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, param_combo_count, active, created_at)
+                                SELECT ?, name, COALESCE(external_key, ''), symbol, COALESCE(direction, 'long'), timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, COALESCE(param_combo_count, 0), active, ?
                                 FROM factor_pools WHERE cycle_id = ? AND active = 1
                             """, (cycle_id, _now_iso(), source_cid))
                             conn.commit()
@@ -2374,8 +2674,8 @@ def assign_tasks_for_user(user_id: int, cycle_id: int = 0, min_tasks: int = 2, m
                             log_sys_event("TASK_ASSIGN_RESCUE", user_id, f"偵測到週期 {cycle_id} 缺乏 Pool，緊急從週期 {source_cid} 繼承", {"source_cid": source_cid})
                             
                             conn.execute("""
-                                INSERT INTO factor_pools (cycle_id, name, external_key, symbol, direction, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, created_at)
-                                SELECT ?, name, COALESCE(external_key, ''), symbol, COALESCE(direction, 'long'), timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, ?
+                                INSERT INTO factor_pools (cycle_id, name, external_key, symbol, direction, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, param_combo_count, active, created_at)
+                                SELECT ?, name, COALESCE(external_key, ''), symbol, COALESCE(direction, 'long'), timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, COALESCE(param_combo_count, 0), active, ?
                                 FROM factor_pools WHERE cycle_id = ? AND active = 1
                             """, (cycle_id, _now_iso(), source_cid))
                             conn.commit()
@@ -3339,6 +3639,7 @@ def create_factor_pool(
     normalized_risk_spec = _normalize_risk_spec(normalized_direction, risk_spec)
     normalized_num_partitions = max(1, int(num_partitions or 1))
     normalized_seed = int(seed or 42) & 0x7FFFFFFF
+    param_combo_count = _param_combo_count_value(family, grid_spec, normalized_risk_spec)
     if normalized_seed <= 0:
         normalized_seed = 42
     conn = _conn()
@@ -3354,8 +3655,8 @@ def create_factor_pool(
             if getattr(conn, "kind", "sqlite") == "postgres":
                 row_pool = conn.execute(
                     """
-                    INSERT INTO factor_pools (cycle_id, name, external_key, symbol, direction, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id
+                    INSERT INTO factor_pools (cycle_id, name, external_key, symbol, direction, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, param_combo_count, active, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id
                     """,
                     (
                         cycle_id,
@@ -3370,6 +3671,7 @@ def create_factor_pool(
                         json.dumps(normalized_risk_spec, ensure_ascii=False),
                         normalized_num_partitions,
                         normalized_seed,
+                        param_combo_count,
                         1 if active else 0,
                         _now_iso(),
                     )
@@ -3378,8 +3680,8 @@ def create_factor_pool(
             else:
                 cur = conn.execute(
                     """
-                    INSERT INTO factor_pools (cycle_id, name, external_key, symbol, direction, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, active, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO factor_pools (cycle_id, name, external_key, symbol, direction, timeframe_min, years, family, grid_spec_json, risk_spec_json, num_partitions, seed, param_combo_count, active, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         cycle_id,
@@ -3394,6 +3696,7 @@ def create_factor_pool(
                         json.dumps(normalized_risk_spec, ensure_ascii=False),
                         normalized_num_partitions,
                         normalized_seed,
+                        param_combo_count,
                         1 if active else 0,
                         _now_iso(),
                     )
@@ -3401,6 +3704,7 @@ def create_factor_pool(
                 ids.append(int(cur.lastrowid))
         conn.commit()
         _invalidate_active_pool_cache(cycle_id)
+        invalidate_global_dashboard_counters(force=True)
         return ids
     except Exception as e:
         print(f"[DB ERROR] create_factor_pool fatal: {e}")
@@ -3448,12 +3752,13 @@ def update_factor_pool(
         normalized_risk_spec = _normalize_risk_spec(normalized_direction, risk_spec)
         normalized_num_partitions = max(1, int(num_partitions or 1))
         normalized_seed = int(seed or 42) & 0x7FFFFFFF
+        param_combo_count = _param_combo_count_value(family, grid_spec, normalized_risk_spec)
         if normalized_seed <= 0:
             normalized_seed = 42
         conn.execute(
             """
             UPDATE factor_pools
-            SET name=?, external_key=?, symbol=?, direction=?, timeframe_min=?, years=?, family=?, grid_spec_json=?, risk_spec_json=?, num_partitions=?, seed=?, active=?
+            SET name=?, external_key=?, symbol=?, direction=?, timeframe_min=?, years=?, family=?, grid_spec_json=?, risk_spec_json=?, num_partitions=?, seed=?, param_combo_count=?, active=?
             WHERE id=?
             """,
             (
@@ -3468,12 +3773,14 @@ def update_factor_pool(
                 json.dumps(normalized_risk_spec, ensure_ascii=False),
                 normalized_num_partitions,
                 normalized_seed,
+                param_combo_count,
                 1 if active else 0,
                 pool_id,
             )
         )
         conn.commit()
         _invalidate_active_pool_cache(cycle_id or None)
+        invalidate_global_dashboard_counters(force=True)
     finally:
         conn.close()
 
@@ -3696,6 +4003,273 @@ def get_runtime_portfolio_snapshot(scope: str, user_id: int = 0) -> Optional[dic
                     candidate["_stale_cached_runtime_fallback"] = True
                     return candidate
         return latest
+    finally:
+        conn.close()
+
+
+def list_announcements(
+    *,
+    status: str = "",
+    limit: int = 50,
+    offset: int = 0,
+    include_drafts: bool = False,
+    q: str = "",
+) -> List[Dict[str, Any]]:
+    limit = max(1, min(200, int(limit or 50)))
+    offset = max(0, int(offset or 0))
+    conn = _conn()
+    try:
+        where: List[str] = []
+        params: List[Any] = []
+        if include_drafts:
+            if str(status or "").strip():
+                where.append("COALESCE(status, 'draft') = ?")
+                params.append(str(status or "").strip().lower())
+        else:
+            where.append("COALESCE(status, 'draft') = 'published'")
+        if str(q or "").strip():
+            term = f"%{str(q).strip().lower()}%"
+            where.append(
+                "(LOWER(COALESCE(title, '')) LIKE ? OR LOWER(COALESCE(preview_text, '')) LIKE ? OR LOWER(COALESCE(body_markdown, '')) LIKE ?)"
+            )
+            params.extend([term, term, term])
+        where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+        rows = conn.execute(
+            f"""
+            SELECT *
+            FROM announcements
+            {where_sql}
+            ORDER BY
+                CASE WHEN COALESCE(status, 'draft') = 'published' THEN 0 ELSE 1 END ASC,
+                COALESCE(published_at, updated_at, created_at) DESC,
+                id DESC
+            LIMIT ? OFFSET ?
+            """,
+            [*params, limit, offset],
+        ).fetchall()
+        return [_announcement_row(row) for row in rows]
+    finally:
+        conn.close()
+
+
+def count_announcements(*, status: str = "", include_drafts: bool = False, q: str = "") -> int:
+    conn = _conn()
+    try:
+        where: List[str] = []
+        params: List[Any] = []
+        if include_drafts:
+            if str(status or "").strip():
+                where.append("COALESCE(status, 'draft') = ?")
+                params.append(str(status or "").strip().lower())
+        else:
+            where.append("COALESCE(status, 'draft') = 'published'")
+        if str(q or "").strip():
+            term = f"%{str(q).strip().lower()}%"
+            where.append(
+                "(LOWER(COALESCE(title, '')) LIKE ? OR LOWER(COALESCE(preview_text, '')) LIKE ? OR LOWER(COALESCE(body_markdown, '')) LIKE ?)"
+            )
+            params.extend([term, term, term])
+        where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+        row = conn.execute(
+            f"SELECT COUNT(*) AS c FROM announcements {where_sql}",
+            params,
+        ).fetchone()
+        try:
+            return int((dict(row) if row else {}).get("c") or 0)
+        except Exception:
+            return int(row["c"] or 0) if row else 0
+    finally:
+        conn.close()
+
+
+def get_announcement_by_id(announcement_id: int) -> Optional[Dict[str, Any]]:
+    conn = _conn()
+    try:
+        row = conn.execute(
+            "SELECT * FROM announcements WHERE id = ? LIMIT 1",
+            (int(announcement_id or 0),),
+        ).fetchone()
+        return _announcement_row(row) if row else None
+    finally:
+        conn.close()
+
+
+def get_announcement_by_slug(slug: str, *, include_drafts: bool = False) -> Optional[Dict[str, Any]]:
+    slug_value = str(slug or "").strip()
+    if not slug_value:
+        return None
+    conn = _conn()
+    try:
+        if include_drafts:
+            row = conn.execute(
+                "SELECT * FROM announcements WHERE slug = ? LIMIT 1",
+                (slug_value,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM announcements WHERE slug = ? AND COALESCE(status, 'draft') = 'published' LIMIT 1",
+                (slug_value,),
+            ).fetchone()
+        return _announcement_row(row) if row else None
+    finally:
+        conn.close()
+
+
+def create_announcement(
+    *,
+    title: str,
+    preview_text: str,
+    body_markdown: str,
+    body_html: str,
+    author_user_id: int,
+    status: str = "draft",
+    slug: str = "",
+    published_at: str = "",
+) -> Dict[str, Any]:
+    conn = _conn()
+    try:
+        now = _now_iso()
+        normalized_status = str(status or "draft").strip().lower() or "draft"
+        normalized_slug = _unique_announcement_slug(conn, slug or title or "announcement")
+        normalized_published_at = str(published_at or "").strip()
+        if normalized_status == "published" and not normalized_published_at:
+            normalized_published_at = now
+        if getattr(conn, "kind", "sqlite") == "postgres":
+            row = conn.execute(
+                """
+                INSERT INTO announcements (
+                    slug, status, title, preview_text, body_markdown, body_html,
+                    author_user_id, published_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                RETURNING *
+                """,
+                (
+                    normalized_slug,
+                    normalized_status,
+                    str(title or "").strip(),
+                    str(preview_text or "").strip(),
+                    str(body_markdown or ""),
+                    str(body_html or ""),
+                    int(author_user_id or 0) or None,
+                    normalized_published_at or None,
+                    now,
+                    now,
+                ),
+            ).fetchone()
+        else:
+            cur = conn.execute(
+                """
+                INSERT INTO announcements (
+                    slug, status, title, preview_text, body_markdown, body_html,
+                    author_user_id, published_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    normalized_slug,
+                    normalized_status,
+                    str(title or "").strip(),
+                    str(preview_text or "").strip(),
+                    str(body_markdown or ""),
+                    str(body_html or ""),
+                    int(author_user_id or 0) or None,
+                    normalized_published_at or None,
+                    now,
+                    now,
+                ),
+            )
+            row = conn.execute("SELECT * FROM announcements WHERE id = ?", (int(cur.lastrowid),)).fetchone()
+        conn.commit()
+        return _announcement_row(row) if row else {}
+    finally:
+        conn.close()
+
+
+def update_announcement(
+    announcement_id: int,
+    *,
+    title: str,
+    preview_text: str,
+    body_markdown: str,
+    body_html: str,
+    status: str = "",
+    slug: str = "",
+) -> Optional[Dict[str, Any]]:
+    conn = _conn()
+    try:
+        current = conn.execute(
+            "SELECT * FROM announcements WHERE id = ? LIMIT 1",
+            (int(announcement_id or 0),),
+        ).fetchone()
+        if not current:
+            return None
+        current_data = _announcement_row(current)
+        normalized_status = str(status or current_data.get("status") or "draft").strip().lower() or "draft"
+        normalized_slug = _unique_announcement_slug(
+            conn,
+            slug or title or current_data.get("slug") or current_data.get("title") or "announcement",
+            exclude_id=int(announcement_id or 0),
+        )
+        normalized_published_at = str(current_data.get("published_at") or "").strip()
+        now = _now_iso()
+        if normalized_status == "published" and not normalized_published_at:
+            normalized_published_at = now
+        conn.execute(
+            """
+            UPDATE announcements
+            SET slug = ?, status = ?, title = ?, preview_text = ?, body_markdown = ?, body_html = ?, published_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                normalized_slug,
+                normalized_status,
+                str(title or "").strip(),
+                str(preview_text or "").strip(),
+                str(body_markdown or ""),
+                str(body_html or ""),
+                normalized_published_at or None,
+                now,
+                int(announcement_id or 0),
+            ),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM announcements WHERE id = ? LIMIT 1", (int(announcement_id or 0),)).fetchone()
+        return _announcement_row(row) if row else None
+    finally:
+        conn.close()
+
+
+def publish_announcement(announcement_id: int) -> Optional[Dict[str, Any]]:
+    conn = _conn()
+    try:
+        now = _now_iso()
+        conn.execute(
+            """
+            UPDATE announcements
+            SET status = 'published',
+                published_at = COALESCE(NULLIF(published_at, ''), ?),
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (now, now, int(announcement_id or 0)),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM announcements WHERE id = ? LIMIT 1", (int(announcement_id or 0),)).fetchone()
+        return _announcement_row(row) if row else None
+    finally:
+        conn.close()
+
+
+def unpublish_announcement(announcement_id: int) -> Optional[Dict[str, Any]]:
+    conn = _conn()
+    try:
+        now = _now_iso()
+        conn.execute(
+            "UPDATE announcements SET status = 'draft', updated_at = ? WHERE id = ?",
+            (now, int(announcement_id or 0)),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM announcements WHERE id = ? LIMIT 1", (int(announcement_id or 0),)).fetchone()
+        return _announcement_row(row) if row else None
     finally:
         conn.close()
 
@@ -4047,15 +4621,29 @@ def get_task(task_id: int) -> Optional[dict]:
 
 def update_task_progress(task_id: int, progress: dict) -> None:
     import random, time
+    summary = _task_progress_summary(progress)
     for attempt in range(15):
         try:
             conn = _conn()
             try:
                 conn.execute(
-                    "UPDATE mining_tasks SET progress_json = ?, updated_at = ?, last_heartbeat = ? WHERE id = ?", 
-                    (json.dumps(progress, ensure_ascii=False), _now_iso(), _now_iso(), task_id)
+                    """
+                    UPDATE mining_tasks
+                    SET progress_json = ?, progress_combos_done = ?, progress_combos_total = ?, progress_elapsed_s = ?, updated_at = ?, last_heartbeat = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        json.dumps(progress, ensure_ascii=False),
+                        int(summary["combos_done"]),
+                        int(summary["combos_total"]),
+                        float(summary["elapsed_s"]),
+                        _now_iso(),
+                        _now_iso(),
+                        task_id,
+                    )
                 )
                 conn.commit()
+                invalidate_global_dashboard_counters()
                 break
             finally:
                 conn.close()
@@ -4398,12 +4986,28 @@ def update_task_progress_with_lease(task_id: int, user_id: int, worker_id: str, 
     conn = _conn()
     try:
         # lease 機制雖然在單機版弱化，但保留狀態檢查確保安全
+        summary = _task_progress_summary(progress)
         cur = conn.execute(
-            "UPDATE mining_tasks SET progress_json = ?, updated_at = ?, last_heartbeat = ? WHERE id = ? AND user_id = ? AND status = 'running'",
-            (json.dumps(progress, ensure_ascii=False), _now_iso(), _now_iso(), task_id, user_id)
+            """
+            UPDATE mining_tasks
+            SET progress_json = ?, progress_combos_done = ?, progress_combos_total = ?, progress_elapsed_s = ?, updated_at = ?, last_heartbeat = ?
+            WHERE id = ? AND user_id = ? AND status = 'running'
+            """,
+            (
+                json.dumps(progress, ensure_ascii=False),
+                int(summary["combos_done"]),
+                int(summary["combos_total"]),
+                float(summary["elapsed_s"]),
+                _now_iso(),
+                _now_iso(),
+                task_id,
+                user_id,
+            )
         )
         ok = (cur.rowcount > 0)
         conn.commit()
+        if ok:
+            invalidate_global_dashboard_counters()
 
         # 統計：吞吐 cps / last_seen
         try:
@@ -4427,11 +5031,26 @@ def update_task_progress_with_lease(task_id: int, user_id: int, worker_id: str, 
 def release_task_with_lease(task_id: int, user_id: int, worker_id: str, lease_id: str, progress: dict) -> bool:
     conn = _conn()
     try:
+        summary = _task_progress_summary(progress)
         cur = conn.execute(
-            "UPDATE mining_tasks SET status = 'assigned', progress_json = ?, updated_at = ? WHERE id = ? AND user_id = ?",
-            (json.dumps(progress, ensure_ascii=False), _now_iso(), task_id, user_id)
+            """
+            UPDATE mining_tasks
+            SET status = 'assigned', progress_json = ?, progress_combos_done = ?, progress_combos_total = ?, progress_elapsed_s = ?, updated_at = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (
+                json.dumps(progress, ensure_ascii=False),
+                int(summary["combos_done"]),
+                int(summary["combos_total"]),
+                float(summary["elapsed_s"]),
+                _now_iso(),
+                task_id,
+                user_id,
+            )
         )
         conn.commit()
+        if int(cur.rowcount or 0) > 0:
+            invalidate_global_dashboard_counters()
         return cur.rowcount > 0
     except Exception as e:
         print(f"[DB ERROR] release_task_with_lease: {e}")
@@ -4442,9 +5061,22 @@ def release_task_with_lease(task_id: int, user_id: int, worker_id: str, lease_id
 def finish_task_with_lease(task_id: int, user_id: int, worker_id: str, lease_id: str, candidates: list, final_progress: dict) -> Optional[int]:
     conn = _conn()
     try:
+        summary = _task_progress_summary(final_progress)
         cur = conn.execute(
-            "UPDATE mining_tasks SET status = 'completed', progress_json = ?, updated_at = ? WHERE id = ? AND user_id = ? AND status = 'running'",
-            (json.dumps(final_progress, ensure_ascii=False), _now_iso(), task_id, user_id)
+            """
+            UPDATE mining_tasks
+            SET status = 'completed', progress_json = ?, progress_combos_done = ?, progress_combos_total = ?, progress_elapsed_s = ?, updated_at = ?
+            WHERE id = ? AND user_id = ? AND status = 'running'
+            """,
+            (
+                json.dumps(final_progress, ensure_ascii=False),
+                int(summary["combos_done"]),
+                int(summary["combos_total"]),
+                float(summary["elapsed_s"]),
+                _now_iso(),
+                task_id,
+                user_id,
+            )
         )
         if cur.rowcount == 0:
             return None
@@ -4474,6 +5106,7 @@ def finish_task_with_lease(task_id: int, user_id: int, worker_id: str, lease_id:
         except Exception:
             pass
 
+        invalidate_global_dashboard_counters(force=True)
         return best_candidate_id
     except Exception as e:
         import traceback
@@ -4486,6 +5119,70 @@ def utc_now_iso() -> str:
     return _now_iso()
 
 def clean_zombie_tasks(timeout_minutes: int = 15) -> int:
+    """Recycle stale running/syncing tasks and sync progress summary columns."""
+    conn = _conn()
+    count = 0
+    try:
+        from datetime import datetime, timedelta, timezone
+        import json
+
+        cutoff_dt = datetime.now(timezone.utc) - timedelta(minutes=timeout_minutes)
+        cutoff_iso = cutoff_dt.isoformat()
+        rows = conn.execute(
+            "SELECT id, progress_json, status, attempt FROM mining_tasks WHERE (status IN ('running', 'syncing') AND last_heartbeat < ?) OR status = 'error'",
+            (cutoff_iso,),
+        ).fetchall()
+
+        now = _now_iso()
+        updates_completed: List[Tuple[Any, ...]] = []
+        updates_assigned: List[Tuple[Any, ...]] = []
+        for row in rows:
+            tid = int(row["id"])
+            attempt = int(row["attempt"] or 0) + 1
+            try:
+                prog = json.loads(row["progress_json"] or "{}")
+            except Exception:
+                prog = {}
+
+            if attempt >= 4:
+                prog["phase"] = "error"
+                prog["phase_msg"] = "task_failed"
+                prog["last_error"] = "zombie_timeout"
+                prog["updated_at"] = now
+                summary = _task_progress_summary(prog)
+                updates_completed.append((attempt, now, json.dumps(prog, ensure_ascii=False), int(summary["combos_done"]), int(summary["combos_total"]), float(summary["elapsed_s"]), tid))
+            else:
+                prog["phase"] = "queued"
+                prog["phase_msg"] = f"requeued_after_timeout_attempt_{attempt}"
+                prog["last_error"] = "zombie_timeout"
+                prog["updated_at"] = now
+                summary = _task_progress_summary(prog)
+                updates_assigned.append((attempt, now, json.dumps(prog, ensure_ascii=False), int(summary["combos_done"]), int(summary["combos_total"]), float(summary["elapsed_s"]), tid))
+            count += 1
+
+        for p in updates_completed:
+            conn.execute(
+                "UPDATE mining_tasks SET status = 'completed', attempt = ?, updated_at = ?, progress_json = ?, progress_combos_done = ?, progress_combos_total = ?, progress_elapsed_s = ? WHERE id = ?",
+                p,
+            )
+            log_sys_event("ZOMBIE_TASK_KILLED", None, f"Zombie task marked completed: {p[6]}", {"task_id": p[6], "attempt": p[0]})
+        for p in updates_assigned:
+            conn.execute(
+                "UPDATE mining_tasks SET status = 'assigned', attempt = ?, updated_at = ?, progress_json = ?, progress_combos_done = ?, progress_combos_total = ?, progress_elapsed_s = ? WHERE id = ?",
+                p,
+            )
+            log_sys_event("ZOMBIE_TASK_RECYCLED", None, f"Zombie task recycled: {p[6]}", {"task_id": p[6], "attempt": p[0]})
+
+        if count > 0:
+            conn.commit()
+            invalidate_global_dashboard_counters(force=True)
+        return count
+    except Exception as e:
+        print(f"[DB ERROR] clean_zombie_tasks: {e}")
+        return 0
+    finally:
+        conn.close()
+
     """自動清理異常斷線導致卡在 running 狀態的任務，並重置狀態與介面進度"""
     conn = _conn()
     count = 0
@@ -4712,10 +5409,10 @@ def _leaderboard_python_fallback(conn: Any, cutoff_iso: str, window_end_iso: str
         """
         if before_id > 0 and before_activity_at:
             query = """
-                SELECT recent.id, recent.progress_json, recent.created_at, recent.activity_at,
+                SELECT recent.id, recent.progress_json, recent.progress_combos_done, recent.progress_elapsed_s, recent.created_at, recent.activity_at,
                        u.id as user_id, u.username, u.nickname, u.avatar_url
                 FROM (
-                    SELECT t.id, t.user_id, t.progress_json, t.created_at,
+                    SELECT t.id, t.user_id, t.progress_json, t.progress_combos_done, t.progress_elapsed_s, t.created_at,
                            COALESCE(t.last_heartbeat, t.updated_at, t.created_at) as activity_at
                     FROM mining_tasks t
             """ + base_where + """
@@ -4735,10 +5432,10 @@ def _leaderboard_python_fallback(conn: Any, cutoff_iso: str, window_end_iso: str
             rows = conn.execute(query, (cutoff_iso, window_end_iso, before_activity_at, before_activity_at, before_id, page_size)).fetchall()
         else:
             query = """
-                SELECT recent.id, recent.progress_json, recent.created_at, recent.activity_at,
+                SELECT recent.id, recent.progress_json, recent.progress_combos_done, recent.progress_elapsed_s, recent.created_at, recent.activity_at,
                        u.id as user_id, u.username, u.nickname, u.avatar_url
                 FROM (
-                    SELECT t.id, t.user_id, t.progress_json, t.created_at,
+                    SELECT t.id, t.user_id, t.progress_json, t.progress_combos_done, t.progress_elapsed_s, t.created_at,
                            COALESCE(t.last_heartbeat, t.updated_at, t.created_at) as activity_at
                     FROM mining_tasks t
             """ + base_where + """
@@ -4759,7 +5456,6 @@ def _leaderboard_python_fallback(conn: Any, cutoff_iso: str, window_end_iso: str
         for row in rows:
             entry = dict(row or {})
             user_bits = _decorate_user_row(entry, default_avatar_url=default_avatar_url)
-            progress = parse_json_object(entry.get("progress_json"))
             activity_dt = _parse_iso(entry.get("activity_at")) or _parse_iso(entry.get("created_at"))
             if activity_dt is None:
                 continue
@@ -4768,13 +5464,25 @@ def _leaderboard_python_fallback(conn: Any, cutoff_iso: str, window_end_iso: str
             if window_end_dt is not None and activity_dt.astimezone(timezone.utc) > window_end_dt.astimezone(timezone.utc):
                 continue
             try:
-                combos_done = max(0.0, float(progress.get("combos_done") or progress.get("done") or progress.get("combos_total") or progress.get("total") or 0.0))
+                combos_done = max(0.0, float(entry.get("progress_combos_done") or 0.0))
             except Exception:
                 combos_done = 0.0
             try:
-                elapsed_s = max(0.0, float(progress.get("elapsed_s") or progress.get("elapsed") or 0.0))
+                elapsed_s = max(0.0, float(entry.get("progress_elapsed_s") or 0.0))
             except Exception:
                 elapsed_s = 0.0
+            if combos_done <= 0.0 or elapsed_s <= 0.0:
+                progress = parse_json_object(entry.get("progress_json"))
+                if combos_done <= 0.0:
+                    try:
+                        combos_done = max(0.0, float(progress.get("combos_done") or progress.get("done") or progress.get("combos_total") or progress.get("total") or 0.0))
+                    except Exception:
+                        combos_done = max(0.0, float(combos_done or 0.0))
+                if elapsed_s <= 0.0:
+                    try:
+                        elapsed_s = max(0.0, float(progress.get("elapsed_s") or progress.get("elapsed") or 0.0))
+                    except Exception:
+                        elapsed_s = max(0.0, float(elapsed_s or 0.0))
             created_dt = _parse_iso(entry.get("created_at"))
             derived_elapsed_s = 0.0
             if activity_dt is not None and created_dt is not None:
@@ -4854,9 +5562,10 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
                 results["combos"] = []
                 results["time"] = []
         else:
+            done_expr, _, elapsed_expr = _get_progress_summary_columns(conn)
             sql_combos = """
                 SELECT u.username, u.nickname, u.avatar_url, COUNT(t.id) as task_count,
-                       SUM(COALESCE(CAST(json_extract(t.progress_json, '$.combos_done') AS INTEGER), 0)) as total_done
+                       SUM(""" + done_expr + """) as total_done
                 FROM mining_tasks t
                 JOIN users u ON t.user_id = u.id
                 WHERE COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
@@ -4873,7 +5582,7 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
                         t.user_id,
                         MAX(
                             MAX(
-                                COALESCE(CAST(json_extract(t.progress_json, '$.elapsed_s') AS REAL), 0.0),
+                                """ + elapsed_expr + """,
                                 CASE
                                     WHEN COALESCE(t.created_at, '') = '' THEN 0.0
                                     ELSE MAX(
@@ -5161,7 +5870,10 @@ def claim_next_task_any(worker_id: str) -> Optional[dict]:
             conn.commit()
             return None
 
-        tid = int(row.get("id") or 0)
+        try:
+            tid = int((dict(row) if row else {}).get("id") or 0)
+        except Exception:
+            tid = int(row["id"] or 0) if row else 0
         if tid <= 0:
             conn.commit()
             return None
@@ -5259,7 +5971,10 @@ def claim_next_task(user_id: int, worker_id: str) -> Optional[dict]:
             conn.commit()
             return None
 
-        tid = int(row.get("id") or 0)
+        try:
+            tid = int((dict(row) if row else {}).get("id") or 0)
+        except Exception:
+            tid = int(row["id"] or 0) if row else 0
         if tid <= 0:
             conn.commit()
             return None
@@ -5304,6 +6019,7 @@ def update_task_progress_with_lease(task_id: int, user_id: int, worker_id: str, 
 
     now = _utc_now_iso()
     new_exp = _iso_add_seconds(_lease_extend_seconds())
+    summary = _task_progress_summary(progress)
 
     conn = _conn()
     try:
@@ -5311,21 +6027,45 @@ def update_task_progress_with_lease(task_id: int, user_id: int, worker_id: str, 
             cur = conn.execute(
                 """
                 UPDATE mining_tasks
-                SET progress_json=?, updated_at=?, last_heartbeat=?, lease_expires_at=?
+                SET progress_json=?, progress_combos_done=?, progress_combos_total=?, progress_elapsed_s=?, updated_at=?, last_heartbeat=?, lease_expires_at=?
                 WHERE id=? AND status='running' AND lease_id=? AND lease_worker_id=?
                 """,
-                (json.dumps(progress or {}, ensure_ascii=False), now, now, new_exp, tid, lid, wid),
+                (
+                    json.dumps(progress or {}, ensure_ascii=False),
+                    int(summary["combos_done"]),
+                    int(summary["combos_total"]),
+                    float(summary["elapsed_s"]),
+                    now,
+                    now,
+                    new_exp,
+                    tid,
+                    lid,
+                    wid,
+                ),
             )
         else:
             cur = conn.execute(
                 """
                 UPDATE mining_tasks
-                SET progress_json=?, updated_at=?, last_heartbeat=?, lease_expires_at=?
+                SET progress_json=?, progress_combos_done=?, progress_combos_total=?, progress_elapsed_s=?, updated_at=?, last_heartbeat=?, lease_expires_at=?
                 WHERE id=? AND user_id=? AND status='running' AND lease_id=? AND lease_worker_id=?
                 """,
-                (json.dumps(progress or {}, ensure_ascii=False), now, now, new_exp, tid, int(user_id or 0), lid, wid),
+                (
+                    json.dumps(progress or {}, ensure_ascii=False),
+                    int(summary["combos_done"]),
+                    int(summary["combos_total"]),
+                    float(summary["elapsed_s"]),
+                    now,
+                    now,
+                    new_exp,
+                    tid,
+                    int(user_id or 0),
+                    lid,
+                    wid,
+                ),
             )
         conn.commit()
+        invalidate_global_dashboard_counters()
         return int(cur.rowcount or 0) > 0
     except Exception:
         return False
@@ -5340,6 +6080,7 @@ def release_task_with_lease(task_id: int, user_id: int, worker_id: str, lease_id
         return False
 
     now = _utc_now_iso()
+    summary = _task_progress_summary(progress)
 
     conn = _conn()
     try:
@@ -5347,21 +6088,41 @@ def release_task_with_lease(task_id: int, user_id: int, worker_id: str, lease_id
             cur = conn.execute(
                 """
                 UPDATE mining_tasks
-                SET status='assigned', progress_json=?, updated_at=?, lease_id=NULL, lease_worker_id=NULL, lease_expires_at=NULL
+                SET status='assigned', progress_json=?, progress_combos_done=?, progress_combos_total=?, progress_elapsed_s=?, updated_at=?, lease_id=NULL, lease_worker_id=NULL, lease_expires_at=NULL
                 WHERE id=? AND status='running' AND lease_id=? AND lease_worker_id=?
                 """,
-                (json.dumps(progress or {}, ensure_ascii=False), now, tid, lid, wid),
+                (
+                    json.dumps(progress or {}, ensure_ascii=False),
+                    int(summary["combos_done"]),
+                    int(summary["combos_total"]),
+                    float(summary["elapsed_s"]),
+                    now,
+                    tid,
+                    lid,
+                    wid,
+                ),
             )
         else:
             cur = conn.execute(
                 """
                 UPDATE mining_tasks
-                SET status='assigned', progress_json=?, updated_at=?, lease_id=NULL, lease_worker_id=NULL, lease_expires_at=NULL
+                SET status='assigned', progress_json=?, progress_combos_done=?, progress_combos_total=?, progress_elapsed_s=?, updated_at=?, lease_id=NULL, lease_worker_id=NULL, lease_expires_at=NULL
                 WHERE id=? AND user_id=? AND status='running' AND lease_id=? AND lease_worker_id=?
                 """,
-                (json.dumps(progress or {}, ensure_ascii=False), now, tid, int(user_id or 0), lid, wid),
+                (
+                    json.dumps(progress or {}, ensure_ascii=False),
+                    int(summary["combos_done"]),
+                    int(summary["combos_total"]),
+                    float(summary["elapsed_s"]),
+                    now,
+                    tid,
+                    int(user_id or 0),
+                    lid,
+                    wid,
+                ),
             )
         conn.commit()
+        invalidate_global_dashboard_counters()
         return int(cur.rowcount or 0) > 0
     except Exception:
         return False
@@ -5376,6 +6137,7 @@ def finish_task_with_lease(task_id: int, user_id: int, worker_id: str, lease_id:
         return None
 
     now = _utc_now_iso()
+    summary = _task_progress_summary(final_progress)
 
     conn = _conn()
     try:
@@ -5400,11 +6162,21 @@ def finish_task_with_lease(task_id: int, user_id: int, worker_id: str, lease_id:
         cur = conn.execute(
             """
             UPDATE mining_tasks
-            SET status='completed', progress_json=?, updated_at=?, last_heartbeat=?,
+            SET status='completed', progress_json=?, progress_combos_done=?, progress_combos_total=?, progress_elapsed_s=?, updated_at=?, last_heartbeat=?,
                 lease_id=NULL, lease_worker_id=NULL, lease_expires_at=NULL
             WHERE id=? AND status='running' AND lease_id=? AND lease_worker_id=?
             """,
-            (json.dumps(final_progress or {}, ensure_ascii=False), now, now, tid, lid, wid),
+            (
+                json.dumps(final_progress or {}, ensure_ascii=False),
+                int(summary["combos_done"]),
+                int(summary["combos_total"]),
+                float(summary["elapsed_s"]),
+                now,
+                now,
+                tid,
+                lid,
+                wid,
+            ),
         )
         if int(cur.rowcount or 0) <= 0:
             conn.commit()
@@ -5467,6 +6239,7 @@ def finish_task_with_lease(task_id: int, user_id: int, worker_id: str, lease_id:
                     log_sys_event("AUTO_DEPLOY_FAIL", owner_id, f"任務 {tid} 自動佈署失敗: {auto_deploy_err}", {"candidate_id": cid})
 
         conn.commit()
+        invalidate_global_dashboard_counters(force=True)
         return best_candidate_id
     except Exception:
         try:

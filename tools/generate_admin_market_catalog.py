@@ -3,12 +3,19 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+APP_DIR = REPO_ROOT / "app"
+if str(APP_DIR) not in sys.path:
+    sys.path.insert(0, str(APP_DIR))
+
+from sheep_combo_stats import family_combo_count, pool_combo_count, risk_combo_count
+
 OUTPUT_PATH = REPO_ROOT / "catalogs" / "admin_batch_market_catalog_v1.json"
 ACTIVE_OUTPUT_PATH = REPO_ROOT / "catalogs" / "admin_batch_market_catalog_active_fine_v1.json"
 
@@ -527,90 +534,6 @@ def grid_spec_for(profile: SymbolProfile, timeframe_min: int, direction: str, fa
     raise ValueError(f"unsupported family: {family}")
 
 
-def risk_combo_count(family: str, risk_spec: Dict[str, Any]) -> int:
-    hold_count = ((int(risk_spec["max_hold_max"]) - int(risk_spec["max_hold_min"])) // int(risk_spec["max_hold_step"])) + 1
-    if family in {"TEMA_RSI", "LaguerreRSI_TEMA"}:
-        return max(1, hold_count)
-    tp_count = int(math.floor((float(risk_spec["tp_max"]) - float(risk_spec["tp_min"])) / float(risk_spec["tp_step"]) + 1e-12)) + 1
-    sl_count = int(math.floor((float(risk_spec["sl_max"]) - float(risk_spec["sl_min"])) / float(risk_spec["sl_step"]) + 1e-12)) + 1
-    return max(1, tp_count) * max(1, sl_count) * max(1, hold_count)
-
-
-def family_combo_count(family: str, grid_spec: Dict[str, Any]) -> int:
-    def icount(a: int, b: int, step: int) -> int:
-        return ((int(b) - int(a)) // int(step)) + 1
-
-    def fcount(a: float, b: float, step: float) -> int:
-        return int(math.floor((float(b) - float(a)) / float(step) + 1e-12)) + 1
-
-    if family == "RSI":
-        return icount(grid_spec["rsi_p_min"], grid_spec["rsi_p_max"], grid_spec["rsi_p_step"]) * icount(grid_spec["rsi_lv_min"], grid_spec["rsi_lv_max"], grid_spec["rsi_lv_step"])
-    if family in {"SMA_Cross", "EMA_Cross", "HMA_Cross", "DEMA_Cross", "TEMA_Cross", "WMA_Cross"}:
-        total = 0
-        fast_vals = range(grid_spec["fast_min"], grid_spec["fast_max"] + 1, grid_spec["fast_step"])
-        slow_vals = list(range(grid_spec["slow_min"], grid_spec["slow_max"] + 1, grid_spec["slow_step"]))
-        for fast in fast_vals:
-            total += sum(1 for slow in slow_vals if slow > fast)
-        return total
-    if family in {"MACD_Cross", "PPO_Cross", "PVO_Cross"}:
-        base = family_combo_count("EMA_Cross", {k: grid_spec[k] for k in ("fast_min", "fast_max", "fast_step", "slow_min", "slow_max", "slow_step")})
-        return base * icount(grid_spec["sig_min"], grid_spec["sig_max"], grid_spec["sig_step"])
-    if family == "Bollinger_Touch":
-        return icount(grid_spec["bb_p_min"], grid_spec["bb_p_max"], grid_spec["bb_p_step"]) * fcount(grid_spec["bb_n_min"], grid_spec["bb_n_max"], grid_spec["bb_n_step"])
-    if family == "Stoch_Oversold":
-        return icount(grid_spec["k_min"], grid_spec["k_max"], grid_spec["k_step"]) * icount(grid_spec["d_min"], grid_spec["d_max"], grid_spec["d_step"]) * icount(grid_spec["stoch_lv_min"], grid_spec["stoch_lv_max"], grid_spec["stoch_lv_step"])
-    if family in {"CCI_Oversold", "WillR_Oversold", "MFI_Oversold"}:
-        return icount(grid_spec["p_min"], grid_spec["p_max"], grid_spec["p_step"]) * icount(grid_spec["lv_min"], grid_spec["lv_max"], grid_spec["lv_step"])
-    if family == "Donchian_Breakout":
-        return icount(grid_spec["look_min"], grid_spec["look_max"], grid_spec["look_step"])
-    if family in {"ADX_DI_Cross", "Aroon_Cross"}:
-        return icount(grid_spec["p_min"], grid_spec["p_max"], grid_spec["p_step"])
-    if family in {"ROC_Threshold", "CMF_Threshold", "EFI_Threshold", "BB_PercentB_Revert", "Aroon_Osc_Threshold"}:
-        return icount(grid_spec["p_min"], grid_spec["p_max"], grid_spec["p_step"]) * fcount(grid_spec["thr_min"], grid_spec["thr_max"], grid_spec["thr_step"])
-    if family in {"KAMA_Cross", "TRIX_Cross", "DPO_Revert", "Vortex_Cross"}:
-        return icount(grid_spec["p_min"], grid_spec["p_max"], grid_spec["p_step"])
-    if family == "ATR_Band_Break":
-        return icount(grid_spec["p_min"], grid_spec["p_max"], grid_spec["p_step"]) * fcount(grid_spec["mult_min"], grid_spec["mult_max"], grid_spec["mult_step"])
-    if family == "Volatility_Squeeze":
-        return icount(grid_spec["p_min"], grid_spec["p_max"], grid_spec["p_step"]) * fcount(grid_spec["nstd_min"], grid_spec["nstd_max"], grid_spec["nstd_step"]) * fcount(grid_spec["q_min"], grid_spec["q_max"], grid_spec["q_step"])
-    if family in {"OBV_Slope", "ADL_Slope"}:
-        return 1
-    if family == "OB_FVG":
-        return (
-            icount(grid_spec["obfvg_n_min"], grid_spec["obfvg_n_max"], grid_spec["obfvg_n_step"])
-            * icount(grid_spec["obfvg_w_min"], grid_spec["obfvg_w_max"], grid_spec["obfvg_w_step"])
-            * fcount(grid_spec["obfvg_r_min"], grid_spec["obfvg_r_max"], grid_spec["obfvg_r_step"])
-            * icount(grid_spec["obfvg_h_min"], grid_spec["obfvg_h_max"], grid_spec["obfvg_h_step"])
-            * fcount(grid_spec["obfvg_g_min"], grid_spec["obfvg_g_max"], grid_spec["obfvg_g_step"])
-            * fcount(grid_spec["obfvg_a_min"], grid_spec["obfvg_a_max"], grid_spec["obfvg_a_step"])
-            * fcount(grid_spec["obfvg_thr_min"], grid_spec["obfvg_thr_max"], grid_spec["obfvg_thr_step"])
-            * icount(grid_spec["obfvg_rsi_p_min"], grid_spec["obfvg_rsi_p_max"], grid_spec["obfvg_rsi_p_step"])
-            * fcount(grid_spec["obfvg_rsi_diff_min"], grid_spec["obfvg_rsi_diff_max"], grid_spec["obfvg_rsi_diff_step"])
-        )
-    if family == "SMC":
-        return icount(grid_spec["smc_len_min"], grid_spec["smc_len_max"], grid_spec["smc_len_step"]) * icount(grid_spec["smc_limit_min"], grid_spec["smc_limit_max"], grid_spec["smc_limit_step"])
-    if family == "LaguerreRSI_TEMA":
-        return (
-            fcount(grid_spec["gamma_min"], grid_spec["gamma_max"], grid_spec["gamma_step"])
-            * icount(grid_spec["tema_min"], grid_spec["tema_max"], grid_spec["tema_step"])
-            * fcount(grid_spec["sl_c_min"], grid_spec["sl_c_max"], grid_spec["sl_c_step"])
-            * fcount(grid_spec["tp_c_min"], grid_spec["tp_c_max"], grid_spec["tp_c_step"])
-            * fcount(grid_spec["tsd_min"], grid_spec["tsd_max"], grid_spec["tsd_step"])
-            * fcount(grid_spec["tsa_min"], grid_spec["tsa_max"], grid_spec["tsa_step"])
-        )
-    if family == "TEMA_RSI":
-        return (
-            icount(grid_spec["fast_min"], grid_spec["fast_max"], grid_spec["fast_step"])
-            * icount(grid_spec["slow_min"], grid_spec["slow_max"], grid_spec["slow_step"])
-            * icount(grid_spec["rsi_thr_min"], grid_spec["rsi_thr_max"], grid_spec["rsi_thr_step"])
-            * fcount(grid_spec["tp_min"], grid_spec["tp_max"], grid_spec["tp_step"])
-            * fcount(grid_spec["sl_min"], grid_spec["sl_max"], grid_spec["sl_step"])
-            * fcount(grid_spec["act_min"], grid_spec["act_max"], grid_spec["act_step"])
-            * icount(grid_spec["tr_tick_min"], grid_spec["tr_tick_max"], grid_spec["tr_tick_step"])
-        )
-    raise ValueError(f"unsupported family for count: {family}")
-
-
 def midpoint_family_params(family: str, grid_spec: Dict[str, Any], direction: str) -> Dict[str, Any]:
     def imid(a: int, b: int, step: int) -> int:
         count = ((int(b) - int(a)) // int(step)) + 1
@@ -706,7 +629,7 @@ def build_catalog(*, active_pools: bool = False, fine_grain: bool = False) -> Di
                     key = f"mktv1__{profile.symbol.lower()}__{tf_text}__{family.lower()}__{direction}"
                     grid_spec = grid_spec_for(profile, timeframe_min, direction, family)
                     risk_spec = risk_spec_for(profile, timeframe_min, direction, family, fine_grain=fine_grain)
-                    total_combos = family_combo_count(family, grid_spec) * risk_combo_count(family, risk_spec)
+                    total_combos = pool_combo_count(family, grid_spec, risk_spec)
                     partitions = choose_partitions(profile, family, total_combos, fine_grain=fine_grain)
                     pool_name = f"{profile.symbol} {tf_text} {family} {direction.upper()}"
                     factor_pools.append({"key": key, "name": pool_name, "symbol": profile.symbol, "family": family, "direction": direction, "timeframe_min": int(timeframe_min), "years": int(profile.years), "grid_spec": grid_spec, "risk_spec": risk_spec, "num_partitions": partitions, "seed": stable_seed(key), "active": bool(active_pools), "auto_expand": False})
@@ -721,7 +644,7 @@ def catalog_combo_total(payload: Dict[str, Any]) -> int:
         family = str(pool.get("family") or "")
         grid_spec = dict(pool.get("grid_spec") or {})
         risk_spec = dict(pool.get("risk_spec") or {})
-        total += int(family_combo_count(family, grid_spec) * risk_combo_count(family, risk_spec))
+        total += int(pool_combo_count(family, grid_spec, risk_spec))
     return int(total)
 
 

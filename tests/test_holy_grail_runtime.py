@@ -196,9 +196,10 @@ def test_fetch_factor_pool_data_supports_token_and_pagination(monkeypatch):
         factor_pool_url="https://example.com",
         factor_pool_token="static-token",
     )
-    strategies, api_base = runtime.fetch_factor_pool_data()
+    strategies, api_base, token = runtime.fetch_factor_pool_data()
 
     assert api_base == "https://example.com/api"
+    assert token == "static-token"
     assert [int(item["strategy_id"]) for item in strategies] == [1, 2, 3]
     assert calls["get_pages"] == [1, 2]
     assert calls["post_calls"] == 0
@@ -495,9 +496,21 @@ def test_shared_runtime_builds_portfolio(monkeypatch, tmp_path):
                 }
             ],
             "https://example.com/api",
+            "static-token",
         )
 
     monkeypatch.setattr(HolyGrailRuntime, "fetch_factor_pool_data", _fake_fetch)
+    monkeypatch.setattr(
+        HolyGrailRuntime,
+        "_fetch_cost_settings",
+        lambda self, api_base, token, fallback_fee_side: {
+            "fee_pct": 0.06,
+            "slippage_pct": 0.02,
+            "fee_side": 0.0006,
+            "slippage": 0.0002,
+            "source_settings_updated_at": "2026-03-24T00:00:00+00:00",
+        },
+    )
 
     result = run_holy_grail_build(bt_module=_DummyBT(), log=lambda _msg: None, base_stake_pct=50.0)
     assert result.ok
@@ -508,6 +521,8 @@ def test_shared_runtime_builds_portfolio(monkeypatch, tmp_path):
     assert result.multi_payload[0]["direction"] == "long"
     assert result.multi_payload[0]["total_return_pct"] == 5.0
     assert result.multi_payload[0]["max_drawdown_pct"] == 3.0
+    assert result.cost_basis["fee_pct"] == pytest.approx(0.06)
+    assert result.cost_basis["slippage_pct"] == pytest.approx(0.02)
     assert Path(result.report_paths["summary_report"]).exists()
 
 
@@ -562,6 +577,7 @@ def test_duplicate_trade_signatures_are_deduplicated(monkeypatch, tmp_path):
                 }
             ],
             "https://example.com/api",
+            "static-token",
         )
 
     def _fake_kline(self, symbol, timeframe_min):
@@ -585,6 +601,17 @@ def test_duplicate_trade_signatures_are_deduplicated(monkeypatch, tmp_path):
         return mapping[curve_key]
 
     monkeypatch.setattr(HolyGrailRuntime, "fetch_factor_pool_data", _fake_fetch)
+    monkeypatch.setattr(
+        HolyGrailRuntime,
+        "_fetch_cost_settings",
+        lambda self, api_base, token, fallback_fee_side: {
+            "fee_pct": 0.06,
+            "slippage_pct": 0.02,
+            "fee_side": 0.0006,
+            "slippage": 0.0002,
+            "source_settings_updated_at": "2026-03-24T00:00:00+00:00",
+        },
+    )
     monkeypatch.setattr(HolyGrailRuntime, "load_kline_data", _fake_kline)
     monkeypatch.setattr(HolyGrailRuntime, "build_daily_equity_curve", staticmethod(_fake_equity))
 
@@ -654,6 +681,7 @@ def test_pairwise_hard_threshold_blocks_highly_correlated_pair(monkeypatch, tmp_
                 }
             ],
             "https://example.com/api",
+            "static-token",
         )
 
     def _fake_kline(self, symbol, timeframe_min):
@@ -678,6 +706,17 @@ def test_pairwise_hard_threshold_blocks_highly_correlated_pair(monkeypatch, tmp_
         return mapping[curve_key]
 
     monkeypatch.setattr(HolyGrailRuntime, "fetch_factor_pool_data", _fake_fetch)
+    monkeypatch.setattr(
+        HolyGrailRuntime,
+        "_fetch_cost_settings",
+        lambda self, api_base, token, fallback_fee_side: {
+            "fee_pct": 0.06,
+            "slippage_pct": 0.02,
+            "fee_side": 0.0006,
+            "slippage": 0.0002,
+            "source_settings_updated_at": "2026-03-24T00:00:00+00:00",
+        },
+    )
     monkeypatch.setattr(HolyGrailRuntime, "load_kline_data", _fake_kline)
     monkeypatch.setattr(HolyGrailRuntime, "build_daily_equity_curve", staticmethod(_fake_equity))
 

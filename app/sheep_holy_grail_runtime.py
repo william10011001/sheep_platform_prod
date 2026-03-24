@@ -7,7 +7,7 @@ import time
 import traceback
 import hashlib
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
@@ -50,6 +50,7 @@ class HolyGrailResult:
     multi_payload: List[Dict[str, Any]] = field(default_factory=list)
     multi_strategies_json: str = "[]"
     report_paths: Dict[str, str] = field(default_factory=dict)
+    cost_basis: Dict[str, Any] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
     diagnostics: Dict[str, Any] = field(default_factory=dict)
 
@@ -194,14 +195,53 @@ class HolyGrailRuntime:
             break
         return collected
 
-    def fetch_factor_pool_data(self) -> Tuple[List[Dict[str, Any]], str]:
+    def _fetch_cost_settings(self, api_base: str, token: str, *, fallback_fee_side: float) -> Dict[str, Any]:
+        try:
+            resp = requests.get(
+                f"{api_base}/settings/snapshot",
+                headers=self._factor_pool_headers(token),
+                verify=False,
+                timeout=20,
+            )
+            if resp.status_code == 200:
+                payload = resp.json() or {}
+                thresholds = dict(payload.get("thresholds") or {})
+                cost_basis = dict(payload.get("cost_basis") or {})
+                fee_pct = float(cost_basis.get("fee_pct") if cost_basis.get("fee_pct") is not None else thresholds.get("global_fee_pct") or (fallback_fee_side * 100.0))
+                slippage_pct = float(cost_basis.get("slippage_pct") if cost_basis.get("slippage_pct") is not None else thresholds.get("global_slippage_pct") or 0.0)
+                return {
+                    "fee_pct": fee_pct,
+                    "slippage_pct": slippage_pct,
+                    "fee_side": fee_pct / 100.0,
+                    "slippage": slippage_pct / 100.0,
+                    "source_settings_updated_at": str(
+                        cost_basis.get("source_settings_updated_at")
+                        or (payload.get("updated_at") or {}).get("global_slippage_pct")
+                        or (payload.get("updated_at") or {}).get("global_fee_pct")
+                        or datetime.now(timezone.utc).isoformat()
+                    ),
+                }
+        except Exception as exc:
+            self.warn_once(
+                "holy-grail-cost-settings-fetch-failed",
+                f"[HolyGrail] cost settings fetch failed, fallback to local defaults: {exc}",
+            )
+        return {
+            "fee_pct": float(fallback_fee_side) * 100.0,
+            "slippage_pct": 0.0,
+            "fee_side": float(fallback_fee_side),
+            "slippage": 0.0,
+            "source_settings_updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def fetch_factor_pool_data(self) -> Tuple[List[Dict[str, Any]], str, str]:
         host, token, user, password = self._factor_pool_creds()
         api_base = self.detect_api_base(host)
         attempts: List[str] = []
 
         if token:
             try:
-                return self._fetch_factor_pool_pages(api_base, token), api_base
+                return self._fetch_factor_pool_pages(api_base, token), api_base, token
             except Exception as exc:
                 attempts.append(str(exc))
                 self.warn_once(
@@ -213,7 +253,7 @@ class HolyGrailRuntime:
 
         login_token = self._issue_factor_pool_token(api_base, user, password)
         try:
-            return self._fetch_factor_pool_pages(api_base, login_token), api_base
+            return self._fetch_factor_pool_pages(api_base, login_token), api_base, login_token
         except Exception as exc:
             attempts.append(str(exc))
             raise RuntimeError(" | ".join(attempts))
@@ -595,13 +635,17 @@ class HolyGrailRuntime:
             return HolyGrailResult(ok=False, message="backtest module is unavailable")
 
         try:
-            strategies, api_base = self.fetch_factor_pool_data()
+            strategies, api_base, access_token = self.fetch_factor_pool_data()
         except Exception as exc:
             return HolyGrailResult(
                 ok=False,
                 message=str(exc),
                 warnings=list(self._warning_messages),
             )
+
+        cost_basis = self._fetch_cost_settings(api_base, access_token, fallback_fee_side=float(fee_side))
+        effective_fee_side = float(cost_basis.get("fee_side") or fee_side)
+        effective_slippage = float(cost_basis.get("slippage") or 0.0)
 
         df_params = self.flatten_strategies_to_dataframe(strategies)
         if df_params.empty:
@@ -669,7 +713,8 @@ class HolyGrailRuntime:
                     tp_pct=tp,
                     sl_pct=sl,
                     max_hold=max_hold,
-                    fee_side=fee_side,
+                    fee_side=effective_fee_side,
+                    slippage=effective_slippage,
                     reverse_mode=reverse_mode,
                 )
             except Exception as exc:
@@ -1013,12 +1058,14 @@ class HolyGrailRuntime:
             multi_payload=multi_payload,
             multi_strategies_json=json.dumps(multi_payload, ensure_ascii=False, indent=2),
             report_paths=report_paths,
+            cost_basis=cost_basis,
             warnings=list(self._warning_messages),
             diagnostics={
                 "project_root": str(project_root()),
                 "selected_curve_keys": selected_curve_keys,
                 "corr_threshold": float(corr_threshold),
                 "duplicate_groups": len(duplicate_groups),
+                "cost_basis": cost_basis,
             },
         )
 

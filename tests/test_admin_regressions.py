@@ -15,6 +15,8 @@ if str(ROOT) not in sys.path:
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
+from sheep_combo_stats import pool_combo_count
+
 
 MODULES_TO_RESET = ("sheep_platform_api", "sheep_platform_db")
 FIXED_SECRET_KEY = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
@@ -211,6 +213,14 @@ def _query_sys_events(db_module, event_type: str):
         conn.close()
 
 
+def _worker_headers(token_headers: dict, *, worker_id: str = "worker-regression-1") -> dict:
+    headers = dict(token_headers or {})
+    headers["X-Worker-Id"] = worker_id
+    headers["X-Worker-Version"] = "2.0.0"
+    headers["X-Worker-Protocol"] = "2"
+    return headers
+
+
 @pytest.fixture()
 def admin_client(tmp_path, monkeypatch):
     db_path = tmp_path / "admin-regression.sqlite3"
@@ -300,6 +310,217 @@ def test_threshold_alias_round_trip_persists_candidate_keep_top_n(admin_client):
 
     alias_events = _query_sys_events(db_module, "DEPRECATED_ALIAS_USED")
     assert any("/admin/settings/thresholds" in row["message"] for row in alias_events)
+
+
+def test_global_cost_settings_round_trip_snapshot_and_task_claim(admin_client):
+    client = admin_client["client"]
+    headers = admin_client["headers"]
+    web_headers = admin_client["web_headers"]
+    db_module = admin_client["db"]
+    user_id = admin_client["user_id"]
+    pool_id = admin_client["pool_id"]
+
+    db_module.set_user_run_enabled(int(user_id), True)
+    conn = db_module._conn()
+    try:
+        pool_row = conn.execute("SELECT symbol, timeframe_min, years FROM factor_pools WHERE id = ?", (int(pool_id),)).fetchone()
+        assert pool_row is not None
+        pool_symbol = str(pool_row["symbol"])
+        pool_timeframe = int(pool_row["timeframe_min"])
+        pool_years = int(pool_row["years"])
+    finally:
+        conn.close()
+    db_module.set_data_hash(
+        pool_symbol,
+        pool_timeframe,
+        pool_years,
+        "seeded-hash-for-claim-test",
+        ts=db_module._now_iso(),
+    )
+
+    update = client.post(
+        "/admin/settings",
+        headers=headers,
+        json={
+            "min_trades": 11,
+            "min_total_return_pct": 2.5,
+            "max_drawdown_pct": 15.0,
+            "min_sharpe": 1.2,
+            "candidate_keep_top_n": 9,
+            "global_fee_pct": 0.11,
+            "global_slippage_pct": 0.04,
+        },
+    )
+    assert update.status_code == 200, update.text
+
+    thresholds = client.get("/settings/thresholds", headers=headers).json()
+    snapshot = client.get("/settings/snapshot", headers=headers).json()
+    assert thresholds["global_fee_pct"] == pytest.approx(0.11)
+    assert thresholds["global_slippage_pct"] == pytest.approx(0.04)
+    assert snapshot["thresholds"]["global_fee_pct"] == pytest.approx(0.11)
+    assert snapshot["thresholds"]["global_slippage_pct"] == pytest.approx(0.04)
+    assert snapshot["cost_basis"]["fee_pct"] == pytest.approx(0.11)
+    assert snapshot["cost_basis"]["slippage_pct"] == pytest.approx(0.04)
+    assert snapshot["cost_basis"]["fee_side"] == pytest.approx(0.0011)
+    assert snapshot["cost_basis"]["slippage_pct_decimal"] == pytest.approx(0.0004)
+
+    claimed = client.post("/tasks/claim", headers=_worker_headers(web_headers, worker_id="worker-cost-sync"))
+    assert claimed.status_code == 200, claimed.text
+    body = claimed.json()
+    assert int(body["task_id"]) > 0
+    assert body["risk_spec"]["global_fee_pct"] == pytest.approx(0.11)
+    assert body["risk_spec"]["global_slippage_pct"] == pytest.approx(0.04)
+    assert body["risk_spec"]["fee_side"] == pytest.approx(0.0011)
+    assert body["risk_spec"]["slippage"] == pytest.approx(0.0004)
+    assert body["risk_spec"]["slippage_pct"] == pytest.approx(0.0004)
+    assert body["risk_spec"]["cost_basis"]["fee_pct"] == pytest.approx(0.11)
+    assert body["risk_spec"]["cost_basis"]["slippage_pct"] == pytest.approx(0.04)
+
+
+def test_dashboard_exposes_global_combo_counters(admin_client):
+    client = admin_client["client"]
+    headers = admin_client["headers"]
+    db_module = admin_client["db"]
+    cycle_id = admin_client["cycle_id"]
+    user_id = admin_client["user_id"]
+
+    grid_spec = {
+        "rsi_p_min": 6,
+        "rsi_p_max": 12,
+        "rsi_p_step": 3,
+        "rsi_lv_min": 20,
+        "rsi_lv_max": 32,
+        "rsi_lv_step": 6,
+    }
+    risk_spec = {
+        "tp_min": 0.5,
+        "tp_max": 1.0,
+        "tp_step": 0.25,
+        "sl_min": 0.4,
+        "sl_max": 0.8,
+        "sl_step": 0.2,
+        "max_hold_min": 8,
+        "max_hold_max": 16,
+        "max_hold_step": 4,
+    }
+    expected_combo_count = int(pool_combo_count("RSI", grid_spec, risk_spec))
+    pool_id = db_module.create_factor_pool(
+        cycle_id=int(cycle_id),
+        name="Combo Counter Pool",
+        symbol="ETH_USDT",
+        timeframe_min=60,
+        years=3,
+        family="RSI",
+        grid_spec=grid_spec,
+        risk_spec=risk_spec,
+        num_partitions=4,
+        seed=13,
+        active=True,
+    )[0]
+    db_module.invalidate_global_dashboard_counters(force=True)
+
+    first_task_id = admin_client["task_id"]
+    db_module.update_task_progress(
+        int(first_task_id),
+        {"combos_done": 17, "combos_total": 50, "elapsed_s": 9.5},
+    )
+    second_task_id = _insert_task(
+        db_module,
+        user_id=int(user_id),
+        pool_id=int(pool_id),
+        cycle_id=int(cycle_id),
+        status="completed",
+        progress={},
+    )
+    db_module.update_task_progress(
+        int(second_task_id),
+        {"combos_done": 25, "combos_total": 25, "elapsed_s": 12.0},
+    )
+    db_module.invalidate_global_dashboard_counters(force=True)
+
+    dashboard = client.get("/dashboard", headers=headers)
+    assert dashboard.status_code == 200, dashboard.text
+    body = dashboard.json()
+    assert body["total_strategy_pool_combo_count"] == expected_combo_count
+    assert body["global_mined_combo_count"] == 42
+
+
+def test_announcements_admin_crud_public_listing_and_live_version(admin_client):
+    client = admin_client["client"]
+    headers = admin_client["headers"]
+
+    before_version = client.get("/live/version", headers=headers).json().get("announcement_version") or ""
+
+    create = client.post(
+        "/admin/announcements",
+        headers=headers,
+        json={
+            "title": "系統維護公告",
+            "slug": "system-maintenance",
+            "preview_text": "今晚 22:00 將進行短暫維護。",
+            "body_markdown": "# 維護公告\n\n請提前保存進度。",
+            "status": "draft",
+        },
+    )
+    assert create.status_code == 200, create.text
+    item = create.json()["item"]
+    assert item["status"] == "draft"
+    assert item["body_html"]
+
+    public_before_publish = client.get("/announcements")
+    assert public_before_publish.status_code == 200, public_before_publish.text
+    assert public_before_publish.json()["items"] == []
+
+    admin_list = client.get("/admin/announcements", headers=headers)
+    assert admin_list.status_code == 200, admin_list.text
+    assert admin_list.json()["total"] == 1
+
+    update = client.put(
+        f"/admin/announcements/{item['id']}",
+        headers=headers,
+        json={
+            "title": "系統維護公告更新版",
+            "slug": "system-maintenance",
+            "preview_text": "今晚 22:00 將進行短暫維護，請先保存。",
+            "body_markdown": "## 維護時段\n\n22:00 - 22:30",
+            "status": "draft",
+        },
+    )
+    assert update.status_code == 200, update.text
+    assert update.json()["item"]["title"] == "系統維護公告更新版"
+
+    publish = client.post(f"/admin/announcements/{item['id']}/publish", headers=headers)
+    assert publish.status_code == 200, publish.text
+    published = publish.json()["item"]
+    assert published["status"] == "published"
+    assert published["published_at"]
+
+    public_list = client.get("/announcements")
+    assert public_list.status_code == 200, public_list.text
+    public_body = public_list.json()
+    assert public_body["total"] == 1
+    assert public_body["items"][0]["title"] == "系統維護公告更新版"
+    assert "22:00 - 22:30" in public_body["items"][0]["body_html"]
+
+    public_detail = client.get(f"/announcements/{published['slug']}")
+    assert public_detail.status_code == 200, public_detail.text
+    assert public_detail.json()["item"]["preview_text"].startswith("今晚 22:00")
+
+    dashboard = client.get("/dashboard", headers=headers)
+    assert dashboard.status_code == 200, dashboard.text
+    assert dashboard.json()["announcements"][0]["slug"] == "system-maintenance"
+    assert dashboard.json()["announcement_version"]
+
+    after_version = client.get("/live/version", headers=headers).json()["announcement_version"]
+    assert after_version
+    assert after_version != before_version
+
+    unpublish = client.post(f"/admin/announcements/{item['id']}/unpublish", headers=headers)
+    assert unpublish.status_code == 200, unpublish.text
+    assert unpublish.json()["item"]["status"] == "draft"
+
+    missing = client.get(f"/announcements/{published['slug']}")
+    assert missing.status_code == 404
 
 
 def test_admin_routes_and_aliases_return_seeded_data(admin_client):

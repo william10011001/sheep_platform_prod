@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import time
@@ -5,6 +6,7 @@ import random
 import hashlib
 import hmac
 import html
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -178,10 +180,12 @@ _LIVE_CACHE_TTL_SECONDS = 15.0
 _LIVE_CACHE_TTL_BY_BUCKET: Dict[str, float] = {
     "dashboard": 15.0,
     "leaderboard": 60.0,
+    "announcements": 20.0,
 }
 _LIVE_CACHE_MAX_BUCKET_SIZE: Dict[str, int] = {
     "dashboard": 128,
     "leaderboard": 32,
+    "announcements": 32,
 }
 _LIVE_INVALIDATE_THROTTLE_SECONDS: Dict[str, float] = {
     "leaderboard": 45.0,
@@ -190,19 +194,23 @@ _live_versions: Dict[str, str] = {
     "dashboard": "",
     "leaderboard": "",
     "runtime": "",
+    "announcement": "",
 }
 _live_cache: Dict[str, Dict[str, Dict[str, Any]]] = {
     "dashboard": {},
     "leaderboard": {},
+    "announcements": {},
 }
 _live_last_nonempty: Dict[str, Dict[str, Dict[str, Any]]] = {
     "dashboard": {},
     "leaderboard": {},
+    "announcements": {},
 }
 _live_last_invalidated_at: Dict[str, float] = {
     "dashboard": 0.0,
     "leaderboard": 0.0,
     "runtime": 0.0,
+    "announcement": 0.0,
 }
 _http_error_telemetry_cache: Dict[str, float] = {}
 _runtime_lookup_cache: Dict[str, Any] = {"ts": 0.0, "lookup": {}, "key": ""}
@@ -236,6 +244,34 @@ class _ChatHub:
 _chat_hub = _ChatHub()
 
 
+class _AnnouncementHub:
+    def __init__(self) -> None:
+        self._conns: List[WebSocket] = []
+
+    async def connect(self, ws: WebSocket) -> None:
+        await ws.accept()
+        self._conns.append(ws)
+
+    def disconnect(self, ws: WebSocket) -> None:
+        try:
+            self._conns.remove(ws)
+        except Exception:
+            pass
+
+    async def broadcast(self, message: Dict[str, Any]) -> None:
+        dead: List[WebSocket] = []
+        for ws in list(self._conns):
+            try:
+                await ws.send_json(message)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self.disconnect(ws)
+
+
+_announcement_hub = _AnnouncementHub()
+
+
 def _utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -246,6 +282,7 @@ if not _live_versions["dashboard"]:
             "dashboard": _utc_iso(),
             "leaderboard": _utc_iso(),
             "runtime": _utc_iso(),
+            "announcement": _utc_iso(),
         }
     )
 
@@ -305,6 +342,10 @@ def _invalidate_live_state(*channels: str) -> None:
     if "runtime" in requested:
         _live_versions["runtime"] = now_iso
         _live_last_invalidated_at["runtime"] = now_ts
+    if "announcement" in requested:
+        _live_cache["announcements"].clear()
+        _live_versions["announcement"] = now_iso
+        _live_last_invalidated_at["announcement"] = now_ts
 
 
 def _leaderboard_has_rows(payload: Dict[str, Any]) -> bool:
@@ -419,6 +460,7 @@ def _runtime_sync_event_detail(scope: str, user_id: int = 0) -> Dict[str, Any]:
         }
     finally:
         conn.close()
+    _invalidate_live_state("dashboard", "runtime")
 
 
 def _parse_iso_datetime(value: str) -> Optional[datetime]:
@@ -1260,6 +1302,8 @@ class AdminSettingsUpdate(BaseModel):
     min_sharpe: float
     candidate_keep_top_n: Optional[int] = None
     keep_top_n: Optional[int] = None
+    global_fee_pct: Optional[float] = None
+    global_slippage_pct: Optional[float] = None
 
 class FactorPoolCreate(BaseModel):
     name: str
@@ -1308,12 +1352,30 @@ class CatalogImportIn(BaseModel):
     strategies: List[Dict[str, Any]] = []
 
 
+class AnnouncementCreateIn(BaseModel):
+    title: str
+    preview_text: str = ""
+    body_markdown: str = ""
+    slug: str = ""
+    status: str = "draft"
+
+
+class AnnouncementUpdateIn(BaseModel):
+    title: str
+    preview_text: str = ""
+    body_markdown: str = ""
+    slug: str = ""
+    status: str = "draft"
+
+
 _THRESHOLD_DEFAULTS: Dict[str, Any] = {
     "min_trades": 30,
     "min_total_return_pct": 3.0,
     "max_drawdown_pct": 25.0,
     "min_sharpe": 0.6,
     "candidate_keep_top_n": 30,
+    "global_fee_pct": 0.06,
+    "global_slippage_pct": 0.02,
 }
 
 
@@ -1340,6 +1402,8 @@ def _load_threshold_state() -> Tuple[Dict[str, Any], Dict[str, Optional[str]]]:
         "max_drawdown_pct",
         "min_sharpe",
         "candidate_keep_top_n",
+        "global_fee_pct",
+        "global_slippage_pct",
     ]
     details = db.get_settings_details(keys)
     thresholds = {
@@ -1348,6 +1412,8 @@ def _load_threshold_state() -> Tuple[Dict[str, Any], Dict[str, Optional[str]]]:
         "max_drawdown_pct": float(details.get("max_drawdown_pct", {}).get("value") if details.get("max_drawdown_pct", {}).get("value") is not None else _THRESHOLD_DEFAULTS["max_drawdown_pct"]),
         "min_sharpe": float(details.get("min_sharpe", {}).get("value") if details.get("min_sharpe", {}).get("value") is not None else _THRESHOLD_DEFAULTS["min_sharpe"]),
         "candidate_keep_top_n": int(details.get("candidate_keep_top_n", {}).get("value") if details.get("candidate_keep_top_n", {}).get("value") is not None else _THRESHOLD_DEFAULTS["candidate_keep_top_n"]),
+        "global_fee_pct": float(details.get("global_fee_pct", {}).get("value") if details.get("global_fee_pct", {}).get("value") is not None else _THRESHOLD_DEFAULTS["global_fee_pct"]),
+        "global_slippage_pct": float(details.get("global_slippage_pct", {}).get("value") if details.get("global_slippage_pct", {}).get("value") is not None else _THRESHOLD_DEFAULTS["global_slippage_pct"]),
     }
     thresholds["keep_top_n"] = int(thresholds["candidate_keep_top_n"])
 
@@ -1358,8 +1424,178 @@ def _load_threshold_state() -> Tuple[Dict[str, Any], Dict[str, Optional[str]]]:
         "min_sharpe": details.get("min_sharpe", {}).get("updated_at"),
         "candidate_keep_top_n": details.get("candidate_keep_top_n", {}).get("updated_at"),
         "keep_top_n": details.get("candidate_keep_top_n", {}).get("updated_at"),
+        "global_fee_pct": details.get("global_fee_pct", {}).get("updated_at"),
+        "global_slippage_pct": details.get("global_slippage_pct", {}).get("updated_at"),
     }
     return thresholds, updated_at
+
+
+def _safe_markdown_to_html(text: Any) -> str:
+    raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    if not raw.strip():
+        return ""
+    lines = raw.split("\n")
+    blocks: List[str] = []
+    in_list = False
+    in_code = False
+    code_lines: List[str] = []
+    paragraph: List[str] = []
+
+    def flush_paragraph() -> None:
+        nonlocal paragraph
+        if not paragraph:
+            return
+        content = "<br>".join([html.escape(line.strip()) for line in paragraph if str(line).strip()])
+        if content:
+            blocks.append(f"<p>{content}</p>")
+        paragraph = []
+
+    def flush_list() -> None:
+        nonlocal in_list
+        if in_list:
+            blocks.append("</ul>")
+            in_list = False
+
+    def flush_code() -> None:
+        nonlocal in_code, code_lines
+        if in_code:
+            blocks.append("<pre><code>" + html.escape("\n".join(code_lines)) + "</code></pre>")
+            code_lines = []
+            in_code = False
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            flush_paragraph()
+            flush_list()
+            if in_code:
+                flush_code()
+            else:
+                in_code = True
+                code_lines = []
+            continue
+        if in_code:
+            code_lines.append(line)
+            continue
+        if not stripped:
+            flush_paragraph()
+            flush_list()
+            continue
+        if stripped.startswith("### "):
+            flush_paragraph()
+            flush_list()
+            blocks.append(f"<h3>{html.escape(stripped[4:].strip())}</h3>")
+            continue
+        if stripped.startswith("## "):
+            flush_paragraph()
+            flush_list()
+            blocks.append(f"<h2>{html.escape(stripped[3:].strip())}</h2>")
+            continue
+        if stripped.startswith("# "):
+            flush_paragraph()
+            flush_list()
+            blocks.append(f"<h1>{html.escape(stripped[2:].strip())}</h1>")
+            continue
+        if stripped.startswith(("- ", "* ")):
+            flush_paragraph()
+            if not in_list:
+                blocks.append("<ul>")
+                in_list = True
+            blocks.append(f"<li>{html.escape(stripped[2:].strip())}</li>")
+            continue
+        paragraph.append(line)
+
+    flush_paragraph()
+    flush_list()
+    flush_code()
+    return "".join(blocks)
+
+
+def _announcement_payload(row: Dict[str, Any]) -> Dict[str, Any]:
+    item = dict(row or {})
+    item["published_at"] = str(item.get("published_at") or "")
+    item["created_at"] = str(item.get("created_at") or "")
+    item["updated_at"] = str(item.get("updated_at") or "")
+    return item
+
+
+def _cost_settings_payload() -> Dict[str, Any]:
+    thresholds, updated_at = _load_threshold_state()
+    fee_pct = float(thresholds.get("global_fee_pct") or 0.0)
+    slippage_pct = float(thresholds.get("global_slippage_pct") or 0.0)
+    return {
+        "fee_pct": fee_pct,
+        "slippage_pct": slippage_pct,
+        "fee_side": fee_pct / 100.0,
+        "slippage_pct_decimal": slippage_pct / 100.0,
+        "source_settings_updated_at": updated_at.get("global_slippage_pct") or updated_at.get("global_fee_pct") or _utc_iso(),
+    }
+
+
+def _apply_global_costs_to_risk_spec(risk_spec: Any) -> Dict[str, Any]:
+    effective = dict(risk_spec or {})
+    costs = _cost_settings_payload()
+    effective["fee_side"] = float(costs["fee_side"])
+    effective["fee_pct"] = float(costs["fee_pct"])
+    effective["global_fee_pct"] = float(costs["fee_pct"])
+    effective["slippage"] = float(costs["slippage_pct_decimal"])
+    effective["slippage_pct"] = float(costs["slippage_pct_decimal"])
+    effective["global_slippage_pct"] = float(costs["slippage_pct"])
+    effective["cost_basis"] = {
+        "fee_pct": float(costs["fee_pct"]),
+        "slippage_pct": float(costs["slippage_pct"]),
+        "fee_side": float(costs["fee_side"]),
+        "slippage": float(costs["slippage_pct_decimal"]),
+        "source_settings_updated_at": str(costs["source_settings_updated_at"] or ""),
+    }
+    return effective
+
+
+async def _broadcast_announcement_event(action: str, announcement: Optional[Dict[str, Any]] = None) -> None:
+    payload = {
+        "type": "announcement_update",
+        "action": str(action or "updated"),
+        "ts": _utc_iso(),
+        "announcement_version": _live_versions["announcement"],
+        "announcement": _announcement_payload(announcement or {}),
+    }
+    await _announcement_hub.broadcast(payload)
+
+
+def _dispatch_announcement_event(action: str, announcement: Optional[Dict[str, Any]] = None) -> None:
+    try:
+        asyncio.run(_broadcast_announcement_event(action, announcement))
+    except RuntimeError:
+        try:
+            loop = asyncio.get_event_loop()
+            loop.create_task(_broadcast_announcement_event(action, announcement))
+        except Exception:
+            pass
+
+
+def _announcement_list_payload(*, page: int, page_size: int, q: str = "", status: str = "", include_drafts: bool = False) -> Dict[str, Any]:
+    page = max(1, int(page or 1))
+    page_size = max(1, min(100, int(page_size or 20)))
+    offset = (page - 1) * page_size
+    rows = db.list_announcements(
+        limit=page_size,
+        offset=offset,
+        q=q,
+        status=status,
+        include_drafts=include_drafts,
+    )
+    total = db.count_announcements(status=status, include_drafts=include_drafts, q=q)
+    items = [_announcement_payload(row) for row in rows]
+    return {
+        "ok": True,
+        "items": items,
+        "total": int(total or 0),
+        "page": page,
+        "page_size": page_size,
+        "has_next": (offset + len(items)) < int(total or 0),
+        "announcement_version": _live_versions["announcement"],
+        "generated_at": _utc_iso(),
+    }
 
 
 def _log_deprecated_alias(req: Request, ctx: Dict[str, Any], legacy_path: str, canonical_path: str) -> None:
@@ -1566,6 +1802,8 @@ def update_admin_settings(req: Request, body: AdminSettingsUpdate, authorization
         db.set_setting(conn, "max_drawdown_pct", body.max_drawdown_pct)
         db.set_setting(conn, "min_sharpe", body.min_sharpe)
         db.set_setting(conn, "candidate_keep_top_n", keep_top_n)
+        db.set_setting(conn, "global_fee_pct", float(body.global_fee_pct if body.global_fee_pct is not None else _THRESHOLD_DEFAULTS["global_fee_pct"]))
+        db.set_setting(conn, "global_slippage_pct", float(body.global_slippage_pct if body.global_slippage_pct is not None else _THRESHOLD_DEFAULTS["global_slippage_pct"]))
         conn.commit()
     except Exception as e:
         conn.rollback()
@@ -1573,6 +1811,139 @@ def update_admin_settings(req: Request, body: AdminSettingsUpdate, authorization
     finally:
         conn.close()
     return {"ok": True, "msg": "達標門檻設定已成功更新並立即生效！"}
+
+@app.get("/announcements")
+def list_public_announcements(page: int = 1, page_size: int = 10, q: str = ""):
+    cache_key = _live_cache_key("public", page, page_size, q.strip().lower())
+
+    def _load() -> Dict[str, Any]:
+        return _announcement_list_payload(page=page, page_size=page_size, q=q, include_drafts=False)
+
+    payload = _cached_live_payload("announcements", cache_key, _load)
+    _remember_live_snapshot("announcements", cache_key, payload)
+    return payload
+
+
+@app.get("/announcements/{slug}")
+def get_public_announcement(slug: str):
+    row = db.get_announcement_by_slug(slug, include_drafts=False)
+    if not row:
+        raise HTTPException(status_code=404, detail="announcement_not_found")
+    return {"ok": True, "item": _announcement_payload(row), "announcement_version": _live_versions["announcement"]}
+
+
+@app.get("/admin/announcements")
+def admin_list_announcements(
+    request: Request,
+    authorization: Optional[str] = Header(None),
+    page: int = 1,
+    page_size: int = 20,
+    q: str = "",
+    status: str = "",
+):
+    ctx = _auth_ctx(request, authorization)
+    if not _is_admin_ctx(ctx):
+        raise HTTPException(status_code=403, detail="admin_required")
+    return _announcement_list_payload(page=page, page_size=page_size, q=q, status=status, include_drafts=True)
+
+
+@app.post("/admin/announcements")
+def admin_create_announcement(
+    request: Request,
+    body: AnnouncementCreateIn,
+    authorization: Optional[str] = Header(None),
+):
+    ctx = _auth_ctx(request, authorization)
+    if not _is_admin_ctx(ctx):
+        raise HTTPException(status_code=403, detail="admin_required")
+    row = db.create_announcement(
+        title=str(body.title or "").strip(),
+        preview_text=str(body.preview_text or "").strip(),
+        body_markdown=str(body.body_markdown or ""),
+        body_html=_safe_markdown_to_html(body.body_markdown or ""),
+        author_user_id=int(ctx["user"]["id"]),
+        status=str(body.status or "draft").strip().lower() or "draft",
+        slug=str(body.slug or "").strip(),
+    )
+    _invalidate_live_state("announcement", "dashboard")
+    _dispatch_announcement_event("created", row)
+    return {"ok": True, "item": _announcement_payload(row)}
+
+
+@app.put("/admin/announcements/{announcement_id}")
+def admin_update_announcement(
+    announcement_id: int,
+    request: Request,
+    body: AnnouncementUpdateIn,
+    authorization: Optional[str] = Header(None),
+):
+    ctx = _auth_ctx(request, authorization)
+    if not _is_admin_ctx(ctx):
+        raise HTTPException(status_code=403, detail="admin_required")
+    row = db.update_announcement(
+        int(announcement_id),
+        title=str(body.title or "").strip(),
+        preview_text=str(body.preview_text or "").strip(),
+        body_markdown=str(body.body_markdown or ""),
+        body_html=_safe_markdown_to_html(body.body_markdown or ""),
+        status=str(body.status or "draft").strip().lower() or "draft",
+        slug=str(body.slug or "").strip(),
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="announcement_not_found")
+    _invalidate_live_state("announcement", "dashboard")
+    _dispatch_announcement_event("updated", row)
+    return {"ok": True, "item": _announcement_payload(row)}
+
+
+@app.post("/admin/announcements/{announcement_id}/publish")
+def admin_publish_announcement(announcement_id: int, request: Request, authorization: Optional[str] = Header(None)):
+    ctx = _auth_ctx(request, authorization)
+    if not _is_admin_ctx(ctx):
+        raise HTTPException(status_code=403, detail="admin_required")
+    row = db.publish_announcement(int(announcement_id))
+    if not row:
+        raise HTTPException(status_code=404, detail="announcement_not_found")
+    _invalidate_live_state("announcement", "dashboard")
+    _dispatch_announcement_event("published", row)
+    return {"ok": True, "item": _announcement_payload(row)}
+
+
+@app.post("/admin/announcements/{announcement_id}/unpublish")
+def admin_unpublish_announcement(announcement_id: int, request: Request, authorization: Optional[str] = Header(None)):
+    ctx = _auth_ctx(request, authorization)
+    if not _is_admin_ctx(ctx):
+        raise HTTPException(status_code=403, detail="admin_required")
+    row = db.unpublish_announcement(int(announcement_id))
+    if not row:
+        raise HTTPException(status_code=404, detail="announcement_not_found")
+    _invalidate_live_state("announcement", "dashboard")
+    _dispatch_announcement_event("unpublished", row)
+    return {"ok": True, "item": _announcement_payload(row)}
+
+
+@app.websocket("/ws/announcements")
+async def ws_announcements(ws: WebSocket):
+    await _announcement_hub.connect(ws)
+    try:
+        recent = db.list_announcements(limit=8, offset=0, include_drafts=False)
+        await ws.send_json(
+            {
+                "type": "recent",
+                "ts": _utc_iso(),
+                "announcement_version": _live_versions["announcement"],
+                "items": [_announcement_payload(row) for row in recent],
+            }
+        )
+        while True:
+            await ws.receive_text()
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        _announcement_hub.disconnect(ws)
+
 
 @app.get("/admin/strategies")
 def get_admin_strategies(
@@ -2817,6 +3188,8 @@ def web_dashboard(request: Request, authorization: Optional[str] = Header(None))
         recent_tasks = [enrich_task_row(t) for t in db.list_tasks_for_user(uid, cycle_id=cycle_id, limit=10)]
         strategies = db.list_strategies(user_id=uid, limit=100)
         payouts = db.list_payouts(user_id=uid, limit=100)
+        global_counters = dict(db.get_global_dashboard_counters() or {})
+        latest_announcements = [_announcement_payload(row) for row in db.list_announcements(limit=6, offset=0, include_drafts=False)]
 
         conn = db._conn()
         try:
@@ -2895,6 +3268,10 @@ def web_dashboard(request: Request, authorization: Optional[str] = Header(None))
             "strategies": strategies,
             "payouts": payouts,
             "min_sharpe": min_sharpe,
+            "total_strategy_pool_combo_count": int(global_counters.get("total_strategy_pool_combo_count") or 0),
+            "global_mined_combo_count": int(global_counters.get("global_mined_combo_count") or 0),
+            "announcements": latest_announcements,
+            "announcement_version": _live_versions["announcement"],
             "dashboard_version": _live_versions["dashboard"],
         }
 
@@ -2920,6 +3297,7 @@ def live_version(request: Request, authorization: Optional[str] = Header(None)):
         "dashboard_version": _live_versions["dashboard"],
         "leaderboard_version": _live_versions["leaderboard"],
         "runtime_version": _live_versions["runtime"],
+        "announcement_version": _live_versions["announcement"],
         "server_time": _utc_iso(),
     }
 
@@ -3168,8 +3546,13 @@ def settings_snapshot(
     ctx = _auth_ctx(request, authorization)
     if x_worker_id:
         _require_worker(request, ctx, x_worker_id, x_worker_version, x_worker_protocol)
-    thresholds, _ = _load_threshold_state()
-    return {"ts": _utc_iso(), "thresholds": thresholds}
+    thresholds, updated_at = _load_threshold_state()
+    return {
+        "ts": _utc_iso(),
+        "thresholds": thresholds,
+        "updated_at": updated_at,
+        "cost_basis": _cost_settings_payload(),
+    }
 
 
 @app.post("/workers/heartbeat")
@@ -3256,6 +3639,7 @@ def claim_task(
         risk_spec = json.loads(task.get("risk_spec_json") or "{}")
     except Exception:
         risk_spec = {}
+    risk_spec = _apply_global_costs_to_risk_spec(risk_spec)
 
     years = int(task.get("years") or 0) or 3
     dh = {"data_hash": "", "data_hash_ts": ""}
@@ -3442,7 +3826,9 @@ def finish_task(
     except Exception:
         server_dh = {"data_hash": "", "data_hash_ts": ""}
 
-    final_prog = body.final_progress if isinstance(body.final_progress, dict) else {}
+    final_prog = dict(body.final_progress or {}) if isinstance(body.final_progress, dict) else {}
+    final_prog["cost_basis"] = _cost_settings_payload()
+    body.final_progress = final_prog
     worker_dh = str(final_prog.get("data_hash") or getattr(body, "data_hash", "") or "").strip()
     
     if server_dh.get("data_hash") and worker_dh and str(server_dh.get("data_hash")) != worker_dh:
