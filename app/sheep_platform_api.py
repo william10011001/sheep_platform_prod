@@ -2744,7 +2744,7 @@ def manifest():
             "worker_min_protocol": int(db.get_setting(conn, "worker_min_protocol", 2)),
             "worker_download_url": worker_download_url,
             "worker_download_sha256": str(db.get_setting(conn, "worker_download_sha256", "")),
-            "worker_bundle_kind": str(db.get_setting(conn, "worker_bundle_kind", "onedir")),
+            "worker_bundle_kind": str(db.get_setting(conn, "worker_bundle_kind", "")),
         }
     finally:
         conn.close()

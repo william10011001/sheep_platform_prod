@@ -280,7 +280,6 @@
                                     複製下方 Token 並貼至 OpenNode 即可啟動運算。
                                     <template v-if="manifest.worker_download_url">
                                         <a :href="manifest.worker_download_url" target="_blank" rel="noopener noreferrer" class="text-slate-200 hover:text-white underline transition-colors">下載 OpenNode</a>
-                                        <span class="text-slate-500">({{ manifest.worker_bundle_kind || 'onedir' }})</span>
                                     </template>
                                     <template v-else>
                                         <span class="text-slate-500">目前尚未設定下載連結</span>
@@ -463,7 +462,7 @@
                         </div>
                         <div class="cyber-card p-4 sm:p-5 space-y-4">
                             <div>
-                                <div class="text-xs uppercase tracking-[0.2em] text-slate-500">Announcement Preview</div>
+                                <div class="text-xs uppercase tracking-[0.2em] text-slate-500">公告內容</div>
                                 <h3 class="mt-2 text-2xl font-bold text-white">{{ selectedAnnouncement?.title || '選擇左側公告查看完整內容' }}</h3>
                                 <div class="mt-2 text-xs text-slate-500">{{ formatDate(selectedAnnouncement?.published_at || selectedAnnouncement?.updated_at || selectedAnnouncement?.created_at) }}</div>
                             </div>
@@ -537,7 +536,7 @@
                                 <div class="flex items-start justify-between gap-3">
                                     <div>
                                         <h3 class="text-lg font-bold text-white">個人上線策略</h3>
-                                        <div class="text-xs text-slate-400 mt-1">顯示你目前被系統選入全域上線組合的策略，不再誤把本機實盤同步卡片當成每個人都會有。</div>
+                                        <div class="text-xs text-slate-400 mt-1">顯示你目前被系統選入全域上線組合的策略。</div>
                                     </div>
                                     <div class="text-right text-xs text-slate-400">
                                         <div>目前上線</div>
@@ -605,8 +604,8 @@
                                 <summary class="cursor-pointer list-none">
                                     <div class="flex items-center justify-between gap-3">
                                         <div>
-                                            <h3 class="text-lg font-bold text-white">本機實盤同步資訊</h3>
-                                            <div class="text-xs text-slate-400 mt-1">這裡保留本機 `實盤因子池下單程式.py` 的同步診斷，不再把它當成所有用戶共用的主卡片。</div>
+                                            <h3 class="text-lg font-bold text-white">策略同步資訊</h3>
+                                            <div class="text-xs text-slate-400 mt-1">顯示最近一次同步到平台的策略組合摘要。</div>
                                         </div>
                                         <div class="text-xs text-slate-400">{{ formatDate(dashData.personal_runtime_portfolio_updated_at) }}</div>
                                     </div>
@@ -615,7 +614,7 @@
                                     <div class="rounded-xl border border-white/10 bg-black/25 p-4 text-sm text-slate-300">
                                         <div>目前同步筆數：<span class="cyber-num text-white">{{ dashData.personal_runtime_portfolio_count || 0 }}</span></div>
                                         <div class="mt-2">最後同步時間：<span class="text-white">{{ formatDate(dashData.personal_runtime_portfolio_updated_at) }}</span></div>
-                                        <div v-if="dashData.personal_runtime_portfolio_stale" class="mt-2 text-slate-300">本機實盤同步超過 10 分鐘未更新。</div>
+                                        <div v-if="dashData.personal_runtime_portfolio_stale" class="mt-2 text-slate-300">策略同步超過 10 分鐘未更新。</div>
                                     </div>
                                     <div v-for="item in dashData.personal_runtime_portfolio_items || []" :key="`personal-runtime-${item.strategy_key || item.rank}`" class="rounded-xl border border-white/10 bg-black/25 p-4">
                                         <div class="flex items-center justify-between gap-3">
@@ -630,7 +629,7 @@
                                         </div>
                                     </div>
                                     <div v-if="!dashData.personal_runtime_portfolio_items || dashData.personal_runtime_portfolio_items.length === 0" class="rounded-xl border border-dashed border-white/10 px-4 py-8 text-center text-sm text-slate-500">
-                                        目前尚未同步任何本機實盤策略資料。
+                                        目前尚未同步任何策略資料。
                                     </div>
                                 </div>
                             </details>
@@ -1300,7 +1299,7 @@
                 const manifest = reactive({
                     worker_download_url: '',
                     worker_download_sha256: '',
-                    worker_bundle_kind: 'onedir',
+                    worker_bundle_kind: '',
                 });
                 const liveVersions = reactive({
                     dashboard_version: '',
