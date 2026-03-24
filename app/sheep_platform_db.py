@@ -807,47 +807,73 @@ def _backfill_direction_columns(conn: Any) -> None:
 
 
 def _backfill_factor_pool_combo_counts(conn: Any) -> None:
-    try:
-        rows = conn.execute("SELECT id, family, grid_spec_json, risk_spec_json FROM factor_pools").fetchall()
-    except Exception:
-        rows = []
-    for raw_row in rows:
-        row = dict(raw_row or {})
-        pool_id = _clamp_nonnegative_int(row.get("id"))
-        if pool_id <= 0:
-            continue
-        combo_count = _param_combo_count_value(row.get("family"), row.get("grid_spec_json"), row.get("risk_spec_json"))
+    last_id = 0
+    batch_size = 500
+    while True:
         try:
-            conn.execute("UPDATE factor_pools SET param_combo_count = ? WHERE id = ?", (combo_count, pool_id))
+            rows = conn.execute(
+                "SELECT id, family, grid_spec_json, risk_spec_json FROM factor_pools WHERE id > ? ORDER BY id ASC LIMIT ?",
+                (int(last_id), int(batch_size)),
+            ).fetchall()
+        except Exception:
+            rows = []
+        if not rows:
+            break
+        for raw_row in rows:
+            row = dict(raw_row or {})
+            pool_id = _clamp_nonnegative_int(row.get("id"))
+            if pool_id <= 0:
+                continue
+            combo_count = _param_combo_count_value(row.get("family"), row.get("grid_spec_json"), row.get("risk_spec_json"))
+            try:
+                conn.execute("UPDATE factor_pools SET param_combo_count = ? WHERE id = ?", (combo_count, pool_id))
+            except Exception:
+                pass
+            last_id = max(last_id, pool_id)
+        try:
+            conn.commit()
         except Exception:
             pass
 
 
 def _backfill_task_progress_summaries(conn: Any) -> None:
-    try:
-        rows = conn.execute("SELECT id, progress_json FROM mining_tasks").fetchall()
-    except Exception:
-        rows = []
-    for raw_row in rows:
-        row = dict(raw_row or {})
-        task_id = _clamp_nonnegative_int(row.get("id"))
-        if task_id <= 0:
-            continue
-        summary = _task_progress_summary(row.get("progress_json"))
+    last_id = 0
+    batch_size = 1000
+    while True:
         try:
-            conn.execute(
-                """
-                UPDATE mining_tasks
-                SET progress_combos_done = ?, progress_combos_total = ?, progress_elapsed_s = ?
-                WHERE id = ?
-                """,
-                (
-                    int(summary["combos_done"]),
-                    int(summary["combos_total"]),
-                    float(summary["elapsed_s"]),
-                    task_id,
-                ),
-            )
+            rows = conn.execute(
+                "SELECT id, progress_json FROM mining_tasks WHERE id > ? ORDER BY id ASC LIMIT ?",
+                (int(last_id), int(batch_size)),
+            ).fetchall()
+        except Exception:
+            rows = []
+        if not rows:
+            break
+        for raw_row in rows:
+            row = dict(raw_row or {})
+            task_id = _clamp_nonnegative_int(row.get("id"))
+            if task_id <= 0:
+                continue
+            summary = _task_progress_summary(row.get("progress_json"))
+            try:
+                conn.execute(
+                    """
+                    UPDATE mining_tasks
+                    SET progress_combos_done = ?, progress_combos_total = ?, progress_elapsed_s = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        int(summary["combos_done"]),
+                        int(summary["combos_total"]),
+                        float(summary["elapsed_s"]),
+                        task_id,
+                    ),
+                )
+            except Exception:
+                pass
+            last_id = max(last_id, task_id)
+        try:
+            conn.commit()
         except Exception:
             pass
 

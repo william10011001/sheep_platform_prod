@@ -445,6 +445,55 @@ def test_dashboard_exposes_global_combo_counters(admin_client):
     assert body["global_mined_combo_count"] == 42
 
 
+def test_task_progress_summary_backfill_populates_columns_in_batches(admin_client):
+    db_module = admin_client["db"]
+    user_id = admin_client["user_id"]
+    pool_id = admin_client["pool_id"]
+    cycle_id = admin_client["cycle_id"]
+
+    task_ids = [
+        _insert_task(
+            db_module,
+            user_id=int(user_id),
+            pool_id=int(pool_id),
+            cycle_id=int(cycle_id),
+            status="completed",
+            progress={"combos_done": 11, "combos_total": 40, "elapsed_s": 6.5},
+        ),
+        _insert_task(
+            db_module,
+            user_id=int(user_id),
+            pool_id=int(pool_id),
+            cycle_id=int(cycle_id),
+            status="running",
+            progress={"done": 7, "total": 12, "elapsed": 3.25},
+        ),
+    ]
+
+    conn = db_module._conn()
+    try:
+        conn.execute(
+            "UPDATE mining_tasks SET progress_combos_done = 0, progress_combos_total = 0, progress_elapsed_s = 0 WHERE id IN (?, ?)",
+            (int(task_ids[0]), int(task_ids[1])),
+        )
+        conn.commit()
+        db_module._backfill_task_progress_summaries(conn)
+        rows = conn.execute(
+            "SELECT id, progress_combos_done, progress_combos_total, progress_elapsed_s FROM mining_tasks WHERE id IN (?, ?) ORDER BY id ASC",
+            (int(task_ids[0]), int(task_ids[1])),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    by_id = {int(row["id"]): dict(row) for row in rows}
+    assert by_id[int(task_ids[0])]["progress_combos_done"] == 11
+    assert by_id[int(task_ids[0])]["progress_combos_total"] == 40
+    assert by_id[int(task_ids[0])]["progress_elapsed_s"] == pytest.approx(6.5)
+    assert by_id[int(task_ids[1])]["progress_combos_done"] == 7
+    assert by_id[int(task_ids[1])]["progress_combos_total"] == 12
+    assert by_id[int(task_ids[1])]["progress_elapsed_s"] == pytest.approx(3.25)
+
+
 def test_announcements_admin_crud_public_listing_and_live_version(admin_client):
     client = admin_client["client"]
     headers = admin_client["headers"]
