@@ -572,6 +572,23 @@ def test_announcements_admin_crud_public_listing_and_live_version(admin_client):
     assert missing.status_code == 404
 
 
+def test_dashboard_tolerates_global_counter_failures(admin_client, monkeypatch):
+    client = admin_client["client"]
+    headers = admin_client["headers"]
+    api_module = sys.modules["sheep_platform_api"]
+
+    def _boom():
+        raise RuntimeError("counter_boom")
+
+    monkeypatch.setattr(api_module.db, "get_global_dashboard_counters", _boom)
+    dashboard = client.get("/dashboard", headers=headers)
+    assert dashboard.status_code == 200, dashboard.text
+    body = dashboard.json()
+    assert body["ok"] is True
+    assert body["total_strategy_pool_combo_count"] == 0
+    assert body["global_mined_combo_count"] == 0
+
+
 def test_admin_routes_and_aliases_return_seeded_data(admin_client):
     client = admin_client["client"]
     headers = admin_client["headers"]

@@ -3188,8 +3188,19 @@ def web_dashboard(request: Request, authorization: Optional[str] = Header(None))
         recent_tasks = [enrich_task_row(t) for t in db.list_tasks_for_user(uid, cycle_id=cycle_id, limit=10)]
         strategies = db.list_strategies(user_id=uid, limit=100)
         payouts = db.list_payouts(user_id=uid, limit=100)
-        global_counters = dict(db.get_global_dashboard_counters() or {})
-        latest_announcements = [_announcement_payload(row) for row in db.list_announcements(limit=6, offset=0, include_drafts=False)]
+        try:
+            global_counters = dict(db.get_global_dashboard_counters() or {})
+        except Exception as counter_exc:
+            logger.error(f"Dashboard global counter load failed for user {uid}: {counter_exc}")
+            global_counters = {
+                "total_strategy_pool_combo_count": 0,
+                "global_mined_combo_count": 0,
+            }
+        try:
+            latest_announcements = [_announcement_payload(row) for row in db.list_announcements(limit=6, offset=0, include_drafts=False)]
+        except Exception as announcement_exc:
+            logger.error(f"Dashboard announcement load failed for user {uid}: {announcement_exc}")
+            latest_announcements = []
 
         conn = db._conn()
         try:

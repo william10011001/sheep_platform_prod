@@ -468,10 +468,16 @@ def get_global_dashboard_counters() -> Dict[str, int]:
             "SELECT COALESCE(SUM(COALESCE(param_combo_count, 0)), 0) AS total_pool_combos FROM factor_pools"
         ).fetchone()
         total_pool_combos = _clamp_nonnegative_int((dict(pool_row) if pool_row else {}).get("total_pool_combos"))
-        done_expr, _, _ = _get_progress_summary_columns(conn)
-        mined_row = conn.execute(
-            f"SELECT COALESCE(SUM({done_expr}), 0) AS global_mined_combo_count FROM mining_tasks"
-        ).fetchone()
+        kind = str(getattr(conn, "kind", "sqlite") or "sqlite")
+        if kind == "postgres":
+            mined_row = conn.execute(
+                "SELECT COALESCE(SUM(COALESCE(progress_combos_done, 0)), 0) AS global_mined_combo_count FROM mining_tasks"
+            ).fetchone()
+        else:
+            done_expr, _, _ = _get_progress_summary_columns(conn)
+            mined_row = conn.execute(
+                f"SELECT COALESCE(SUM({done_expr}), 0) AS global_mined_combo_count FROM mining_tasks"
+            ).fetchone()
         global_mined_combo_count = _clamp_nonnegative_int((dict(mined_row) if mined_row else {}).get("global_mined_combo_count"))
         value = {
             "total_strategy_pool_combo_count": total_pool_combos,
