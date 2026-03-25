@@ -269,6 +269,124 @@ def test_factor_pool_updater_refreshes_cached_runtime_snapshot_before_rebuild(mo
     assert sync_calls[0]["json"]["items"][0]["direction"] == "long"
 
 
+def test_factor_pool_updater_recovers_bootstrap_with_persisted_runtime_cache(monkeypatch, tmp_path):
+    module = _load_live_trader_module()
+    logs = []
+    module.log = logs.append
+    module.bt = type("_BT", (), {"NUMBA_OK": True})()
+    state_path = tmp_path / "tema_rsi_state.json"
+    module.STATE_FILE = str(state_path)
+
+    cached_items = [
+        {
+            "strategy_id": 501,
+            "strategy_key": "cached-balanced-short",
+            "family": "EMA_Cross",
+            "symbol": "BTCUSDT",
+            "direction": "short",
+            "interval": "1h",
+            "family_params": {"fast_len": 9, "slow_len": 30},
+            "tp_pct": 1.0,
+            "sl_pct": 0.8,
+            "max_hold": 24,
+            "stake_pct": 50.0,
+            "enabled": True,
+            "sharpe": 2.4,
+            "total_return_pct": 45.0,
+            "max_drawdown_pct": 6.0,
+        }
+    ]
+    state_path.write_text(
+        json.dumps(
+            {
+                "holy_grail_runtime_cache": {
+                    "updated_at": "2026-03-25T01:00:00+00:00",
+                    "multi_strategies_json": json.dumps({"schema_version": 1, "strategies": cached_items}, ensure_ascii=False),
+                    "items": cached_items,
+                    "summary": {
+                        "selected_count": 1,
+                        "candidate_count": 5,
+                        "backtested_count": 5,
+                        "portfolio_metrics": {"sharpe": 2.4, "cagr_pct": 18.0, "max_drawdown_pct": 6.0},
+                    },
+                }
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    class _Result:
+        ok = False
+        message = "no publishable balanced portfolio was produced (reason=one_sided_eligible_pool)"
+        warnings = []
+        multi_payload = []
+        portfolio_metrics = {}
+        selected_count = 0
+        candidate_count = 72
+        backtested_count = 72
+        report_paths = {}
+        multi_strategies_json = "[]"
+
+    sync_calls = []
+    update_calls = []
+
+    def _fake_build(**kwargs):
+        return _Result()
+
+    class _SyncResp:
+        status_code = 200
+        headers = {"content-type": "application/json"}
+        text = '{"ok": true}'
+
+        def json(self):
+            return {"ok": True, "snapshot": {"strategy_count": 1}}
+
+    def _fake_post(url, json=None, headers=None, timeout=None, verify=None):
+        sync_calls.append({"url": url, "json": json, "headers": headers})
+        return _SyncResp()
+
+    module.run_holy_grail_build = _fake_build
+    monkeypatch.setattr(module.requests, "post", _fake_post)
+
+    class _DummyVar:
+        def __init__(self, value):
+            self._value = value
+
+        def get(self):
+            return self._value
+
+    class _DummyText:
+        def __init__(self, value):
+            self._value = value
+
+        def get(self, *_args):
+            return self._value
+
+    class _DummyUI:
+        global_stake_pct_var = _DummyVar(95.0)
+        multi_json_text = _DummyText("[]")
+        factor_pool_url_var = _DummyVar("https://example.com")
+        factor_pool_token_var = _DummyVar("runtime-token")
+        factor_pool_user_var = _DummyVar("")
+        factor_pool_pass_var = _DummyVar("")
+
+        @staticmethod
+        def update_multi_json(payload, wait=False):
+            update_calls.append({"payload": payload, "wait": wait})
+            return True
+
+    updater = module.FactorPoolUpdater(_DummyUI())
+    updater._build_holy_grail()
+
+    assert updater.allow_new_entries()[0] is True
+    assert updater._bootstrap_completed is True
+    assert update_calls, "cached runtime should be restored locally before opening entries"
+    assert any(str(call["json"].get("source") or "").startswith("holy_grail_cached_") for call in sync_calls)
+    assert any("恢復新開倉" in msg for msg in logs)
+
+
 def test_factor_pool_updater_runtime_payload_includes_live_position_items():
     module = _load_live_trader_module()
 
@@ -966,6 +1084,116 @@ def test_postgres_leaderboard_falls_back_when_aggregate_fails(monkeypatch, tmp_p
 
     assert stats["combos"][0]["username"] == "miner-b"
     assert stats["time"][0]["username"] == "miner-b"
+
+
+def test_postgres_recent_aggregate_runs_split_queries(monkeypatch, tmp_path):
+    db_path = tmp_path / "leaderboard-postgres-split.sqlite3"
+    monkeypatch.setenv("SHEEP_DB_URL", "")
+    monkeypatch.setenv("SHEEP_DB_PATH", str(db_path))
+    _reset_db_module()
+    import sheep_platform_db as db
+
+    class _FakeCursor:
+        def __init__(self, rows):
+            self._rows = list(rows)
+
+        def fetchall(self):
+            return list(self._rows)
+
+    class _FakeConn:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, sql, params=None):
+            self.calls.append((sql, params))
+            if "recent_combo_tasks" in sql:
+                return _FakeCursor(
+                    [
+                        {
+                            "username": "combo-a",
+                            "nickname": "Combo A",
+                            "avatar_url": "",
+                            "task_count": 2,
+                            "total_done": 1234.0,
+                        }
+                    ]
+                )
+            if "aggregated_time" in sql:
+                return _FakeCursor(
+                    [
+                        {
+                            "username": "time-a",
+                            "nickname": "Time A",
+                            "avatar_url": "",
+                            "total_seconds": 4321.0,
+                        }
+                    ]
+                )
+            raise AssertionError(f"unexpected SQL: {sql}")
+
+    monkeypatch.setattr(db, "_default_avatar_url_from_conn", lambda conn: "https://example.com/default.png")
+    monkeypatch.setattr(
+        db,
+        "_leaderboard_python_fallback",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("python fallback should not be used")),
+    )
+
+    stats = db._leaderboard_postgres_recent_agg(_FakeConn(), "2026-03-01T00:00:00+00:00", "2026-03-25T00:00:00+00:00")
+
+    assert stats["combos"][0]["username"] == "combo-a"
+    assert float(stats["combos"][0]["total_done"]) == pytest.approx(1234.0)
+    assert stats["time"][0]["username"] == "time-a"
+    assert float(stats["time"][0]["total_seconds"]) == pytest.approx(4321.0)
+
+
+def test_postgres_recent_aggregate_falls_back_only_for_failed_section(monkeypatch, tmp_path):
+    db_path = tmp_path / "leaderboard-postgres-partial-fallback.sqlite3"
+    monkeypatch.setenv("SHEEP_DB_URL", "")
+    monkeypatch.setenv("SHEEP_DB_PATH", str(db_path))
+    _reset_db_module()
+    import sheep_platform_db as db
+
+    class _FakeCursor:
+        def __init__(self, rows):
+            self._rows = list(rows)
+
+        def fetchall(self):
+            return list(self._rows)
+
+    class _FakeConn:
+        def execute(self, sql, params=None):
+            if "recent_combo_tasks" in sql:
+                raise RuntimeError("statement timeout")
+            if "aggregated_time" in sql:
+                return _FakeCursor(
+                    [
+                        {
+                            "username": "pg-time",
+                            "nickname": "PG Time",
+                            "avatar_url": "",
+                            "total_seconds": 654.0,
+                        }
+                    ]
+                )
+            raise AssertionError(f"unexpected SQL: {sql}")
+
+    fallback_calls = []
+
+    def _fake_fallback(conn, cutoff_iso, window_end_iso):
+        fallback_calls.append((cutoff_iso, window_end_iso))
+        return {
+            "combos": [{"username": "fallback-combo", "total_done": 321.0}],
+            "time": [{"username": "fallback-time", "total_seconds": 111.0}],
+        }
+
+    monkeypatch.setattr(db, "_default_avatar_url_from_conn", lambda conn: "https://example.com/default.png")
+    monkeypatch.setattr(db, "_leaderboard_python_fallback", _fake_fallback)
+
+    stats = db._leaderboard_postgres_recent_agg(_FakeConn(), "2026-03-01T00:00:00+00:00", "2026-03-25T00:00:00+00:00")
+
+    assert len(fallback_calls) == 1
+    assert stats["combos"][0]["username"] == "fallback-combo"
+    assert stats["time"][0]["username"] == "pg-time"
 
 
 def test_leaderboard_python_fallback_prefers_larger_timestamp_elapsed(monkeypatch, tmp_path):

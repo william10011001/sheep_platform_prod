@@ -369,8 +369,9 @@ class HolyGrailRuntime:
         if "has_metrics" not in df.columns:
             df["has_metrics"] = False
         if "direction" not in df.columns:
+            reverse_values = df["param_reverse_mode"].tolist() if "param_reverse_mode" in df.columns else [False] * len(df)
             df["direction"] = [
-                normalize_direction(reverse=value, default="long") for value in list(df.get("param_reverse_mode") or [])
+                normalize_direction(reverse=value, default="long") for value in reverse_values
             ]
         return df
 
@@ -385,6 +386,164 @@ class HolyGrailRuntime:
             return float("-inf")
         return float(ts.value)
 
+    @staticmethod
+    def _direction_counts(df_params: pd.DataFrame) -> Dict[str, int]:
+        counts: Dict[str, int] = {"long": 0, "short": 0}
+        if df_params is None or df_params.empty:
+            return counts
+        if "direction" not in df_params.columns:
+            return counts
+        for raw_direction in df_params["direction"].tolist():
+            direction = normalize_direction(raw_direction, default="long")
+            counts[direction] = int(counts.get(direction) or 0) + 1
+        return counts
+
+    @staticmethod
+    def _prepare_candidate_sort_columns(df_params: pd.DataFrame) -> pd.DataFrame:
+        working = df_params.copy()
+        for column in ("metric_sharpe", "metric_cagr_pct", "metric_max_drawdown_pct", "allocation_pct", "cand_score"):
+            if column not in working.columns:
+                working[column] = np.nan
+        if "candidate_source" not in working.columns:
+            working["candidate_source"] = "template"
+        if "has_metrics" not in working.columns:
+            working["has_metrics"] = False
+        if "created_at" not in working.columns:
+            working["created_at"] = ""
+        if "direction" not in working.columns:
+            reverse_values = working["param_reverse_mode"].tolist() if "param_reverse_mode" in working.columns else [False] * len(working)
+            working["direction"] = [
+                normalize_direction(reverse=value, default="long") for value in reverse_values
+            ]
+        working["metric_sharpe_sort"] = pd.to_numeric(working["metric_sharpe"], errors="coerce").fillna(float("-inf"))
+        working["metric_cagr_sort"] = pd.to_numeric(working["metric_cagr_pct"], errors="coerce").fillna(float("-inf"))
+        working["metric_max_dd_sort"] = pd.to_numeric(working["metric_max_drawdown_pct"], errors="coerce").fillna(float("inf"))
+        working["allocation_pct_sort"] = pd.to_numeric(working["allocation_pct"], errors="coerce").fillna(0.0)
+        working["cand_score_sort"] = pd.to_numeric(working["cand_score"], errors="coerce").fillna(0.0)
+        working["strategy_id_sort"] = pd.to_numeric(working["strategy_id"], errors="coerce").fillna(0.0)
+        working["created_at_sort"] = [HolyGrailRuntime._created_sort_value(value) for value in working["created_at"]]
+        return working
+
+    @staticmethod
+    def _sorted_preselection_frame(frame: pd.DataFrame) -> pd.DataFrame:
+        if frame is None or frame.empty:
+            return frame.copy()
+        return frame.sort_values(
+            by=[
+                "metric_sharpe_sort",
+                "metric_cagr_sort",
+                "metric_max_dd_sort",
+                "cand_score_sort",
+                "allocation_pct_sort",
+                "created_at_sort",
+                "strategy_id_sort",
+            ],
+            ascending=[False, False, True, False, False, False, False],
+            kind="mergesort",
+        )
+
+    def _augment_directional_coverage(self, df_params: pd.DataFrame, *, top_n: int) -> Tuple[pd.DataFrame, Dict[str, int], Dict[str, int]]:
+        if df_params.empty:
+            empty_counts = {"long": 0, "short": 0}
+            return df_params.copy(), empty_counts, empty_counts
+
+        working = self._prepare_candidate_sort_columns(df_params)
+        source_counts = self._direction_counts(working)
+        per_direction = max(1, int(top_n) // 2)
+        augmented_rows: List[Dict[str, Any]] = []
+
+        for target_direction in ("long", "short"):
+            existing_count = int(source_counts.get(target_direction) or 0)
+            if existing_count >= per_direction:
+                continue
+
+            opposite_direction = "short" if target_direction == "long" else "long"
+            source_frame = self._sorted_preselection_frame(
+                working[working["direction"] == opposite_direction].copy()
+            )
+            if source_frame.empty:
+                continue
+
+            seen_fingerprints: set[str] = set()
+            target_frame = working[working["direction"] == target_direction]
+            for _, row in target_frame.iterrows():
+                param_dict = {
+                    key: self._normalize_scalar(value)
+                    for key, value in row.items()
+                    if str(key).startswith("param_") and pd.notna(value)
+                }
+                fingerprint = json.dumps(
+                    {
+                        "family": str(row.get("family") or ""),
+                        "symbol": str(row.get("symbol") or ""),
+                        "direction": target_direction,
+                        "params": param_dict,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    default=str,
+                )
+                seen_fingerprints.add(fingerprint)
+
+            added_count = 0
+            for _, row in source_frame.iterrows():
+                mirror = row.copy()
+                param_dict = {
+                    key: self._normalize_scalar(value)
+                    for key, value in mirror.items()
+                    if str(key).startswith("param_") and pd.notna(value)
+                }
+                fingerprint = json.dumps(
+                    {
+                        "family": str(mirror.get("family") or ""),
+                        "symbol": str(mirror.get("symbol") or ""),
+                        "direction": target_direction,
+                        "params": param_dict,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    default=str,
+                )
+                if fingerprint in seen_fingerprints:
+                    continue
+
+                mirror["direction"] = target_direction
+                mirror["param_reverse_mode"] = target_direction == "short"
+                mirror["param_direction"] = target_direction
+                mirror["param_reverse"] = target_direction == "short"
+                if pd.notna(mirror.get("param_curve_key")):
+                    mirror["param_curve_key"] = f"{mirror.get('param_curve_key')}__mirror_{target_direction}"
+                mirror["candidate_source"] = "synthetic_mirror"
+                mirror["has_metrics"] = False
+                mirror["metric_sharpe"] = np.nan
+                mirror["metric_cagr_pct"] = np.nan
+                mirror["metric_max_drawdown_pct"] = np.nan
+                mirror["metric_sharpe_sort"] = float("-inf")
+                mirror["metric_cagr_sort"] = float("-inf")
+                mirror["metric_max_dd_sort"] = float("inf")
+                mirror["mirror_parent_direction"] = opposite_direction
+                mirror["mirror_source_strategy_id"] = mirror.get("strategy_id")
+                mirror["mirror_generated"] = True
+                augmented_rows.append(mirror.to_dict())
+                seen_fingerprints.add(fingerprint)
+                added_count += 1
+                if existing_count + added_count >= per_direction:
+                    break
+
+            if added_count > 0:
+                self.warn_once(
+                    f"holy-grail-mirror-{target_direction}-{source_counts.get(target_direction, 0)}-{source_counts.get(opposite_direction, 0)}",
+                    "[HolyGrail] source candidates are directionally underfilled; "
+                    f"generated {added_count} mirrored {target_direction} exploration candidates "
+                    f"from {opposite_direction} strategies.",
+                )
+
+        if augmented_rows:
+            working = pd.concat([working, pd.DataFrame(augmented_rows)], ignore_index=True, sort=False)
+            working = self._prepare_candidate_sort_columns(working)
+        augmented_counts = self._direction_counts(working)
+        return working, source_counts, augmented_counts
+
     def _candidate_pool(self, df_params: pd.DataFrame, *, top_n: int = 150, max_per_group: int = 3) -> pd.DataFrame:
         if df_params.empty:
             return df_params.copy()
@@ -397,24 +556,8 @@ class HolyGrailRuntime:
             exploration_target = max(0, int(round(per_direction * (25.0 / 75.0))))
             scored_target = max(0, per_direction - exploration_target)
 
-        working = df_params.copy()
-        for column in ("metric_sharpe", "metric_cagr_pct", "metric_max_drawdown_pct", "allocation_pct", "cand_score"):
-            if column not in working.columns:
-                working[column] = np.nan
-        if "candidate_source" not in working.columns:
-            working["candidate_source"] = "template"
-        if "has_metrics" not in working.columns:
-            working["has_metrics"] = False
-        if "created_at" not in working.columns:
-            working["created_at"] = ""
+        working = self._prepare_candidate_sort_columns(df_params)
         working["direction"] = [self._row_direction(row) for _, row in working.iterrows()]
-        working["metric_sharpe_sort"] = pd.to_numeric(working["metric_sharpe"], errors="coerce").fillna(float("-inf"))
-        working["metric_cagr_sort"] = pd.to_numeric(working["metric_cagr_pct"], errors="coerce").fillna(float("-inf"))
-        working["metric_max_dd_sort"] = pd.to_numeric(working["metric_max_drawdown_pct"], errors="coerce").fillna(float("inf"))
-        working["allocation_pct_sort"] = pd.to_numeric(working["allocation_pct"], errors="coerce").fillna(0.0)
-        working["cand_score_sort"] = pd.to_numeric(working["cand_score"], errors="coerce").fillna(0.0)
-        working["strategy_id_sort"] = pd.to_numeric(working["strategy_id"], errors="coerce").fillna(0.0)
-        working["created_at_sort"] = [self._created_sort_value(value) for value in working["created_at"]]
 
         selected_rows: List[pd.Series] = []
         for direction in ("long", "short"):
@@ -426,14 +569,10 @@ class HolyGrailRuntime:
             group_counts: Dict[Tuple[str, str, str], int] = {}
             seen_params: set[str] = set()
 
-            scored_df = dir_df[dir_df["has_metrics"] == True].sort_values(
-                by=["metric_sharpe_sort", "metric_cagr_sort", "metric_max_dd_sort", "cand_score_sort"],
-                ascending=[False, False, True, False],
-                kind="mergesort",
-            )
+            scored_df = self._sorted_preselection_frame(dir_df[dir_df["has_metrics"] == True].copy())
             explore_df = dir_df[dir_df["has_metrics"] != True].sort_values(
-                by=["allocation_pct_sort", "created_at_sort", "strategy_id_sort"],
-                ascending=[False, False, False],
+                by=["allocation_pct_sort", "created_at_sort", "strategy_id_sort", "cand_score_sort"],
+                ascending=[False, False, False, False],
                 kind="mergesort",
             )
 
@@ -769,6 +908,10 @@ class HolyGrailRuntime:
                 warnings=list(self._warning_messages),
             )
 
+        df_params, source_direction_counts, augmented_direction_counts = self._augment_directional_coverage(
+            df_params,
+            top_n=top_n_candidates,
+        )
         pool_df = self._candidate_pool(df_params, top_n=top_n_candidates, max_per_group=3)
         if pool_df.empty:
             return HolyGrailResult(
@@ -777,8 +920,13 @@ class HolyGrailRuntime:
                 api_base=api_base,
                 strategies_count=len(strategies),
                 flattened_count=len(df_params),
+                diagnostics={
+                    "source_direction_counts": source_direction_counts,
+                    "augmented_direction_counts": augmented_direction_counts,
+                },
                 warnings=list(self._warning_messages),
             )
+        candidate_pool_direction_counts = self._direction_counts(pool_df)
 
         equity_curves: Dict[str, pd.Series] = {}
         detailed_results_cache: Dict[str, Dict[str, Any]] = {}
@@ -878,8 +1026,18 @@ class HolyGrailRuntime:
                 strategies_count=len(strategies),
                 flattened_count=len(df_params),
                 candidate_count=len(pool_df),
+                diagnostics={
+                    "source_direction_counts": source_direction_counts,
+                    "augmented_direction_counts": augmented_direction_counts,
+                    "candidate_pool_direction_counts": candidate_pool_direction_counts,
+                },
                 warnings=list(self._warning_messages),
             )
+
+        backtested_direction_counts: Dict[str, int] = {"long": 0, "short": 0}
+        for candidate in candidate_records:
+            direction = normalize_direction(candidate.get("direction"), default="long")
+            backtested_direction_counts[direction] = int(backtested_direction_counts.get(direction) or 0) + 1
 
         equity_df = pd.DataFrame(equity_curves).ffill().fillna(1.0)
         returns_df = equity_df.pct_change().dropna(how="all").fillna(0.0)
@@ -935,6 +1093,10 @@ class HolyGrailRuntime:
             candidate["selection_status"] = "candidate"
             candidate["selection_reject_reason"] = ""
             eligible_by_direction.setdefault(direction, []).append(candidate)
+        eligible_direction_counts = {
+            "long": len(eligible_by_direction.get("long") or []),
+            "short": len(eligible_by_direction.get("short") or []),
+        }
 
         max_pairs = max(0, min(int(max_selected or 0) // 2, 10))
         selected_curve_keys: List[str] = []
@@ -1198,6 +1360,16 @@ class HolyGrailRuntime:
                 "selected_pairs": int(pair_count),
                 "backtested_strategies": len(candidate_records),
                 "unique_behavior_groups": len(duplicate_groups),
+                "source_long_candidates": int(source_direction_counts.get("long") or 0),
+                "source_short_candidates": int(source_direction_counts.get("short") or 0),
+                "augmented_long_candidates": int(augmented_direction_counts.get("long") or 0),
+                "augmented_short_candidates": int(augmented_direction_counts.get("short") or 0),
+                "candidate_pool_long": int(candidate_pool_direction_counts.get("long") or 0),
+                "candidate_pool_short": int(candidate_pool_direction_counts.get("short") or 0),
+                "backtested_long": int(backtested_direction_counts.get("long") or 0),
+                "backtested_short": int(backtested_direction_counts.get("short") or 0),
+                "eligible_long": int(eligible_direction_counts.get("long") or 0),
+                "eligible_short": int(eligible_direction_counts.get("short") or 0),
                 "sharpe": round(sharpe, 6),
                 "sortino": round(sortino, 6),
                 "calmar": round(calmar, 6),
@@ -1219,9 +1391,41 @@ class HolyGrailRuntime:
             trades_rows=combined_trades,
         )
 
+        result_ok = bool(selected_curve_keys)
+        empty_result_reason = ""
+        if not result_ok:
+            if int(candidate_pool_direction_counts.get("long") or 0) == 0 or int(candidate_pool_direction_counts.get("short") or 0) == 0:
+                empty_result_reason = "one_sided_candidate_pool"
+            elif int(backtested_direction_counts.get("long") or 0) == 0 or int(backtested_direction_counts.get("short") or 0) == 0:
+                empty_result_reason = "one_sided_backtest_pool"
+            elif int(eligible_direction_counts.get("long") or 0) == 0 or int(eligible_direction_counts.get("short") or 0) == 0:
+                empty_result_reason = "one_sided_eligible_pool"
+            else:
+                empty_result_reason = "no_feasible_balanced_pair"
+            self.warn_once(
+                f"holy-grail-empty-selection:{empty_result_reason}:{candidate_pool_direction_counts.get('long', 0)}:{candidate_pool_direction_counts.get('short', 0)}",
+                "[HolyGrail] no publishable balanced portfolio was produced; "
+                f"source(long={int(source_direction_counts.get('long') or 0)}, short={int(source_direction_counts.get('short') or 0)}), "
+                f"augmented(long={int(augmented_direction_counts.get('long') or 0)}, short={int(augmented_direction_counts.get('short') or 0)}), "
+                f"backtested(long={int(backtested_direction_counts.get('long') or 0)}, short={int(backtested_direction_counts.get('short') or 0)}), "
+                f"eligible(long={int(eligible_direction_counts.get('long') or 0)}, short={int(eligible_direction_counts.get('short') or 0)}).",
+            )
+        result_message = (
+            f"selected {len(selected_curve_keys)} balanced strategies"
+            if result_ok
+            else (
+                "no publishable balanced portfolio was produced "
+                f"(reason={empty_result_reason}; "
+                f"source long={int(source_direction_counts.get('long') or 0)} short={int(source_direction_counts.get('short') or 0)}, "
+                f"augmented long={int(augmented_direction_counts.get('long') or 0)} short={int(augmented_direction_counts.get('short') or 0)}, "
+                f"backtested long={int(backtested_direction_counts.get('long') or 0)} short={int(backtested_direction_counts.get('short') or 0)}, "
+                f"eligible long={int(eligible_direction_counts.get('long') or 0)} short={int(eligible_direction_counts.get('short') or 0)})"
+            )
+        )
+
         return HolyGrailResult(
-            ok=True,
-            message=f"selected {len(selected_curve_keys)} balanced strategies",
+            ok=result_ok,
+            message=result_message,
             api_base=api_base,
             strategies_count=len(strategies),
             flattened_count=len(df_params),
@@ -1258,6 +1462,12 @@ class HolyGrailRuntime:
                 "corr_threshold": float(corr_threshold),
                 "duplicate_groups": len(duplicate_groups),
                 "cost_basis": cost_basis,
+                "source_direction_counts": source_direction_counts,
+                "augmented_direction_counts": augmented_direction_counts,
+                "candidate_pool_direction_counts": candidate_pool_direction_counts,
+                "backtested_direction_counts": backtested_direction_counts,
+                "eligible_direction_counts": eligible_direction_counts,
+                "empty_result_reason": empty_result_reason,
             },
         )
 

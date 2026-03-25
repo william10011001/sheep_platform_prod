@@ -3639,6 +3639,174 @@ class FactorPoolUpdater:
             self.last_good_json = (self.ui.multi_json_text.get("1.0", tk.END) or "").strip()
         except Exception:
             self.last_good_json = ""
+        self.last_good_snapshot = {}
+        self._load_persisted_runtime_cache()
+
+    def _read_runtime_state(self) -> dict:
+        try:
+            path = Path(STATE_FILE)
+            if not path.exists():
+                return {}
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return dict(data or {}) if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def _write_runtime_state(self, data: dict) -> None:
+        try:
+            state_path = ensure_parent(STATE_FILE)
+            Path(state_path).write_text(
+                json.dumps(dict(data or {}), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            log(f"【聖杯引擎】runtime 狀態快照保存失敗: {exc}")
+
+    def _normalize_cached_runtime_items(self, raw_batch) -> list:
+        items = []
+        for idx, raw_item in enumerate(extract_strategy_entries(raw_batch), start=1):
+            payload = dict(raw_item or {})
+            normalized = normalize_runtime_strategy_entry(
+                payload,
+                default_symbol="",
+                default_interval="",
+            )
+            payload["strategy_id"] = payload.get("strategy_id") if payload.get("strategy_id") not in (None, "") else normalized.get("strategy_id")
+            payload["family"] = str(payload.get("family") or normalized.get("family") or "").strip()
+            payload["family_params"] = dict(payload.get("family_params") or normalized.get("family_params") or {})
+            payload["direction"] = normalize_direction(payload.get("direction") or normalized.get("direction"), default="long")
+            payload["tp_pct"] = safe_float(payload.get("tp_pct"), safe_float(normalized.get("tp_pct"), 0.0))
+            payload["sl_pct"] = safe_float(payload.get("sl_pct"), safe_float(normalized.get("sl_pct"), 0.0))
+            try:
+                payload["max_hold"] = int(payload.get("max_hold") if payload.get("max_hold") not in (None, "") else normalized.get("max_hold") or 0)
+            except Exception:
+                payload["max_hold"] = int(normalized.get("max_hold") or 0)
+            payload["stake_pct"] = safe_float(payload.get("stake_pct"), safe_float(normalized.get("stake_pct"), 0.0))
+            payload["symbol"] = str(payload.get("symbol") or normalized.get("symbol") or "").strip().upper()
+            payload["interval"] = str(payload.get("interval") or normalized.get("interval") or "").strip()
+            if not isinstance(payload.get("enabled"), bool):
+                payload["enabled"] = bool(normalized.get("enabled", True))
+            payload.setdefault("rank", idx)
+            payload["strategy_key"] = str(
+                payload.get("strategy_key")
+                or payload.get("external_key")
+                or normalized.get("strategy_key")
+                or payload.get("name")
+                or f"{payload.get('family', 'UNKNOWN')}_{idx}"
+            )
+            items.append(payload)
+        return items
+
+    def _current_ui_runtime_json(self) -> str:
+        try:
+            return str(self.ui.multi_json_text.get("1.0", tk.END) or "").strip()
+        except Exception:
+            return str(self.last_good_json or "").strip()
+
+    def _cached_runtime_snapshot_payload(self, scope: str, *, reason: str) -> Optional[dict]:
+        snapshot = dict(self.last_good_snapshot or {})
+        items = [dict(item or {}) for item in list(snapshot.get("items") or [])]
+        if not items:
+            cached_json = str(self.last_good_json or "").strip()
+            if cached_json:
+                try:
+                    items = self._normalize_cached_runtime_items(json.loads(cached_json))
+                except Exception:
+                    items = []
+        if not items:
+            return None
+        if not self._cached_runtime_snapshot_is_publishable(items):
+            return None
+        summary = dict(snapshot.get("summary") or {})
+        summary["selected_count"] = int(summary.get("selected_count") or len(items))
+        summary["candidate_count"] = int(summary.get("candidate_count") or summary.get("selected_count") or len(items))
+        summary["backtested_count"] = int(summary.get("backtested_count") or summary.get("candidate_count") or len(items))
+        summary["fallback_reason"] = str(reason or "")
+        summary["position_items"] = self._collect_runtime_position_items()
+        return {
+            "scope": scope,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "source": f"holy_grail_cached_{reason}",
+            "summary": summary,
+            "items": items,
+        }
+
+    def _load_persisted_runtime_cache(self) -> None:
+        state = self._read_runtime_state()
+        cache = dict((state.get("holy_grail_runtime_cache") or {}))
+        if not cache:
+            return
+        cached_json = str(cache.get("multi_strategies_json") or "").strip()
+        items = [dict(item or {}) for item in list(cache.get("items") or [])]
+        if not items and cached_json:
+            try:
+                items = self._normalize_cached_runtime_items(json.loads(cached_json))
+            except Exception:
+                items = []
+        if not items or not self._cached_runtime_snapshot_is_publishable(items):
+            return
+        if not cached_json:
+            cached_json = json.dumps({"schema_version": 1, "strategies": items}, ensure_ascii=False, indent=2)
+        self.last_good_snapshot = {
+            "updated_at": str(cache.get("updated_at") or ""),
+            "multi_strategies_json": cached_json,
+            "items": items,
+            "summary": dict(cache.get("summary") or {}),
+        }
+        try:
+            current_ui_items = self._normalize_cached_runtime_items(json.loads(self.last_good_json)) if str(self.last_good_json or "").strip() else []
+        except Exception:
+            current_ui_items = []
+        if not current_ui_items or not self._cached_runtime_snapshot_is_publishable(current_ui_items):
+            self.last_good_json = cached_json
+
+    def _persist_last_good_runtime_cache(self, result, multi_json_str: str) -> None:
+        payload = self._runtime_sync_payload("global", result, {})
+        cache = {
+            "updated_at": str(payload.get("updated_at") or datetime.now(timezone.utc).isoformat()),
+            "multi_strategies_json": str(multi_json_str or "").strip(),
+            "items": [dict(item or {}) for item in list(payload.get("items") or [])],
+            "summary": dict(payload.get("summary") or {}),
+        }
+        state = self._read_runtime_state()
+        state["holy_grail_runtime_cache"] = cache
+        self._write_runtime_state(state)
+        self.last_good_snapshot = cache
+        self.last_good_json = str(cache.get("multi_strategies_json") or self.last_good_json or "").strip()
+
+    def _restore_cached_runtime_locally(self, *, reason: str, wait: bool = True) -> bool:
+        cached_json = str(self.last_good_json or "").strip()
+        if not cached_json:
+            return False
+        current_json = self._current_ui_runtime_json()
+        if current_json == cached_json:
+            return True
+        update_fn = getattr(self.ui, "update_multi_json", None)
+        if not callable(update_fn):
+            return False
+        ok = bool(update_fn(cached_json, wait=wait))
+        if ok:
+            log(f"【聖杯引擎】已恢復上一版有效策略快照：{reason}")
+        return ok
+
+    def _bootstrap_with_cached_runtime(self, runtime_kwargs: dict, *, reason: str) -> bool:
+        payload_global = self._cached_runtime_snapshot_payload("global", reason=reason)
+        if payload_global is None:
+            return False
+        restore_ok = self._restore_cached_runtime_locally(reason=reason, wait=True)
+        personal_ok = True
+        payload_personal = self._cached_runtime_snapshot_payload("personal", reason=reason)
+        if payload_personal is not None:
+            personal_ok = bool(self._post_runtime_snapshot("personal", payload_personal, runtime_kwargs))
+        global_ok = bool(self._post_runtime_snapshot("global", payload_global, runtime_kwargs))
+        if restore_ok and global_ok:
+            self._bootstrap_completed = True
+            self._set_entry_gate("ready", reason)
+            log("【聖杯引擎】已接回上一版有效策略並完成網站同步，恢復新開倉。")
+            return True
+        if not personal_ok:
+            log("【聖杯引擎】上一版個人 runtime 快照恢復失敗，但不影響全域恢復判斷。")
+        return False
 
     def _set_entry_gate(self, state: str, reason: str = "") -> None:
         next_state = str(state or "pending").strip() or "pending"
@@ -3923,64 +4091,10 @@ class FactorPoolUpdater:
         return False
 
     def _sync_cached_runtime_snapshot(self, scope: str, runtime_kwargs: dict, *, reason: str):
-        cached_json = str(self.last_good_json or "").strip()
-        if not cached_json:
-            return
-        try:
-            raw_batch = json.loads(cached_json)
-        except Exception as exc:
-            log(f"【網站同步】{scope} cached runtime 快照解析失敗: {exc}")
-            return
-        items = []
-        for idx, raw_item in enumerate(extract_strategy_entries(raw_batch), start=1):
-            payload = dict(raw_item or {})
-            normalized = normalize_runtime_strategy_entry(
-                payload,
-                default_symbol="",
-                default_interval="",
-            )
-            payload["strategy_id"] = payload.get("strategy_id") if payload.get("strategy_id") not in (None, "") else normalized.get("strategy_id")
-            payload["family"] = str(payload.get("family") or normalized.get("family") or "").strip()
-            payload["family_params"] = dict(payload.get("family_params") or normalized.get("family_params") or {})
-            payload["direction"] = normalize_direction(payload.get("direction") or normalized.get("direction"), default="long")
-            payload["tp_pct"] = safe_float(payload.get("tp_pct"), safe_float(normalized.get("tp_pct"), 0.0))
-            payload["sl_pct"] = safe_float(payload.get("sl_pct"), safe_float(normalized.get("sl_pct"), 0.0))
-            try:
-                payload["max_hold"] = int(payload.get("max_hold") if payload.get("max_hold") not in (None, "") else normalized.get("max_hold") or 0)
-            except Exception:
-                payload["max_hold"] = int(normalized.get("max_hold") or 0)
-            payload["stake_pct"] = safe_float(payload.get("stake_pct"), safe_float(normalized.get("stake_pct"), 0.0))
-            payload["symbol"] = str(payload.get("symbol") or normalized.get("symbol") or "").strip().upper()
-            payload["interval"] = str(payload.get("interval") or normalized.get("interval") or "").strip()
-            if not isinstance(payload.get("enabled"), bool):
-                payload["enabled"] = bool(normalized.get("enabled", True))
-            payload.setdefault("rank", idx)
-            payload["strategy_key"] = str(
-                payload.get("strategy_key")
-                or payload.get("external_key")
-                or normalized.get("strategy_key")
-                or payload.get("name")
-                or f"{payload.get('family', 'UNKNOWN')}_{idx}"
-            )
-            items.append(payload)
-        if not items:
-            return
-        if not self._cached_runtime_snapshot_is_publishable(items):
+        payload = self._cached_runtime_snapshot_payload(scope, reason=reason)
+        if payload is None:
             log(f"【網站同步】{scope} cached runtime 快照缺少有效績效欄位，略過覆蓋站上資料。")
             return
-        payload = {
-            "scope": scope,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-            "source": f"holy_grail_cached_{reason}",
-            "summary": {
-                "selected_count": len(items),
-                "candidate_count": len(items),
-                "backtested_count": len(items),
-                "fallback_reason": reason,
-                "position_items": self._collect_runtime_position_items(),
-            },
-            "items": items,
-        }
         self._post_runtime_snapshot(scope, payload, runtime_kwargs)
 
     def start(self):
@@ -3990,6 +4104,8 @@ class FactorPoolUpdater:
             self.running = False
             return
         self._set_entry_gate("syncing", "bootstrap_pending")
+        if self.last_good_snapshot and str(self.last_good_json or "").strip():
+            self._restore_cached_runtime_locally(reason="startup_cached_runtime", wait=True)
         t = threading.Thread(target=self._loop, daemon=True)
         t.start()
         log("【系統服務】全自動聖杯建構引擎已啟動，每 5 分鐘自動尋找並熱更新對沖組合。")
@@ -4064,6 +4180,9 @@ class FactorPoolUpdater:
                 log("【聖杯引擎】保留上一版有效的對沖組合，不進行熱更新。")
                 self._sync_cached_runtime_snapshot("personal", runtime_kwargs, reason="failure")
                 self._sync_cached_runtime_snapshot("global", runtime_kwargs, reason="failure")
+                if not self._bootstrap_completed and self._bootstrap_with_cached_runtime(runtime_kwargs, reason="bootstrap_cached_runtime"):
+                    self._log_runtime_warnings(result.warnings)
+                    return
             if not self._bootstrap_completed:
                 self._set_entry_gate("failed", "bootstrap_failed")
             self._log_runtime_warnings(result.warnings)
@@ -4075,6 +4194,9 @@ class FactorPoolUpdater:
             if self.last_good_json:
                 self._sync_cached_runtime_snapshot("personal", runtime_kwargs, reason="empty_result")
                 self._sync_cached_runtime_snapshot("global", runtime_kwargs, reason="empty_result")
+                if not self._bootstrap_completed and self._bootstrap_with_cached_runtime(runtime_kwargs, reason="bootstrap_cached_runtime"):
+                    self._log_runtime_warnings(result.warnings)
+                    return
             if not self._bootstrap_completed:
                 self._set_entry_gate("failed", "bootstrap_empty_result")
             return
@@ -4090,6 +4212,7 @@ class FactorPoolUpdater:
 
         if commit_ok:
             self.last_good_json = new_json_str
+            self._persist_last_good_runtime_cache(result, new_json_str)
             self._bootstrap_completed = True
             self._set_entry_gate("ready", "global_runtime_synced")
         else:

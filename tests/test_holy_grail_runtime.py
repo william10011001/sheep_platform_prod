@@ -1182,3 +1182,97 @@ def test_balanced_selection_stops_at_paired_count_when_one_side_underfills(monke
     rejected_balance = full_report[full_report["selection_status"] == "rejected_balance"]
     assert not rejected_balance.empty
     assert "LongBeta" in set(rejected_balance["family"])
+
+
+def test_long_only_source_generates_mirrored_short_candidates(monkeypatch, tmp_path):
+    monkeypatch.setenv("SHEEP_RUNTIME_DIR", str(tmp_path / "runtime"))
+
+    def _fake_fetch(self):
+        return (
+            [
+                {
+                    "strategy_id": 1,
+                    "symbol": "PAIR_USDT",
+                    "timeframe_min": 60,
+                    "pool_name": "pool",
+                    "progress": {
+                        "checkpoint_candidates": [
+                            {
+                                "score": 10.0,
+                                "direction": "long",
+                                "params": {
+                                    "family": "LongAlpha",
+                                    "tp": 0.01,
+                                    "sl": 0.02,
+                                    "max_hold": 10,
+                                    "family_params": {"curve_key": "LONG_1", "sharpe": 2.5},
+                                },
+                                "metrics": {"sharpe": 2.5, "cagr_pct": 32.0, "max_drawdown_pct": 6.0},
+                            },
+                            {
+                                "score": 9.7,
+                                "direction": "long",
+                                "params": {
+                                    "family": "LongBeta",
+                                    "tp": 0.01,
+                                    "sl": 0.02,
+                                    "max_hold": 10,
+                                    "family_params": {"curve_key": "LONG_2", "sharpe": 2.1},
+                                },
+                                "metrics": {"sharpe": 2.1, "cagr_pct": 28.0, "max_drawdown_pct": 7.5},
+                            },
+                        ]
+                    },
+                }
+            ],
+            "https://example.com/api",
+            "static-token",
+        )
+
+    monkeypatch.setattr(HolyGrailRuntime, "fetch_factor_pool_data", _fake_fetch)
+    monkeypatch.setattr(
+        HolyGrailRuntime,
+        "load_kline_data",
+        lambda self, symbol, timeframe_min: pd.DataFrame(
+            {
+                "ts": pd.date_range("2026-01-01", periods=6, freq="D", tz="UTC"),
+                "open": [1] * 6,
+                "high": [1] * 6,
+                "low": [1] * 6,
+                "close": [1] * 6,
+                "volume": [1] * 6,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        HolyGrailRuntime,
+        "build_daily_equity_curve",
+        staticmethod(
+            lambda trades: {
+                "LONG_1": _equity_from_returns([0.02, 0.015, -0.01, 0.01, 0.015, 0.0]),
+                "LONG_2": _equity_from_returns([0.015, 0.01, -0.008, 0.006, 0.012, -0.003]),
+                "LONG_1__mirror_short": _equity_from_returns([0.012, 0.0, 0.015, -0.006, 0.01, 0.008]),
+                "LONG_2__mirror_short": _equity_from_returns([0.01, -0.004, 0.012, -0.002, 0.011, 0.004]),
+            }[trades[0]["curve_key"]]
+        ),
+    )
+
+    result = run_holy_grail_build(
+        bt_module=_SyntheticBT(
+            {
+                "LONG_1": [0.01, 0.012, 0.009],
+                "LONG_2": [0.008, 0.01, 0.007],
+                "LONG_1__mirror_short": [0.011, 0.009, 0.01],
+                "LONG_2__mirror_short": [0.01, 0.008, 0.009],
+            }
+        ),
+        log=lambda _msg: None,
+    )
+
+    assert result.ok
+    assert result.selected_count >= 2
+    assert {row["direction"] for row in result.selected_portfolio} == {"long", "short"}
+    assert any(row["candidate_source"] == "synthetic_mirror" for row in result.selected_portfolio)
+    summary_df = pd.read_csv(result.report_paths["summary_report"])
+    assert int(summary_df.iloc[0]["source_short_candidates"]) == 0
+    assert int(summary_df.iloc[0]["augmented_short_candidates"]) > 0

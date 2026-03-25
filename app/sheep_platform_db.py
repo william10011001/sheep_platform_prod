@@ -5608,62 +5608,123 @@ def _leaderboard_task_scan_max_rows() -> int:
 
 def _leaderboard_postgres_recent_agg(conn: Any, cutoff_iso: str, window_end_iso: str) -> Dict[str, List[Dict[str, Any]]]:
     default_avatar_url = _default_avatar_url_from_conn(conn)
-    sql = """
-        WITH recent_tasks AS (
+    results: Dict[str, List[Dict[str, Any]]] = {"combos": [], "time": []}
+    combos_error: Optional[Exception] = None
+    time_error: Optional[Exception] = None
+
+    sql_combos = """
+        WITH recent_combo_tasks AS MATERIALIZED (
             SELECT
                 t.user_id,
-                GREATEST(
-                    COALESCE(t.progress_combos_done, 0)::double precision,
-                    0.0
-                ) AS combos_done,
-                GREATEST(
-                    COALESCE(t.progress_elapsed_s, 0.0),
-                    CASE
-                        WHEN NULLIF(t.created_at, '') IS NULL THEN 0.0
-                        ELSE GREATEST(
-                            0.0,
-                            EXTRACT(
-                                EPOCH FROM (
-                                    COALESCE(
-                                        NULLIF(t.last_heartbeat, ''),
-                                        NULLIF(t.updated_at, ''),
-                                        NULLIF(t.created_at, '')
-                                    )::timestamptz - NULLIF(t.created_at, '')::timestamptz
-                                )
-                            )
-                        )
-                    END,
-                    0.0
-                ) AS elapsed_s
+                GREATEST(COALESCE(t.progress_combos_done, 0)::double precision, 0.0) AS combos_done
             FROM mining_tasks t
             WHERE COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
               AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <= ?
               AND t.status IN ('running', 'completed')
-              AND (COALESCE(t.progress_combos_done, 0) > 0 OR COALESCE(t.progress_elapsed_s, 0.0) > 0.0)
+              AND COALESCE(t.progress_combos_done, 0) > 0
         )
         SELECT
             u.username,
             u.nickname,
             u.avatar_url,
-            COUNT(*) FILTER (WHERE recent_tasks.combos_done > 0) AS task_count,
-            SUM(recent_tasks.combos_done) AS total_done,
-            SUM(recent_tasks.elapsed_s) AS total_seconds
-        FROM recent_tasks
-        JOIN users u ON u.id = recent_tasks.user_id
+            COUNT(*) AS task_count,
+            SUM(recent_combo_tasks.combos_done) AS total_done
+        FROM recent_combo_tasks
+        JOIN users u ON u.id = recent_combo_tasks.user_id
         GROUP BY u.id, u.username, u.nickname, u.avatar_url
-        HAVING SUM(recent_tasks.combos_done) > 0 OR SUM(recent_tasks.elapsed_s) > 0
+        HAVING SUM(recent_combo_tasks.combos_done) > 0
+        ORDER BY total_done DESC, u.username ASC
+        LIMIT 300
     """
-    rows = conn.execute(sql, (cutoff_iso, window_end_iso)).fetchall()
-    decorated = [_decorate_user_row(dict(row), default_avatar_url=default_avatar_url) for row in rows or []]
-    combos_rows = sorted(
-        [row for row in decorated if float(row.get("total_done") or 0.0) > 0.0],
-        key=lambda item: (-float(item.get("total_done") or 0.0), str(item.get("username") or "")),
-    )[:300]
-    time_rows = sorted(
-        [row for row in decorated if float(row.get("total_seconds") or 0.0) > 0.0],
-        key=lambda item: (-float(item.get("total_seconds") or 0.0), str(item.get("username") or "")),
-    )[:300]
-    return {"combos": combos_rows, "time": time_rows}
+    sql_time = """
+        WITH direct_elapsed_tasks AS MATERIALIZED (
+            SELECT
+                t.user_id,
+                GREATEST(COALESCE(t.progress_elapsed_s, 0.0), 0.0) AS elapsed_s
+            FROM mining_tasks t
+            WHERE COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
+              AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <= ?
+              AND t.status IN ('running', 'completed')
+              AND COALESCE(t.progress_elapsed_s, 0.0) > 0.0
+        ),
+        derived_elapsed_tasks AS MATERIALIZED (
+            SELECT
+                recent.user_id,
+                GREATEST(
+                    EXTRACT(
+                        EPOCH FROM (
+                            NULLIF(recent.activity_at, '')::timestamptz - NULLIF(recent.created_at, '')::timestamptz
+                        )
+                    ),
+                    0.0
+                ) AS elapsed_s
+            FROM (
+                SELECT
+                    t.user_id,
+                    COALESCE(t.last_heartbeat, t.updated_at, t.created_at) AS activity_at,
+                    t.created_at
+                FROM mining_tasks t
+                WHERE COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
+                  AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <= ?
+                  AND t.status IN ('running', 'completed')
+                  AND COALESCE(t.progress_elapsed_s, 0.0) <= 0.0
+                  AND NULLIF(t.created_at, '') IS NOT NULL
+                  AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <> t.created_at
+            ) recent
+        ),
+        aggregated_time AS (
+            SELECT
+                elapsed_union.user_id,
+                SUM(elapsed_union.elapsed_s) AS total_seconds
+            FROM (
+                SELECT user_id, elapsed_s FROM direct_elapsed_tasks
+                UNION ALL
+                SELECT user_id, elapsed_s FROM derived_elapsed_tasks
+            ) elapsed_union
+            GROUP BY elapsed_union.user_id
+        )
+        SELECT
+            u.username,
+            u.nickname,
+            u.avatar_url,
+            aggregated_time.total_seconds
+        FROM aggregated_time
+        JOIN users u ON u.id = aggregated_time.user_id
+        WHERE aggregated_time.total_seconds > 0
+        ORDER BY aggregated_time.total_seconds DESC, u.username ASC
+        LIMIT 300
+    """
+
+    try:
+        combo_rows = conn.execute(sql_combos, (cutoff_iso, window_end_iso)).fetchall()
+        results["combos"] = [
+            _decorate_user_row(dict(row), default_avatar_url=default_avatar_url)
+            for row in combo_rows or []
+            if float((dict(row) if not isinstance(row, dict) else row).get("total_done") or 0.0) > 0.0
+        ]
+    except Exception as exc:
+        combos_error = exc
+        print(f"[DB WARN] Leaderboard combos aggregate failed: {exc}")
+
+    try:
+        time_rows = conn.execute(sql_time, (cutoff_iso, window_end_iso, cutoff_iso, window_end_iso)).fetchall()
+        results["time"] = [
+            _decorate_user_row(dict(row), default_avatar_url=default_avatar_url)
+            for row in time_rows or []
+            if float((dict(row) if not isinstance(row, dict) else row).get("total_seconds") or 0.0) > 0.0
+        ]
+    except Exception as exc:
+        time_error = exc
+        print(f"[DB WARN] Leaderboard time aggregate failed: {exc}")
+
+    if combos_error is not None or time_error is not None:
+        fallback = _leaderboard_python_fallback(conn, cutoff_iso, window_end_iso)
+        if combos_error is not None and not results["combos"]:
+            results["combos"] = fallback.get("combos") or []
+        if time_error is not None and not results["time"]:
+            results["time"] = fallback.get("time") or []
+
+    return results
 
 
 def _leaderboard_python_fallback(conn: Any, cutoff_iso: str, window_end_iso: str) -> Dict[str, List[Dict[str, Any]]]:
