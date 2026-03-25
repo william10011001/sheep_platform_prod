@@ -266,6 +266,8 @@ class HolyGrailRuntime:
                 "symbol": strat.get("symbol"),
                 "timeframe_min": strat.get("timeframe_min"),
                 "pool_name": strat.get("pool_name"),
+                "allocation_pct": float(strat.get("allocation_pct") or strat.get("allocationPct") or 0.0),
+                "created_at": str(strat.get("created_at") or strat.get("createdAt") or ""),
             }
 
             params = dict(strat.get("params") or {})
@@ -297,6 +299,12 @@ class HolyGrailRuntime:
                 row["param_sl"] = float(params.get("sl") or 0.0)
                 row["param_max_hold"] = int(params.get("max_hold") or 0)
                 row["param_reverse_mode"] = direction == "short"
+                row["direction"] = direction
+                row["candidate_source"] = "scored_strategy" if metrics else "template"
+                row["has_metrics"] = bool(metrics)
+                row["metric_sharpe"] = metrics.get("sharpe")
+                row["metric_cagr_pct"] = metrics.get("cagr_pct")
+                row["metric_max_drawdown_pct"] = metrics.get("max_drawdown_pct")
                 for key, value in family_params.items():
                     row[f"param_{key}"] = value
                 for key, value in metrics.items():
@@ -332,52 +340,147 @@ class HolyGrailRuntime:
                 row["param_sl"] = params.get("sl", 0)
                 row["param_max_hold"] = params.get("max_hold", 0)
                 cand_direction = normalize_direction(
-                    params.get("direction"),
+                    cand.get("direction", params.get("direction")),
                     reverse=params.get("reverse"),
                     default=strat.get("direction") or "long",
                 )
                 row["param_reverse_mode"] = cand_direction == "short"
+                row["direction"] = cand_direction
+                row["candidate_source"] = "checkpoint_candidate" if cand.get("metrics") else "template"
+                row["has_metrics"] = bool(cand.get("metrics"))
+                row["metric_sharpe"] = dict(cand.get("metrics") or {}).get("sharpe")
+                row["metric_cagr_pct"] = dict(cand.get("metrics") or {}).get("cagr_pct")
+                row["metric_max_drawdown_pct"] = dict(cand.get("metrics") or {}).get("max_drawdown_pct")
                 for key, value in dict(params.get("family_params") or {}).items():
                     row[f"param_{key}"] = value
                 for key, value in dict(cand.get("metrics") or {}).items():
                     row[f"metric_{key}"] = value
                 rows.append(row)
+        df = pd.DataFrame(rows)
+        if df.empty:
+            return df
+        for column in ("metric_sharpe", "metric_cagr_pct", "metric_max_drawdown_pct", "allocation_pct", "cand_score"):
+            if column not in df.columns:
+                df[column] = np.nan
+        if "created_at" not in df.columns:
+            df["created_at"] = ""
+        if "candidate_source" not in df.columns:
+            df["candidate_source"] = "template"
+        if "has_metrics" not in df.columns:
+            df["has_metrics"] = False
+        if "direction" not in df.columns:
+            df["direction"] = [
+                normalize_direction(reverse=value, default="long") for value in list(df.get("param_reverse_mode") or [])
+            ]
+        return df
 
-        return pd.DataFrame(rows)
+    @staticmethod
+    def _row_direction(row: pd.Series) -> str:
+        return normalize_direction(row.get("direction"), reverse=row.get("param_reverse_mode"), default="long")
+
+    @staticmethod
+    def _created_sort_value(value: Any) -> float:
+        ts = pd.to_datetime(value, utc=True, errors="coerce")
+        if pd.isna(ts):
+            return float("-inf")
+        return float(ts.value)
 
     def _candidate_pool(self, df_params: pd.DataFrame, *, top_n: int = 150, max_per_group: int = 3) -> pd.DataFrame:
         if df_params.empty:
             return df_params.copy()
 
-        df_sorted = df_params.sort_values(by="metric_sharpe", ascending=False).reset_index(drop=True)
-        selected_indices: List[int] = []
-        group_counts: Dict[Tuple[str, str, str], int] = {}
-        seen_params: set[str] = set()
+        per_direction = max(1, int(top_n) // 2)
+        if per_direction >= 75:
+            scored_target = 50
+            exploration_target = 25
+        else:
+            exploration_target = max(0, int(round(per_direction * (25.0 / 75.0))))
+            scored_target = max(0, per_direction - exploration_target)
 
-        for idx, row in df_sorted.iterrows():
-            family = str(row.get("family", "Unknown"))
-            symbol = str(row.get("symbol", "Unknown"))
-            direction = normalize_direction(reverse=row.get("param_reverse_mode"), default="long")
-            group_key = (family, symbol, direction)
+        working = df_params.copy()
+        for column in ("metric_sharpe", "metric_cagr_pct", "metric_max_drawdown_pct", "allocation_pct", "cand_score"):
+            if column not in working.columns:
+                working[column] = np.nan
+        if "candidate_source" not in working.columns:
+            working["candidate_source"] = "template"
+        if "has_metrics" not in working.columns:
+            working["has_metrics"] = False
+        if "created_at" not in working.columns:
+            working["created_at"] = ""
+        working["direction"] = [self._row_direction(row) for _, row in working.iterrows()]
+        working["metric_sharpe_sort"] = pd.to_numeric(working["metric_sharpe"], errors="coerce").fillna(float("-inf"))
+        working["metric_cagr_sort"] = pd.to_numeric(working["metric_cagr_pct"], errors="coerce").fillna(float("-inf"))
+        working["metric_max_dd_sort"] = pd.to_numeric(working["metric_max_drawdown_pct"], errors="coerce").fillna(float("inf"))
+        working["allocation_pct_sort"] = pd.to_numeric(working["allocation_pct"], errors="coerce").fillna(0.0)
+        working["cand_score_sort"] = pd.to_numeric(working["cand_score"], errors="coerce").fillna(0.0)
+        working["strategy_id_sort"] = pd.to_numeric(working["strategy_id"], errors="coerce").fillna(0.0)
+        working["created_at_sort"] = [self._created_sort_value(value) for value in working["created_at"]]
 
-            param_dict = {
-                key: value
-                for key, value in row.items()
-                if str(key).startswith("param_") and pd.notna(value)
-            }
-            param_fingerprint = f"{family}_{symbol}_{direction}_{json.dumps(param_dict, sort_keys=True, default=str)}"
-            if param_fingerprint in seen_params:
+        selected_rows: List[pd.Series] = []
+        for direction in ("long", "short"):
+            dir_df = working[working["direction"] == direction].copy()
+            if dir_df.empty:
                 continue
-            if group_counts.get(group_key, 0) >= max_per_group:
-                continue
 
-            selected_indices.append(int(idx))
-            group_counts[group_key] = group_counts.get(group_key, 0) + 1
-            seen_params.add(param_fingerprint)
-            if len(selected_indices) >= int(top_n):
-                break
+            dir_selected: List[pd.Series] = []
+            group_counts: Dict[Tuple[str, str, str], int] = {}
+            seen_params: set[str] = set()
 
-        return df_sorted.loc[selected_indices].copy()
+            scored_df = dir_df[dir_df["has_metrics"] == True].sort_values(
+                by=["metric_sharpe_sort", "metric_cagr_sort", "metric_max_dd_sort", "cand_score_sort"],
+                ascending=[False, False, True, False],
+                kind="mergesort",
+            )
+            explore_df = dir_df[dir_df["has_metrics"] != True].sort_values(
+                by=["allocation_pct_sort", "created_at_sort", "strategy_id_sort"],
+                ascending=[False, False, False],
+                kind="mergesort",
+            )
+
+            def _extend_from_frame(frame: pd.DataFrame, *, limit: int, bucket: str) -> None:
+                if limit <= 0 or frame.empty:
+                    return
+                for _, row in frame.iterrows():
+                    family = str(row.get("family", "Unknown"))
+                    symbol = str(row.get("symbol", "Unknown"))
+                    row_direction = str(row.get("direction") or direction)
+                    group_key = (family, symbol, row_direction)
+                    param_dict = {
+                        key: value
+                        for key, value in row.items()
+                        if str(key).startswith("param_") and pd.notna(value)
+                    }
+                    param_fingerprint = f"{family}_{symbol}_{row_direction}_{json.dumps(param_dict, sort_keys=True, default=str)}"
+                    if param_fingerprint in seen_params:
+                        continue
+                    if group_counts.get(group_key, 0) >= max_per_group:
+                        continue
+
+                    row_copy = row.copy()
+                    row_copy["direction_bucket"] = bucket
+                    row_copy["preselect_rank"] = len(dir_selected) + 1
+                    dir_selected.append(row_copy)
+                    group_counts[group_key] = group_counts.get(group_key, 0) + 1
+                    seen_params.add(param_fingerprint)
+                    if len([item for item in dir_selected if str(item.get("direction_bucket")) == bucket]) >= limit:
+                        break
+                    if len(dir_selected) >= per_direction:
+                        break
+
+            _extend_from_frame(scored_df, limit=scored_target, bucket="scored")
+            _extend_from_frame(explore_df, limit=exploration_target, bucket="exploration")
+            if len(dir_selected) < per_direction:
+                _extend_from_frame(scored_df, limit=per_direction, bucket="scored")
+            if len(dir_selected) < per_direction:
+                _extend_from_frame(explore_df, limit=per_direction, bucket="exploration")
+
+            selected_rows.extend(dir_selected[:per_direction])
+
+        if not selected_rows:
+            return working.iloc[0:0].copy()
+
+        pool_df = pd.DataFrame([row.to_dict() if hasattr(row, "to_dict") else dict(row) for row in selected_rows]).reset_index(drop=True)
+        return pool_df
 
     def _load_csv(self, path: Path) -> pd.DataFrame:
         df = pd.read_csv(path)
@@ -806,36 +909,106 @@ class HolyGrailRuntime:
             selected_representatives[group_members[0]["curve_key"]] = group_members[0]
 
         representative_candidates = sorted(selected_representatives.values(), key=self._sort_candidate_key)
-        selected_curve_keys: List[str] = []
         for candidate in representative_candidates:
-            curve_key = str(candidate.get("curve_key") or "")
+            candidate["selected_pair_rank"] = None
+            candidate["selected_direction_rank"] = None
+
+        def _corr_stats(curve_key: str, against_keys: List[str]) -> Tuple[float, float]:
+            if not against_keys:
+                return 0.0, 0.0
+            pairwise_corrs = [
+                abs(self._corr_value(corr_matrix, curve_key, selected_key))
+                for selected_key in against_keys
+            ]
+            if not pairwise_corrs:
+                return 0.0, 0.0
+            return float(sum(pairwise_corrs) / len(pairwise_corrs)), float(max(pairwise_corrs))
+
+        eligible_by_direction: Dict[str, List[Dict[str, Any]]] = {"long": [], "short": []}
+        for candidate in representative_candidates:
             perf = candidate.get("perf") or {}
             if float(perf.get("sharpe") or 0.0) <= 0.0 or float(perf.get("cagr_pct") or 0.0) <= 0.0:
                 candidate["selection_status"] = "rejected_performance"
                 candidate["selection_reject_reason"] = "non_positive_performance"
                 continue
-            if len(selected_curve_keys) >= int(max_selected):
-                candidate["selection_status"] = "rejected_capacity"
-                candidate["selection_reject_reason"] = "selection_limit_reached"
-                continue
+            direction = normalize_direction(candidate.get("direction"), default="long")
+            candidate["selection_status"] = "candidate"
+            candidate["selection_reject_reason"] = ""
+            eligible_by_direction.setdefault(direction, []).append(candidate)
 
-            pairwise_corrs = [
-                abs(self._corr_value(corr_matrix, curve_key, selected_key))
-                for selected_key in selected_curve_keys
-            ]
-            candidate["avg_pairwise_corr_to_selected"] = (
-                float(sum(pairwise_corrs) / len(pairwise_corrs)) if pairwise_corrs else 0.0
-            )
-            candidate["max_pairwise_corr_to_selected"] = float(max(pairwise_corrs)) if pairwise_corrs else 0.0
-            if pairwise_corrs and float(max(pairwise_corrs)) > float(corr_threshold):
+        max_pairs = max(0, min(int(max_selected or 0) // 2, 10))
+        selected_curve_keys: List[str] = []
+        selected_counts_by_direction: Dict[str, int] = {"long": 0, "short": 0}
+        pair_count = 0
+
+        for pair_rank in range(1, max_pairs + 1):
+            feasible_pair: Optional[Tuple[Dict[str, Any], Dict[str, Any], Tuple[float, float], Tuple[float, float]]] = None
+            for long_candidate in eligible_by_direction.get("long", []):
+                if str(long_candidate.get("selection_status") or "") != "candidate":
+                    continue
+                long_curve_key = str(long_candidate.get("curve_key") or "")
+                long_avg_corr, long_max_corr = _corr_stats(long_curve_key, selected_curve_keys)
+                if long_max_corr > float(corr_threshold):
+                    long_candidate["avg_pairwise_corr_to_selected"] = long_avg_corr
+                    long_candidate["max_pairwise_corr_to_selected"] = long_max_corr
+                    long_candidate["selection_status"] = "rejected_corr"
+                    long_candidate["selection_reject_reason"] = f"pairwise_corr>{float(corr_threshold):.4f}"
+                    continue
+
+                for short_candidate in eligible_by_direction.get("short", []):
+                    if str(short_candidate.get("selection_status") or "") != "candidate":
+                        continue
+                    short_curve_key = str(short_candidate.get("curve_key") or "")
+                    short_against = list(selected_curve_keys) + [long_curve_key]
+                    short_avg_corr, short_max_corr = _corr_stats(short_curve_key, short_against)
+                    if short_max_corr > float(corr_threshold):
+                        continue
+                    feasible_pair = (
+                        long_candidate,
+                        short_candidate,
+                        (long_avg_corr, long_max_corr),
+                        (short_avg_corr, short_max_corr),
+                    )
+                    break
+                if feasible_pair is not None:
+                    break
+
+            if feasible_pair is None:
+                break
+
+            long_candidate, short_candidate, long_corr_stats, short_corr_stats = feasible_pair
+            for selected_candidate, direction, corr_stats in (
+                (long_candidate, "long", long_corr_stats),
+                (short_candidate, "short", short_corr_stats),
+            ):
+                curve_key = str(selected_candidate.get("curve_key") or "")
+                selected_curve_keys.append(curve_key)
+                selected_counts_by_direction[direction] = int(selected_counts_by_direction.get(direction, 0)) + 1
+                selected_candidate["selection_status"] = "selected"
+                selected_candidate["selection_reject_reason"] = ""
+                selected_candidate["selected_rank"] = len(selected_curve_keys)
+                selected_candidate["selected_pair_rank"] = int(pair_rank)
+                selected_candidate["selected_direction_rank"] = int(selected_counts_by_direction[direction])
+                selected_candidate["avg_pairwise_corr_to_selected"] = float(corr_stats[0])
+                selected_candidate["max_pairwise_corr_to_selected"] = float(corr_stats[1])
+            pair_count += 1
+
+        for candidate in representative_candidates:
+            if str(candidate.get("selection_status") or "") != "candidate":
+                continue
+            curve_key = str(candidate.get("curve_key") or "")
+            avg_corr, max_corr = _corr_stats(curve_key, selected_curve_keys)
+            candidate["avg_pairwise_corr_to_selected"] = avg_corr
+            candidate["max_pairwise_corr_to_selected"] = max_corr
+            if len(selected_curve_keys) >= max_pairs * 2:
+                candidate["selection_status"] = "rejected_capacity"
+                candidate["selection_reject_reason"] = "balanced_selection_limit_reached"
+            elif max_corr > float(corr_threshold):
                 candidate["selection_status"] = "rejected_corr"
                 candidate["selection_reject_reason"] = f"pairwise_corr>{float(corr_threshold):.4f}"
-                continue
-
-            selected_curve_keys.append(curve_key)
-            candidate["selection_status"] = "selected"
-            candidate["selection_reject_reason"] = ""
-            candidate["selected_rank"] = len(selected_curve_keys)
+            else:
+                candidate["selection_status"] = "rejected_balance"
+                candidate["selection_reject_reason"] = "no_balanced_pair_available"
 
         sharpe_dict = {
             curve_key: max(0.0, float((detailed_results_cache.get(curve_key) or {}).get("sharpe") or 0.0))
@@ -954,8 +1127,14 @@ class HolyGrailRuntime:
                 "behavior_hash_type": str(candidate.get("behavior_hash_type") or ""),
                 "trade_signature_hash": str(candidate.get("trade_signature_hash") or ""),
                 "equity_signature_hash": str(candidate.get("equity_signature_hash") or ""),
+                "candidate_source": str(row_data.get("candidate_source") or ""),
+                "has_metrics": bool(row_data.get("has_metrics")),
+                "direction_bucket": str(row_data.get("direction_bucket") or ""),
+                "preselect_rank": int(row_data.get("preselect_rank") or 0),
                 "selection_status": str(candidate.get("selection_status") or ""),
                 "selection_reject_reason": str(candidate.get("selection_reject_reason") or ""),
+                "selected_pair_rank": int(candidate.get("selected_pair_rank") or 0),
+                "selected_direction_rank": int(candidate.get("selected_direction_rank") or 0),
                 "weight_pct": round(float(weights.get(curve_key, 0.0)) * 100.0, 6),
                 "sharpe": float(perf.get("sharpe") or 0.0),
                 "sortino": float(perf.get("sortino") or 0.0),
@@ -995,6 +1174,10 @@ class HolyGrailRuntime:
                         "sharpe": float(perf.get("sharpe") or 0.0),
                         "total_return_pct": float(perf.get("total_return_pct") or 0.0),
                         "max_drawdown_pct": float(perf.get("max_drawdown_pct") or 0.0),
+                        "selected_rank": int(rank or 0),
+                        "candidate_source": str(row_data.get("candidate_source") or ""),
+                        "direction_bucket": str(row_data.get("direction_bucket") or ""),
+                        "preselect_rank": int(row_data.get("preselect_rank") or 0),
                         "avg_pairwise_corr_to_selected": round(float(candidate.get("avg_pairwise_corr_to_selected") or 0.0), 6),
                         "max_pairwise_corr_to_selected": round(float(candidate.get("max_pairwise_corr_to_selected") or 0.0), 6),
                         "duplicate_group_id": str(candidate.get("duplicate_group_id") or ""),
@@ -1002,11 +1185,17 @@ class HolyGrailRuntime:
                     }
                 )
 
+        selected_portfolio.sort(key=lambda row: (int(row.get("rank") or 0), str(row.get("strategy_key") or "")))
+        multi_payload.sort(key=lambda row: (int(row.get("selected_rank") or 0), str(row.get("symbol") or "")))
+
         summary_rows = [
             {
                 "portfolio_name": "Top 20 Holy Grail Portfolio",
                 "base_stake_pct": float(base_stake_pct),
                 "selected_strategies": len(selected_curve_keys),
+                "selected_long_strategies": int(selected_counts_by_direction.get("long") or 0),
+                "selected_short_strategies": int(selected_counts_by_direction.get("short") or 0),
+                "selected_pairs": int(pair_count),
                 "backtested_strategies": len(candidate_records),
                 "unique_behavior_groups": len(duplicate_groups),
                 "sharpe": round(sharpe, 6),
@@ -1032,7 +1221,7 @@ class HolyGrailRuntime:
 
         return HolyGrailResult(
             ok=True,
-            message=f"selected {len(selected_curve_keys)} decorrelated strategies",
+            message=f"selected {len(selected_curve_keys)} balanced strategies",
             api_base=api_base,
             strategies_count=len(strategies),
             flattened_count=len(df_params),
@@ -1063,6 +1252,9 @@ class HolyGrailRuntime:
             diagnostics={
                 "project_root": str(project_root()),
                 "selected_curve_keys": selected_curve_keys,
+                "selected_long_count": int(selected_counts_by_direction.get("long") or 0),
+                "selected_short_count": int(selected_counts_by_direction.get("short") or 0),
+                "selected_pair_count": int(pair_count),
                 "corr_threshold": float(corr_threshold),
                 "duplicate_groups": len(duplicate_groups),
                 "cost_basis": cost_basis,

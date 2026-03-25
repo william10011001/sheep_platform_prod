@@ -59,10 +59,12 @@ APP_DIR = PROJECT_ROOT / "app"
 if str(APP_DIR) not in sys.path:
     sys.path.insert(0, str(APP_DIR))
 
-from sheep_holy_grail_runtime import HolyGrailRuntime, run_holy_grail_build
+from sheep_holy_grail_runtime import HolyGrailRuntime, HolyGrailResult
 from sheep_runtime_paths import (
     ensure_parent,
     import_backtest_runtime,
+    kline_candidate_paths,
+    normalize_symbol,
     realtime_local_config_path,
     realtime_public_config_path,
     realtime_config_path,
@@ -70,6 +72,8 @@ from sheep_runtime_paths import (
     realtime_exec_log_dir,
     realtime_log_path,
     realtime_state_path,
+    timeframe_min_to_label,
+    unique_existing_paths,
 )
 from sheep_strategy_schema import (
     extract_strategy_entries,
@@ -204,6 +208,28 @@ def safe_float(x, default=0.0) -> float:
     except Exception:
         return float(default)
 
+
+def safe_optional_float(x) -> Optional[float]:
+    if x in (None, ""):
+        return None
+    try:
+        value = float(x)
+    except Exception:
+        return None
+    if math.isnan(value) or math.isinf(value):
+        return None
+    return float(value)
+
+
+def normalize_ratio_pct(value) -> Optional[float]:
+    ratio = safe_optional_float(value)
+    if ratio is None:
+        return None
+    abs_ratio = abs(ratio)
+    if abs_ratio <= 1.0:
+        return float(ratio * 100.0)
+    return float(ratio)
+
 def debounce(ms: int):
     """UI 事件防抖：將多次觸發合併成最後一次。"""
     def deco(fn):
@@ -288,6 +314,81 @@ class BitmartClient:
         self._leverage_by_symbol: Dict[str, str] = {}
         self._open_type_by_symbol: Dict[str, str] = {}
 
+    @staticmethod
+    def _preview_payload(payload: Any, limit: int = 320) -> str:
+        try:
+            text = json.dumps(payload, ensure_ascii=False)
+        except Exception:
+            text = repr(payload)
+        text = str(text or "")
+        return text[:limit] + ("..." if len(text) > limit else "")
+
+    @classmethod
+    def _normalize_mapping_payload(cls, payload: Any, *, context: str) -> Dict[str, Any]:
+        if isinstance(payload, dict):
+            return payload
+        if isinstance(payload, str):
+            text = payload.strip()
+            if not text:
+                raise RuntimeError(f"{context}: empty string payload")
+            try:
+                parsed = json.loads(text)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"{context}: unexpected string payload ({exc}) | Raw: {cls._preview_payload(payload)}"
+                ) from exc
+            if isinstance(parsed, dict):
+                return parsed
+            raise RuntimeError(
+                f"{context}: unexpected JSON payload type {type(parsed).__name__} | Raw: {cls._preview_payload(parsed)}"
+            )
+        raise RuntimeError(
+            f"{context}: unexpected payload type {type(payload).__name__} | Raw: {cls._preview_payload(payload)}"
+        )
+
+    @classmethod
+    def _extract_order_id(cls, payload: Any) -> str:
+        def _maybe_extract(value: Any) -> str:
+            if value in (None, "", {}, []):
+                return ""
+            if isinstance(value, dict):
+                for key in ("orderId", "order_id", "id"):
+                    raw = value.get(key)
+                    if raw not in (None, ""):
+                        return str(raw).strip()
+                nested = value.get("data")
+                return _maybe_extract(nested)
+            if isinstance(value, str):
+                text = value.strip()
+                if not text:
+                    return ""
+                if text.startswith("{") or text.startswith("["):
+                    try:
+                        parsed = json.loads(text)
+                    except Exception:
+                        return text
+                    return _maybe_extract(parsed)
+                return text
+            if isinstance(value, (int, float)):
+                return str(value).strip()
+            if isinstance(value, list):
+                for item in value:
+                    found = _maybe_extract(item)
+                    if found:
+                        return found
+            return ""
+
+        return _maybe_extract(payload)
+
+    @staticmethod
+    def _pick_first_present(mapping: Dict[str, Any], *keys: str) -> Any:
+        for key in keys:
+            if key in mapping:
+                value = mapping.get(key)
+                if value not in (None, ""):
+                    return value
+        return None
+
 
     def _get_headers(self, query_string: str, body_str: str = "") -> Dict[str, str]:
         ts = str(int(time.time() * 1000))
@@ -345,10 +446,12 @@ class BitmartClient:
                     resp = requests.post(url, data=body_str, headers=headers, timeout=self.timeout)
 
                 try:
-                    data = resp.json()
+                    payload = resp.json()
                 except:
                     resp.raise_for_status()
-                    data = {}
+                    payload = {}
+
+                data = self._normalize_mapping_payload(payload, context=f"BitMart {method.upper()} {path}")
 
                 code = int(data.get("code", 0))
                 if code != 1000:
@@ -407,18 +510,85 @@ class BitmartClient:
             pos_type = int(p.get("position_type", 1))
             side = "LONG" if pos_type == 1 else "SHORT"
 
+            entry_price = safe_optional_float(
+                self._pick_first_present(
+                    p,
+                    "open_avg_price",
+                    "entry_price",
+                    "avg_entry_price",
+                    "avg_open_price",
+                )
+            )
+            mark_price = safe_optional_float(
+                self._pick_first_present(
+                    p,
+                    "mark_price",
+                    "fair_price",
+                    "last_price",
+                    "index_price",
+                )
+            )
+            unrealized_pnl = safe_optional_float(
+                self._pick_first_present(
+                    p,
+                    "unrealized_profit",
+                    "unrealized_pnl",
+                    "unrealised_pnl",
+                    "floating_profit",
+                )
+            )
+            position_value = safe_optional_float(
+                self._pick_first_present(
+                    p,
+                    "position_value",
+                    "hold_value",
+                    "position_margin_value",
+                    "notional_value",
+                )
+            )
+            margin_value = safe_optional_float(
+                self._pick_first_present(
+                    p,
+                    "position_margin",
+                    "margin",
+                    "hold_margin",
+                    "initial_margin",
+                )
+            )
+            margin_ratio_pct = normalize_ratio_pct(
+                self._pick_first_present(
+                    p,
+                    "margin_rate",
+                    "margin_ratio",
+                    "risk_rate",
+                    "maint_margin_rate",
+                    "maintenance_margin_rate",
+                    "position_margin_rate",
+                )
+            )
+            liquidation_price = safe_optional_float(
+                self._pick_first_present(
+                    p,
+                    "liquidation_price",
+                    "liq_price",
+                    "force_close_price",
+                    "position_liquidation_price",
+                    "liquidate_price",
+                )
+            )
+
             out.append({
                 "symbol": sym,
                 "positionSide": side,
                 "positionId": f"{sym}:{side}",
                 "positionAmt": amt if side == "LONG" else -amt,
-                "entryPrice": safe_float(p.get("open_avg_price"), 0),
-                "markPrice": safe_float(p.get("mark_price") or p.get("fair_price") or p.get("last_price"), 0),
-                "unrealizedPnl": safe_float(p.get("unrealized_profit") or p.get("unrealized_pnl") or p.get("unrealised_pnl"), 0),
-                "positionValue": safe_float(p.get("position_value") or p.get("hold_value") or p.get("position_margin_value"), 0),
-                "margin": safe_float(p.get("position_margin") or p.get("margin") or p.get("hold_margin"), 0),
-                "marginRatePct": safe_float(p.get("margin_rate") or p.get("margin_ratio") or p.get("risk_rate"), 0) * 100.0,
-                "liquidationPrice": safe_float(p.get("liquidation_price") or p.get("liq_price") or p.get("force_close_price"), 0),
+                "entryPrice": entry_price,
+                "markPrice": mark_price,
+                "unrealizedPnl": unrealized_pnl,
+                "positionValue": position_value,
+                "margin": margin_value,
+                "marginRatePct": margin_ratio_pct,
+                "liquidationPrice": liquidation_price,
                 "raw": dict(p or {}),
             })
         return {"code": "0", "data": out}
@@ -604,8 +774,11 @@ class BitmartClient:
             log(f"【下單參數診斷】Params: {json.dumps(params)}")
             raise e
 
-        oid = (res.get("data") or {}).get("order_id")
-        return {"code":"0", "data":{"orderId": str(oid)}}
+        raw_data = res.get("data") if isinstance(res, dict) else res
+        oid = self._extract_order_id(res)
+        if not oid:
+            raise RuntimeError(f"BitMart 下單回應缺少 order_id | Raw: {self._preview_payload(res)}")
+        return {"code":"0", "data":{"orderId": str(oid)}, "raw_data": raw_data}
 
     def close_position_by_id(self, position_id: str, close_qty: float = None):
         try:
@@ -1889,6 +2062,9 @@ class Trader:
 
         self.last_trade_fetch_ts = 0.0
         self._last_status_ts = 0.0 
+        self.entry_gate_controller = None
+        self._last_entry_gate_log_ts = 0.0
+        self._last_entry_gate_log_key = ""
 
         self.guard_poll_sec = float(cfg.get("guard_poll_sec", 1.0))
         self._last_guard_ts = 0.0
@@ -2245,8 +2421,13 @@ class Trader:
                 req_t0 = time.perf_counter()
                 res = self.c.place_order(strat_sym, side_bm, pos_side, "MARKET", qty=qty)
                 exec_delay = time.perf_counter() - req_t0
-                d = res.get("data") or {}
-                order_id = d.get("orderId") or d.get("order_id")
+                if not isinstance(res, dict):
+                    raise RuntimeError(f"下單回應格式異常: {type(res).__name__} | Raw: {repr(res)}")
+                order_id = ""
+                try:
+                    order_id = str(self.c._extract_order_id(res) or "").strip()
+                except Exception:
+                    order_id = ""
 
                 entry_avg = 0.0
                 filled_qty = 0.0
@@ -2274,7 +2455,9 @@ class Trader:
                     if entry_avg > 0 and filled_qty > 0:
                         order_id = "UNKNOWN"
                     else:
-                        raise RuntimeError(f"下單回報缺少 order_id: {res}")
+                        raise RuntimeError(
+                            f"下單回報缺少 order_id: {self.c._preview_payload(res) if hasattr(self.c, '_preview_payload') else repr(res)}"
+                        )
 
                 if entry_avg <= 0:
                     entry_avg = self._apply_cost_side(tag, px_ref, self.fee_bps, self.slip_bps)
@@ -2468,6 +2651,72 @@ class Trader:
                 finally:
                     self._reset_pos(strat_id)
 
+    def _new_entries_ready(self) -> Tuple[bool, str]:
+        gate = getattr(self, "entry_gate_controller", None)
+        if gate is None:
+            return True, ""
+        try:
+            return gate.allow_new_entries()
+        except Exception as exc:
+            return False, f"gate_error:{exc}"
+
+    def _log_entry_gate_block(self, sid: str, reason: str) -> None:
+        now_ts = time.time()
+        message_key = f"{sid}:{reason}"
+        if message_key != self._last_entry_gate_log_key or (now_ts - self._last_entry_gate_log_ts) >= 5.0:
+            self._last_entry_gate_log_key = message_key
+            self._last_entry_gate_log_ts = now_ts
+            log(f"[{sid}] 啟動同步尚未完成，暫時忽略本次進場訊號。({reason or 'startup_pending'})")
+
+    def _maybe_open_signal_entry(
+        self,
+        sid: str,
+        pos_data: Dict[str, Any],
+        sym: str,
+        iv: str,
+        df,
+        i: int,
+        active_signals: Dict[str, Tuple[bool, bool, int]],
+    ) -> None:
+        l_sig, s_sig, sig_ts = active_signals.get(sid, (False, False, -1))
+        if not (l_sig or s_sig):
+            return
+        if pos_data.get("last_attempted_bar_ts") == sig_ts:
+            return
+
+        entries_ready, gate_reason = self._new_entries_ready()
+        if not entries_ready:
+            self._log_entry_gate_block(sid, gate_reason)
+            return
+
+        side_str = "LONG" if l_sig else "SHORT"
+        log(f"[{sid}] 執行: 進場 ({side_str}) 對象: {sym}")
+
+        pos_data["last_attempted_bar_ts"] = sig_ts
+
+        now_ts_sec = time.time()
+        iv_sec = INTERVAL_MS[iv] / 1000.0
+        theoretical_boundary = now_ts_sec - (now_ts_sec % iv_sec)
+        signal_delay = now_ts_sec - theoretical_boundary
+
+        pid, px_ref, entry_est, q, exec_delay = self.open_market(side_str, strat_id=sid)
+        if not pid:
+            log(f"[{sid}] 開倉失敗 (如餘額不足等)，已取消該次訊號的進場嘗試。")
+            return
+
+        mode_str = "DRY_RUN" if self.c.dry_run else "LIVE"
+        log_execution_csv(mode_str, side_str, signal_delay, exec_delay, px_ref, entry_est)
+
+        pos_data["in_pos"] = side_str
+        pos_data["position_id"] = pid
+        pos_data["entry_avg"] = entry_est
+        pos_data["entry_bar_index"] = i
+        pos_data["entry_qty"] = q
+        pos_data["entry_open_ms"] = int(df["time"].iloc[i])
+
+        self.arm_tp_sl_sid(sid, side_str, entry_est, pid)
+        pos_data["cooldown"] = pos_data["cfg"].get("params", {}).get("cooldown", 0)
+
     # ----- 主循環 -----
     def run(self):
         log("系統初始化：啟動多幣種 WebSocket 行情引擎...")
@@ -2587,39 +2836,7 @@ class Trader:
                         pos_data["cooldown"] -= 1
 
                     if live_ok and not pos_data["in_pos"] and pos_data["cooldown"] == 0 and not self.daily_halt_active:
-                        l_sig, s_sig, sig_ts = active_signals.get(sid, (False, False, -1))
-                        
-                        # 只有當訊號有效，且這根 K 棒的訊號沒有被嘗試過，才進行開倉
-                        if (l_sig or s_sig) and pos_data.get("last_attempted_bar_ts") != sig_ts:
-                            side_str = "LONG" if l_sig else "SHORT"
-                            log(f"[{sid}] 執行: 進場 ({side_str}) 對象: {sym}")
-                            
-                            # 標記已嘗試過此根 K 棒，徹底避免無限重試洗頻與 30013 封鎖
-                            pos_data["last_attempted_bar_ts"] = sig_ts
-                            
-                            now_ts_sec = time.time()
-                            iv_sec = INTERVAL_MS[iv] / 1000.0
-                            theoretical_boundary = now_ts_sec - (now_ts_sec % iv_sec)
-                            signal_delay = now_ts_sec - theoretical_boundary
-                            
-                            pid, px_ref, entry_est, q, exec_delay = self.open_market(side_str, strat_id=sid)
-                            if not pid:
-                                log(f"[{sid}] 開倉失敗 (如餘額不足等)，已取消該次訊號的進場嘗試。")
-                                continue
-                                
-                            mode_str = "DRY_RUN" if self.c.dry_run else "LIVE"
-                            log_execution_csv(mode_str, side_str, signal_delay, exec_delay, px_ref, entry_est)
-
-                            pos_data["in_pos"] = side_str
-                            pos_data["position_id"] = pid
-                            pos_data["entry_avg"] = entry_est
-                            pos_data["entry_bar_index"] = i
-                            pos_data["entry_qty"] = q
-                            pos_data["entry_open_ms"] = int(df["time"].iloc[i])
-                            
-                            # [專家級優化] 將 TP/SL 的計算基準從「下單前標記價 (px_ref)」改為「實際成交價 (entry_est)」，確保風控精準度 100%
-                            self.arm_tp_sl_sid(sid, side_str, entry_est, pid)
-                            pos_data["cooldown"] = pos_data["cfg"].get("params", {}).get("cooldown", 0)
+                        self._maybe_open_signal_entry(sid, pos_data, sym, iv, df, i, active_signals)
 
             except SystemExit:
                 log("接到系統結束訊號，退出主循環")
@@ -2660,13 +2877,690 @@ def detect_api_base(host_url):
             pass
     return normalized[0] if normalized else f"{host_url}/api"
 
-def _new_holy_grail_runtime() -> HolyGrailRuntime:
-    return HolyGrailRuntime(bt_module=bt, log=log)
+def _kline_pair_key(symbol: str, timeframe_min: int) -> Tuple[str, int]:
+    return normalize_symbol(symbol).upper(), int(timeframe_min)
+
+
+def _format_kline_pair(symbol: str, timeframe_min: int) -> str:
+    safe_symbol, tf = _kline_pair_key(symbol, timeframe_min)
+    return f"{safe_symbol} {timeframe_min_to_label(tf)}"
+
+
+def _canonical_kline_csv_path(symbol: str, timeframe_min: int, *, years: int = 3) -> Path:
+    candidates = kline_candidate_paths(symbol, timeframe_min, years=int(years))
+    if candidates:
+        return candidates[0]
+    safe_symbol, tf = _kline_pair_key(symbol, timeframe_min)
+    return APP_DIR / "data" / f"{safe_symbol}_{timeframe_min_to_label(tf)}_{int(years)}y.csv"
+
+
+CONTRACT_ONLY_KLINE_SYMBOLS = {"XAG_USDT"}
+
+
+class AutoSyncHolyGrailRuntime(HolyGrailRuntime):
+    def __init__(
+        self,
+        *,
+        bt_module: Any,
+        log: Optional[Any] = None,
+        factor_pool_url: Optional[str] = None,
+        factor_pool_token: Optional[str] = None,
+        factor_pool_user: Optional[str] = None,
+        factor_pool_pass: Optional[str] = None,
+        years: int = 3,
+        auto_sync_missing_klines: bool = True,
+        strict_kline_coverage: bool = True,
+    ) -> None:
+        super().__init__(
+            bt_module=bt_module,
+            log=log,
+            factor_pool_url=factor_pool_url,
+            factor_pool_token=factor_pool_token,
+            factor_pool_user=factor_pool_user,
+            factor_pool_pass=factor_pool_pass,
+            years=years,
+        )
+        self.auto_sync_missing_klines = bool(auto_sync_missing_klines)
+        self.strict_kline_coverage = bool(strict_kline_coverage)
+        self._prefetched_factor_pool_data: Optional[Tuple[List[Dict[str, Any]], str, str]] = None
+        self._autosync_attempted_pairs: set[Tuple[str, int]] = set()
+        self._kline_sync_details: Dict[Tuple[str, int], Dict[str, Any]] = {}
+        self._last_kline_sync_summary: Dict[str, Any] = {}
+
+    @staticmethod
+    def _is_transient_factor_pool_error(exc: Exception) -> bool:
+        transient_types = (
+            requests.exceptions.RequestException,
+            ConnectionResetError,
+            TimeoutError,
+            ConnectionError,
+            OSError,
+        )
+        if isinstance(exc, transient_types):
+            return True
+        text = str(exc or "").lower()
+        transient_markers = [
+            "connection broken",
+            "connectionreseterror",
+            "forcibly closed",
+            "遠端主機已強制關閉",
+            "read timed out",
+            "connect timeout",
+            "max retries exceeded",
+            "temporarily unavailable",
+            "bad gateway",
+            "502",
+            "503",
+            "504",
+            "429",
+        ]
+        return any(marker in text for marker in transient_markers)
+
+    def _remember_kline_status(self, pair_key: Tuple[str, int], status: str, **extra: Any) -> None:
+        detail = {
+            "symbol": str(pair_key[0]),
+            "timeframe_min": int(pair_key[1]),
+            "timeframe": timeframe_min_to_label(int(pair_key[1])),
+            "status": str(status),
+        }
+        for key, value in extra.items():
+            if value is None:
+                continue
+            detail[key] = value
+        self._kline_sync_details[pair_key] = detail
+
+    def _load_csv(self, path: Path) -> pd.DataFrame:
+        loader = getattr(self.bt, "load_and_validate_csv", None)
+        if callable(loader):
+            return loader(str(path))
+        return super()._load_csv(path)
+
+    def _load_exact_kline_csv(self, symbol: str, timeframe_min: int) -> Optional[pd.DataFrame]:
+        safe_symbol, tf = _kline_pair_key(symbol, timeframe_min)
+        cache_key = f"{safe_symbol}_{tf}"
+        if cache_key in self._kline_cache:
+            return self._kline_cache[cache_key]
+
+        for path in unique_existing_paths(kline_candidate_paths(safe_symbol, tf, years=self.years)):
+            try:
+                df = self._load_csv(path)
+                self._kline_cache[cache_key] = df
+                status = self._kline_sync_details.get((safe_symbol, tf), {}).get("status")
+                if status not in {"synced", "resampled"}:
+                    status = "existing"
+                self._remember_kline_status((safe_symbol, tf), status, path=str(path), rows=len(df))
+                return df
+            except Exception as exc:
+                self.warn_once(
+                    f"holy-grail-kline-read-failed:{safe_symbol}:{tf}:{path}",
+                    f"[HolyGrail] failed to read canonical kline CSV {path}: {exc}",
+                )
+        return None
+
+    def _write_resampled_canonical_csv(
+        self,
+        symbol: str,
+        timeframe_min: int,
+        df: pd.DataFrame,
+        *,
+        source_step_min: int,
+    ) -> Path:
+        return self._write_canonical_kline_csv(
+            symbol,
+            timeframe_min,
+            df,
+            source="resampled_local",
+            meta_extra={"source_step_min": int(source_step_min)},
+        )
+
+    def _write_canonical_kline_csv(
+        self,
+        symbol: str,
+        timeframe_min: int,
+        df: pd.DataFrame,
+        *,
+        source: str,
+        meta_extra: Optional[Dict[str, Any]] = None,
+    ) -> Path:
+        safe_symbol, tf = _kline_pair_key(symbol, timeframe_min)
+        out_path = _canonical_kline_csv_path(safe_symbol, tf, years=self.years)
+        ensure_parent(out_path)
+        frame = df[["ts", "open", "high", "low", "close", "volume"]].copy()
+        frame["ts"] = pd.to_datetime(frame["ts"], utc=True, errors="coerce")
+        for col in ["open", "high", "low", "close", "volume"]:
+            frame[col] = pd.to_numeric(frame[col], errors="coerce")
+        frame = frame.replace([np.inf, -np.inf], np.nan)
+        frame = frame.dropna(subset=["ts"]).sort_values("ts").drop_duplicates(subset=["ts"], keep="last")
+        if frame.empty:
+            raise ValueError("canonical frame is empty")
+        frame["ts"] = [ts.isoformat() for ts in frame["ts"]]
+        with out_path.open("w", encoding="utf-8", newline="") as f:
+            f.write("ts,open,high,low,close,volume\n")
+            frame.to_csv(f, index=False, header=False)
+        meta_path = out_path.with_suffix(".meta.json")
+        try:
+            meta = {
+                "exchange": "bitmart",
+                "source": str(source),
+                "symbol": safe_symbol,
+                "step_min": int(tf),
+                "years": int(self.years),
+                "last_sync_utc": datetime.now(timezone.utc).isoformat(),
+                "rows_written": int(len(frame)),
+                "csv": str(out_path),
+            }
+            if isinstance(meta_extra, dict):
+                meta.update(meta_extra)
+            meta_path.write_text(
+                json.dumps(meta, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+        return out_path
+
+    @staticmethod
+    def _bitmart_contract_symbol(symbol: str) -> str:
+        return normalize_symbol(symbol).replace("_", "").replace("/", "").replace(":", "").upper()
+
+    def _fetch_contract_kline_chunk(
+        self,
+        symbol: str,
+        timeframe_min: int,
+        *,
+        start_ts_sec: int,
+        end_ts_sec: int,
+    ) -> pd.DataFrame:
+        url = "https://api-cloud-v2.bitmart.com/contract/public/kline"
+        params = {
+            "symbol": self._bitmart_contract_symbol(symbol),
+            "step": int(timeframe_min),
+            "start_time": int(start_ts_sec),
+            "end_time": int(end_ts_sec),
+        }
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        }
+        last_exc: Optional[Exception] = None
+        for attempt in range(4):
+            try:
+                resp = requests.get(url, params=params, headers=headers, timeout=30)
+                resp.raise_for_status()
+                payload = resp.json()
+                code = int(payload.get("code") or 0)
+                if code != 1000:
+                    raise RuntimeError(str(payload.get("message") or f"contract api code={code}"))
+                rows = []
+                for item in list(payload.get("data") or []):
+                    if not isinstance(item, dict):
+                        continue
+                    ts_sec = int(item.get("timestamp") or 0)
+                    if ts_sec <= 0:
+                        continue
+                    rows.append(
+                        {
+                            "ts": pd.to_datetime(ts_sec, unit="s", utc=True),
+                            "open": float(item.get("open_price") or 0.0),
+                            "high": float(item.get("high_price") or 0.0),
+                            "low": float(item.get("low_price") or 0.0),
+                            "close": float(item.get("close_price") or 0.0),
+                            "volume": float(item.get("volume") or 0.0),
+                        }
+                    )
+                if not rows:
+                    return pd.DataFrame(columns=["ts", "open", "high", "low", "close", "volume"])
+                return pd.DataFrame(rows).sort_values("ts").drop_duplicates(subset=["ts"], keep="last").reset_index(drop=True)
+            except Exception as exc:
+                last_exc = exc
+                time.sleep(min(3.0, 0.5 * (attempt + 1)))
+        raise RuntimeError(f"contract kline fetch failed: {last_exc}")
+
+    def _sync_contract_kline_csv(self, symbol: str, timeframe_min: int) -> bool:
+        safe_symbol, tf = _kline_pair_key(symbol, timeframe_min)
+        step_sec = int(tf) * 60
+        end_ts_sec = int(time.time())
+        end_ts_sec -= end_ts_sec % step_sec
+        start_ts_sec = max(0, end_ts_sec - int(self.years) * 366 * 24 * 3600)
+        chunk_bars = 400
+        cursor = int(start_ts_sec)
+        frames: List[pd.DataFrame] = []
+        guard = 0
+        saw_data = False
+        while cursor < end_ts_sec:
+            guard += 1
+            if guard > 2000:
+                raise RuntimeError("contract sync guard limit reached")
+            chunk_end = min(end_ts_sec, cursor + step_sec * chunk_bars)
+            frame = self._fetch_contract_kline_chunk(
+                safe_symbol,
+                tf,
+                start_ts_sec=int(cursor),
+                end_ts_sec=int(chunk_end),
+            )
+            if frame is not None and not frame.empty:
+                saw_data = True
+                frames.append(frame)
+                last_ts = int(frame["ts"].astype("int64").max() // 10**9)
+                cursor = max(int(chunk_end), int(last_ts + step_sec))
+            else:
+                cursor = int(chunk_end + step_sec)
+            time.sleep(0.08)
+
+        if not saw_data:
+            raise RuntimeError("同步結果為空，請確認交易對與時間級別是否有資料")
+
+        final_df = pd.concat(frames, ignore_index=True)
+        final_df = final_df.sort_values("ts").drop_duplicates(subset=["ts"], keep="last").reset_index(drop=True)
+        out_path = self._write_canonical_kline_csv(
+            safe_symbol,
+            tf,
+            final_df,
+            source="bitmart_contract_v2",
+            meta_extra={"contract_symbol": self._bitmart_contract_symbol(safe_symbol)},
+        )
+        validated = self._load_csv(out_path)
+        self._kline_cache[f"{safe_symbol}_{tf}"] = validated
+        self._remember_kline_status(
+            (safe_symbol, tf),
+            "synced",
+            path=str(out_path),
+            rows=len(validated),
+            source="bitmart_contract_v2",
+        )
+        self.info(
+            "[HolyGrail] canonical kline CSV ready via contract fallback: "
+            f"{_format_kline_pair(safe_symbol, tf)} -> {out_path.name}"
+        )
+        return True
+
+    def _resample_kline_csv(self, symbol: str, timeframe_min: int) -> Optional[pd.DataFrame]:
+        safe_symbol, tf = _kline_pair_key(symbol, timeframe_min)
+        cache_key = f"{safe_symbol}_{tf}"
+        for source_step, source_path in self._resample_source_candidates(safe_symbol, tf):
+            try:
+                source_df = self._load_csv(source_path)
+                resampled = self._resample_ohlcv(source_df, tf)
+                if resampled.empty:
+                    continue
+                out_path = self._write_resampled_canonical_csv(
+                    safe_symbol,
+                    tf,
+                    resampled,
+                    source_step_min=int(source_step),
+                )
+                validated = self._load_csv(out_path)
+                self._kline_cache[cache_key] = validated
+                self.info(
+                    "[HolyGrail] rebuilt canonical kline CSV via resample: "
+                    f"{_format_kline_pair(safe_symbol, tf)} <= {timeframe_min_to_label(int(source_step))} "
+                    f"({source_path.name} -> {out_path.name})"
+                )
+                self._remember_kline_status(
+                    (safe_symbol, tf),
+                    "resampled",
+                    path=str(out_path),
+                    rows=len(validated),
+                    source_step_min=int(source_step),
+                )
+                return validated
+            except Exception as exc:
+                self.warn_once(
+                    f"holy-grail-kline-resample-failed:{safe_symbol}:{source_step}:{tf}",
+                    f"[HolyGrail] failed to rebuild {_format_kline_pair(safe_symbol, tf)} from "
+                    f"{timeframe_min_to_label(int(source_step))}: {exc}",
+                )
+        return None
+
+    def _ensure_compatible_kline_csv(self, symbol: str, timeframe_min: int) -> bool:
+        safe_symbol, tf = _kline_pair_key(symbol, timeframe_min)
+        pair_key = (safe_symbol, tf)
+        if pair_key in self._autosync_attempted_pairs:
+            return self._kline_sync_details.get(pair_key, {}).get("status") in {"synced", "existing", "resampled"}
+        self._autosync_attempted_pairs.add(pair_key)
+
+        if safe_symbol in CONTRACT_ONLY_KLINE_SYMBOLS:
+            try:
+                return self._sync_contract_kline_csv(safe_symbol, tf)
+            except Exception as contract_exc:
+                self.warn_once(
+                    f"holy-grail-contract-kline-sync-failed:{safe_symbol}:{tf}",
+                    f"[HolyGrail] contract fallback failed for {_format_kline_pair(safe_symbol, tf)}: {contract_exc}",
+                )
+                self._remember_kline_status(pair_key, "failed", reason=str(contract_exc))
+                return False
+
+        ensure_fn = getattr(self.bt, "ensure_bitmart_data", None)
+        if not self.auto_sync_missing_klines or not callable(ensure_fn):
+            reason = "shared backtest runtime missing ensure_bitmart_data support"
+            self._remember_kline_status(pair_key, "failed", reason=reason)
+            self.warn_once(
+                f"holy-grail-kline-sync-unsupported:{safe_symbol}:{tf}",
+                f"[HolyGrail] cannot auto-sync {_format_kline_pair(safe_symbol, tf)}: {reason}",
+            )
+            return False
+
+        self.info(f"[HolyGrail] auto-syncing canonical kline CSV for {_format_kline_pair(safe_symbol, tf)}")
+        last_exc: Optional[Exception] = None
+        for force_full in (False, True):
+            try:
+                result = ensure_fn(
+                    safe_symbol,
+                    tf,
+                    years=self.years,
+                    auto_sync=True,
+                    force_full=bool(force_full),
+                    skip_1m=True,
+                )
+                candidate_paths: List[Path] = []
+                if isinstance(result, (tuple, list)) and result:
+                    main_path = str(result[0] or "").strip()
+                    if main_path:
+                        candidate_paths.append(Path(main_path))
+                elif isinstance(result, str):
+                    candidate_paths.append(Path(result))
+                candidate_paths.extend(unique_existing_paths(kline_candidate_paths(safe_symbol, tf, years=self.years)))
+                seen_paths: set[Path] = set()
+                for candidate in candidate_paths:
+                    resolved = Path(candidate).resolve()
+                    if resolved in seen_paths or not resolved.exists():
+                        continue
+                    seen_paths.add(resolved)
+                    df = self._load_csv(resolved)
+                    if df is None or df.empty:
+                        continue
+                    self._kline_cache[f"{safe_symbol}_{tf}"] = df
+                    self._remember_kline_status(
+                        pair_key,
+                        "synced",
+                        path=str(resolved),
+                        rows=len(df),
+                        force_full=bool(force_full),
+                    )
+                    self.info(
+                        "[HolyGrail] canonical kline CSV ready: "
+                        f"{_format_kline_pair(safe_symbol, tf)} -> {resolved.name}"
+                    )
+                    return True
+            except Exception as exc:
+                last_exc = exc
+
+        if last_exc is not None:
+            self.warn_once(
+                f"holy-grail-kline-sync-failed:{safe_symbol}:{tf}",
+                f"[HolyGrail] auto-sync failed for {_format_kline_pair(safe_symbol, tf)}: {last_exc}",
+            )
+        else:
+            last_exc = RuntimeError("ensure_bitmart_data did not produce a readable CSV")
+
+        try:
+            return self._sync_contract_kline_csv(safe_symbol, tf)
+        except Exception as contract_exc:
+            combined_reason = f"{last_exc}; contract fallback: {contract_exc}"
+            self.warn_once(
+                f"holy-grail-contract-kline-sync-failed:{safe_symbol}:{tf}",
+                f"[HolyGrail] contract fallback failed for {_format_kline_pair(safe_symbol, tf)}: {contract_exc}",
+            )
+            self._remember_kline_status(pair_key, "failed", reason=combined_reason)
+            return False
+
+    def _warn_missing_kline(self, symbol: str, timeframe_min: int) -> None:
+        safe_symbol, tf = _kline_pair_key(symbol, timeframe_min)
+        first_path = str(_canonical_kline_csv_path(safe_symbol, tf, years=self.years))
+        self.warn_once(
+            f"missing-kline:{safe_symbol}:{tf}",
+            f"[HolyGrail] missing kline for {safe_symbol} {timeframe_min_to_label(tf)}. Expected near: {first_path}",
+        )
+
+    def _required_kline_pairs(self, strategies: Iterable[Dict[str, Any]]) -> List[Tuple[str, int]]:
+        seen: set[Tuple[str, int]] = set()
+        pairs: List[Tuple[str, int]] = []
+        df = self.flatten_strategies_to_dataframe(strategies)
+        if not df.empty and {"symbol", "timeframe_min"}.issubset(df.columns):
+            records = df[["symbol", "timeframe_min"]].dropna().to_dict("records")
+        else:
+            records = [{"symbol": item.get("symbol"), "timeframe_min": item.get("timeframe_min")} for item in (strategies or [])]
+        for record in records:
+            symbol = str(record.get("symbol") or "").strip()
+            timeframe_min = record.get("timeframe_min")
+            if not symbol:
+                continue
+            try:
+                pair_key = _kline_pair_key(symbol, int(timeframe_min))
+            except Exception:
+                continue
+            if pair_key in seen:
+                continue
+            seen.add(pair_key)
+            pairs.append(pair_key)
+        return sorted(pairs, key=lambda item: (item[0], item[1]))
+
+    def prime_required_klines(self) -> Dict[str, Any]:
+        strategies, api_base, token = self.fetch_factor_pool_data()
+        required_pairs = self._required_kline_pairs(strategies)
+        ready_pairs: List[Tuple[str, int]] = []
+        unresolved_pairs: List[Dict[str, Any]] = []
+        if required_pairs:
+            self.info(f"【聖杯引擎】檢查 {len(required_pairs)} 組市場/週期 K 線依賴...")
+
+        for safe_symbol, tf in required_pairs:
+            df = self._load_exact_kline_csv(safe_symbol, tf)
+            if df is None:
+                self._ensure_compatible_kline_csv(safe_symbol, tf)
+                df = self._load_exact_kline_csv(safe_symbol, tf)
+            if df is None:
+                df = self._resample_kline_csv(safe_symbol, tf)
+            if df is None or df.empty:
+                self._warn_missing_kline(safe_symbol, tf)
+                detail = dict(self._kline_sync_details.get((safe_symbol, tf), {}))
+                if "symbol" not in detail:
+                    detail = {
+                        "symbol": safe_symbol,
+                        "timeframe_min": int(tf),
+                        "timeframe": timeframe_min_to_label(tf),
+                        "status": "failed",
+                    }
+                detail.setdefault("expected_path", str(_canonical_kline_csv_path(safe_symbol, tf, years=self.years)))
+                unresolved_pairs.append(detail)
+                continue
+            ready_pairs.append((safe_symbol, tf))
+
+        detail_rows = list(self._kline_sync_details.values())
+        existing_count = sum(1 for item in detail_rows if item.get("status") == "existing")
+        synced_count = sum(1 for item in detail_rows if item.get("status") == "synced")
+        resampled_count = sum(1 for item in detail_rows if item.get("status") == "resampled")
+        failed_count = sum(1 for item in detail_rows if item.get("status") == "failed")
+        summary = {
+            "api_base": api_base,
+            "token_present": bool(token),
+            "required_pairs": [
+                {
+                    "symbol": symbol,
+                    "timeframe_min": int(tf),
+                    "timeframe": timeframe_min_to_label(tf),
+                }
+                for symbol, tf in required_pairs
+            ],
+            "ready_pairs": [
+                {
+                    "symbol": symbol,
+                    "timeframe_min": int(tf),
+                    "timeframe": timeframe_min_to_label(tf),
+                }
+                for symbol, tf in ready_pairs
+            ],
+            "unresolved_pairs": unresolved_pairs,
+            "details": detail_rows,
+            "existing_count": int(existing_count),
+            "synced_count": int(synced_count),
+            "resampled_count": int(resampled_count),
+            "failed_count": int(failed_count),
+        }
+        self._last_kline_sync_summary = summary
+        if required_pairs:
+            self.info(
+                "【聖杯引擎】K 線依賴檢查完成："
+                f"就緒 {len(ready_pairs)}/{len(required_pairs)} | "
+                f"既有 {existing_count} | 自動同步 {synced_count} | 重建 {resampled_count} | 缺失 {failed_count}"
+            )
+        return summary
+
+    def fetch_factor_pool_data(self) -> Tuple[List[Dict[str, Any]], str, str]:
+        if self._prefetched_factor_pool_data is not None:
+            return self._prefetched_factor_pool_data
+        last_exc: Optional[Exception] = None
+        delay_s = 1.0
+        for attempt in range(3):
+            try:
+                self._prefetched_factor_pool_data = super().fetch_factor_pool_data()
+                return self._prefetched_factor_pool_data
+            except Exception as exc:
+                last_exc = exc
+                self._prefetched_factor_pool_data = None
+                is_transient = self._is_transient_factor_pool_error(exc)
+                if (not is_transient) or attempt >= 2:
+                    raise
+                self.info(
+                    "[HolyGrail] factor pool fetch hit a transient network error, "
+                    f"retrying {attempt + 2}/3 in {delay_s:.1f}s: {exc}"
+                )
+                time.sleep(delay_s)
+                delay_s = min(5.0, delay_s * 2.0)
+        assert last_exc is not None
+        raise last_exc
+
+    def load_kline_data(self, symbol: str, timeframe_min: int) -> Optional[pd.DataFrame]:
+        safe_symbol, tf = _kline_pair_key(symbol, timeframe_min)
+        df = self._load_exact_kline_csv(safe_symbol, tf)
+        if df is not None and not df.empty:
+            return df
+        self._ensure_compatible_kline_csv(safe_symbol, tf)
+        df = self._load_exact_kline_csv(safe_symbol, tf)
+        if df is not None and not df.empty:
+            return df
+        df = self._resample_kline_csv(safe_symbol, tf)
+        if df is not None and not df.empty:
+            return df
+        self._warn_missing_kline(safe_symbol, tf)
+        return None
+
+    def build_portfolio(
+        self,
+        *,
+        base_stake_pct: float = 95.0,
+        top_n_candidates: int = 150,
+        max_selected: int = 20,
+        corr_threshold: float = 0.4,
+        fee_side: float = 0.0006,
+    ) -> HolyGrailResult:
+        try:
+            summary = self.prime_required_klines()
+        except Exception as exc:
+            trace = traceback.format_exc()
+            self.warn_once("holy-grail-kline-preflight-crashed", f"[HolyGrail] kline preflight crashed: {exc}")
+            return HolyGrailResult(
+                ok=False,
+                message=f"kline preflight failed: {exc}",
+                warnings=list(self._warning_messages),
+                diagnostics={"traceback": trace},
+            )
+
+        unresolved_pairs = list(summary.get("unresolved_pairs") or [])
+        if self.strict_kline_coverage and unresolved_pairs:
+            preview = ", ".join(
+                _format_kline_pair(item.get("symbol", ""), int(item.get("timeframe_min") or 0))
+                for item in unresolved_pairs[:8]
+            )
+            if len(unresolved_pairs) > 8:
+                preview += f" ... (+{len(unresolved_pairs) - 8})"
+            return HolyGrailResult(
+                ok=False,
+                message=f"missing compatible kline data for {len(unresolved_pairs)} required markets",
+                warnings=list(self._warning_messages),
+                diagnostics={"kline_sync": summary, "missing_preview": preview},
+            )
+
+        result = super().build_portfolio(
+            base_stake_pct=base_stake_pct,
+            top_n_candidates=top_n_candidates,
+            max_selected=max_selected,
+            corr_threshold=corr_threshold,
+            fee_side=fee_side,
+        )
+        diagnostics = dict(result.diagnostics or {})
+        diagnostics["kline_sync"] = summary
+        result.diagnostics = diagnostics
+        return result
+
+
+def _new_holy_grail_runtime(
+    *,
+    factor_pool_url: Optional[str] = None,
+    factor_pool_token: Optional[str] = None,
+    factor_pool_user: Optional[str] = None,
+    factor_pool_pass: Optional[str] = None,
+    strict_kline_coverage: bool = True,
+) -> HolyGrailRuntime:
+    return AutoSyncHolyGrailRuntime(
+        bt_module=bt,
+        log=log,
+        factor_pool_url=factor_pool_url,
+        factor_pool_token=factor_pool_token,
+        factor_pool_user=factor_pool_user,
+        factor_pool_pass=factor_pool_pass,
+        strict_kline_coverage=bool(strict_kline_coverage),
+    )
+
+
+def run_holy_grail_build(
+    *,
+    bt_module: Any,
+    log: Optional[Any] = None,
+    factor_pool_url: Optional[str] = None,
+    factor_pool_token: Optional[str] = None,
+    factor_pool_user: Optional[str] = None,
+    factor_pool_pass: Optional[str] = None,
+    years: int = 3,
+    base_stake_pct: float = 95.0,
+    top_n_candidates: int = 150,
+    max_selected: int = 20,
+    corr_threshold: float = 0.4,
+    fee_side: float = 0.0006,
+    strict_kline_coverage: bool = True,
+) -> HolyGrailResult:
+    runtime = AutoSyncHolyGrailRuntime(
+        bt_module=bt_module,
+        log=log,
+        factor_pool_url=factor_pool_url,
+        factor_pool_token=factor_pool_token,
+        factor_pool_user=factor_pool_user,
+        factor_pool_pass=factor_pool_pass,
+        years=years,
+        strict_kline_coverage=bool(strict_kline_coverage),
+    )
+    try:
+        return runtime.build_portfolio(
+            base_stake_pct=base_stake_pct,
+            top_n_candidates=top_n_candidates,
+            max_selected=max_selected,
+            corr_threshold=corr_threshold,
+            fee_side=fee_side,
+        )
+    except Exception as exc:
+        trace = traceback.format_exc()
+        if log is not None:
+            log(f"[HolyGrail] runtime crashed: {exc}\n{trace}")
+        return HolyGrailResult(
+            ok=False,
+            message=str(exc),
+            warnings=list(runtime._warning_messages),
+            diagnostics={"traceback": trace, "kline_sync": getattr(runtime, "_last_kline_sync_summary", {})},
+        )
 
 
 def fetch_factor_pool_data():
     try:
-        strategies, _ = _new_holy_grail_runtime().fetch_factor_pool_data()
+        strategies, _, _ = _new_holy_grail_runtime().fetch_factor_pool_data()
         return strategies
     except Exception as e:
         log(f"【聖杯引擎】拉取因子池失敗: {e}")
@@ -2737,10 +3631,37 @@ class FactorPoolUpdater:
         self.running = True
         self.sync_interval_sec = 300
         self.seen_warnings = set()
+        self._entry_gate_lock = threading.Lock()
+        self._entry_gate_state = "pending"
+        self._entry_gate_reason = "startup_pending"
+        self._bootstrap_completed = False
         try:
             self.last_good_json = (self.ui.multi_json_text.get("1.0", tk.END) or "").strip()
         except Exception:
             self.last_good_json = ""
+
+    def _set_entry_gate(self, state: str, reason: str = "") -> None:
+        next_state = str(state or "pending").strip() or "pending"
+        next_reason = str(reason or "").strip()
+        with self._entry_gate_lock:
+            changed = next_state != self._entry_gate_state or next_reason != self._entry_gate_reason
+            self._entry_gate_state = next_state
+            self._entry_gate_reason = next_reason
+        if changed:
+            detail = f" ({next_reason})" if next_reason else ""
+            log(f"【啟動同步門檻】新開倉狀態 -> {next_state}{detail}")
+
+    def allow_new_entries(self) -> Tuple[bool, str]:
+        with self._entry_gate_lock:
+            state = str(self._entry_gate_state or "pending")
+            reason = str(self._entry_gate_reason or "")
+        return state == "ready", f"{state}:{reason}" if reason else state
+
+    def attach_trader(self, trader) -> None:
+        try:
+            trader.entry_gate_controller = self
+        except Exception:
+            pass
 
     def _log_runtime_warnings(self, warnings_list):
         for warning in warnings_list or []:
@@ -2790,11 +3711,6 @@ class FactorPoolUpdater:
             except Exception:
                 continue
 
-        try:
-            account_equity = float(trader._safe_get_equity() or 0.0)
-        except Exception:
-            account_equity = 0.0
-
         items = []
         for strat_id, pos_data in list(getattr(trader, "positions", {}).items()):
             cfg = dict((pos_data or {}).get("cfg") or {})
@@ -2812,9 +3728,16 @@ class FactorPoolUpdater:
             if not symbol:
                 continue
             direction = normalize_direction(cfg.get("direction") or raw.get("positionSide"), default="long")
-            entry_price = safe_float(raw.get("entryPrice") or pos_data.get("entry_avg"), 0.0)
-            mark_price = safe_float(raw.get("markPrice"), 0.0)
-            if mark_price <= 0:
+            raw_source = dict(raw.get("raw") or {})
+            entry_price = safe_optional_float(raw.get("entryPrice"))
+            if entry_price is not None and entry_price <= 0:
+                entry_price = None
+            if entry_price is None and (pos_data or {}).get("in_pos") is not None:
+                fallback_entry_price = safe_optional_float(pos_data.get("entry_avg"))
+                if fallback_entry_price is not None and fallback_entry_price > 0:
+                    entry_price = fallback_entry_price
+            mark_price = safe_optional_float(raw.get("markPrice"))
+            if mark_price is None or mark_price <= 0:
                 try:
                     mark_price = safe_float(trader._safe_get_mark_price(symbol), 0.0)
                 except Exception:
@@ -2829,22 +3752,48 @@ class FactorPoolUpdater:
                         contract_size = 0.0
                     if contract_size > 0:
                         qty *= contract_size
-            position_usdt = safe_float(raw.get("positionValue"), 0.0)
-            if position_usdt <= 0 and qty > 0 and mark_price > 0:
+            position_usdt = safe_optional_float(raw.get("positionValue"))
+            if (position_usdt is None or position_usdt <= 0) and qty > 0 and mark_price > 0:
                 position_usdt = abs(qty) * mark_price
-            margin_usdt = safe_float(raw.get("margin"), 0.0)
-            if margin_usdt <= 0 and position_usdt > 0:
+            margin_usdt = safe_optional_float(raw.get("margin"))
+            if (margin_usdt is None or margin_usdt <= 0) and position_usdt is not None and position_usdt > 0:
                 margin_usdt = position_usdt / 5.0
-            unrealized_pnl_usdt = safe_float(raw.get("unrealizedPnl"), 0.0)
-            if abs(unrealized_pnl_usdt) <= 0 and qty > 0 and entry_price > 0 and mark_price > 0:
+            unrealized_pnl_usdt = safe_optional_float(raw.get("unrealizedPnl"))
+            if (
+                (unrealized_pnl_usdt is None or abs(unrealized_pnl_usdt) <= 0)
+                and qty > 0
+                and entry_price is not None and entry_price > 0
+                and mark_price > 0
+            ):
                 price_delta = mark_price - entry_price if direction == "long" else entry_price - mark_price
                 unrealized_pnl_usdt = price_delta * abs(qty)
-            liquidation_price = safe_float(raw.get("liquidationPrice"), 0.0)
-            margin_ratio_pct = safe_float(raw.get("marginRatePct"), 0.0)
-            if margin_ratio_pct <= 0 and account_equity > 0 and margin_usdt > 0:
-                margin_ratio_pct = (margin_usdt / account_equity) * 100.0
-            unrealized_pnl_pct = 0.0
-            if margin_usdt > 0:
+            liquidation_price = safe_optional_float(
+                raw.get("liquidationPrice")
+                if raw.get("liquidationPrice") not in (None, "")
+                else raw_source.get("liquidation_price")
+                or raw_source.get("liq_price")
+                or raw_source.get("force_close_price")
+                or raw_source.get("position_liquidation_price")
+                or raw_source.get("liquidate_price")
+            )
+            if liquidation_price is not None and liquidation_price <= 0:
+                liquidation_price = None
+            margin_ratio_pct = normalize_ratio_pct(
+                raw.get("marginRatePct")
+                if raw.get("marginRatePct") not in (None, "")
+                else raw_source.get("margin_rate")
+                or raw_source.get("margin_ratio")
+                or raw_source.get("risk_rate")
+                or raw_source.get("maint_margin_rate")
+                or raw_source.get("maintenance_margin_rate")
+                or raw_source.get("position_margin_rate")
+            )
+            if margin_ratio_pct is not None and margin_ratio_pct <= 0:
+                margin_ratio_pct = None
+            unrealized_pnl_pct = None
+            if unrealized_pnl_usdt is None:
+                unrealized_pnl_usdt = 0.0
+            if margin_usdt is not None and margin_usdt > 0:
                 unrealized_pnl_pct = (unrealized_pnl_usdt / margin_usdt) * 100.0
 
             items.append(
@@ -2865,6 +3814,7 @@ class FactorPoolUpdater:
                     "margin_ratio_pct": margin_ratio_pct,
                     "unrealized_pnl_usdt": unrealized_pnl_usdt,
                     "unrealized_pnl_pct": unrealized_pnl_pct,
+                    "unrealized_pnl_roe_pct": unrealized_pnl_pct,
                 }
             )
 
@@ -2948,7 +3898,7 @@ class FactorPoolUpdater:
 
     def _sync_runtime_snapshot(self, scope: str, result, runtime_kwargs: dict):
         payload = self._runtime_sync_payload(scope, result, runtime_kwargs)
-        self._post_runtime_snapshot(scope, payload, runtime_kwargs)
+        return self._post_runtime_snapshot(scope, payload, runtime_kwargs)
 
     def _cached_runtime_snapshot_is_publishable(self, items) -> bool:
         for raw_item in list(items or []):
@@ -3036,8 +3986,10 @@ class FactorPoolUpdater:
     def start(self):
         if bt is None:
             log(f"【致命錯誤】聖杯引擎停用，無法匯入 backtest runtime: {HOLY_GRAIL_IMPORT_ERROR}")
+            self._set_entry_gate("failed", "holy_grail_import_error")
             self.running = False
             return
+        self._set_entry_gate("syncing", "bootstrap_pending")
         t = threading.Thread(target=self._loop, daemon=True)
         t.start()
         log("【系統服務】全自動聖杯建構引擎已啟動，每 5 分鐘自動尋找並熱更新對沖組合。")
@@ -3067,6 +4019,8 @@ class FactorPoolUpdater:
     def _build_holy_grail(self):
         if bt is None:
             log(f"【致命錯誤】聖杯引擎停用，無法匯入 backtest runtime: {HOLY_GRAIL_IMPORT_ERROR}")
+            if not self._bootstrap_completed:
+                self._set_entry_gate("failed", "holy_grail_import_error")
             self.running = False
             return
 
@@ -3076,11 +4030,15 @@ class FactorPoolUpdater:
         except Exception:
             base_stake = 95.0
         runtime_kwargs = self._factor_pool_runtime_kwargs()
+        if not self._bootstrap_completed:
+            self._set_entry_gate("syncing", "bootstrap_building")
         if not self._has_runtime_sync_auth(runtime_kwargs):
             warning = "【聖杯引擎】未設定因子池帳密或同步憑證，背景熱更新暫停；沿用目前策略組合。"
             if warning not in self.seen_warnings:
                 self.seen_warnings.add(warning)
                 log(warning)
+            if not self._bootstrap_completed:
+                self._set_entry_gate("failed", "missing_runtime_sync_auth")
             return
         if not bool(getattr(bt, "NUMBA_OK", True)):
             warning = "【聖杯引擎】目前 Python 環境未啟用 Numba，已改用純 Python 回測路徑；速度較慢，但仍會持續同步。"
@@ -3106,6 +4064,8 @@ class FactorPoolUpdater:
                 log("【聖杯引擎】保留上一版有效的對沖組合，不進行熱更新。")
                 self._sync_cached_runtime_snapshot("personal", runtime_kwargs, reason="failure")
                 self._sync_cached_runtime_snapshot("global", runtime_kwargs, reason="failure")
+            if not self._bootstrap_completed:
+                self._set_entry_gate("failed", "bootstrap_failed")
             self._log_runtime_warnings(result.warnings)
             return
 
@@ -3115,12 +4075,49 @@ class FactorPoolUpdater:
             if self.last_good_json:
                 self._sync_cached_runtime_snapshot("personal", runtime_kwargs, reason="empty_result")
                 self._sync_cached_runtime_snapshot("global", runtime_kwargs, reason="empty_result")
+            if not self._bootstrap_completed:
+                self._set_entry_gate("failed", "bootstrap_empty_result")
             return
 
-        self.last_good_json = new_json_str
-        self.ui.update_multi_json(new_json_str)
-        self._sync_runtime_snapshot("personal", result, runtime_kwargs)
-        self._sync_runtime_snapshot("global", result, runtime_kwargs)
+        previous_good_json = str(self.last_good_json or "").strip()
+        was_bootstrap_completed = bool(self._bootstrap_completed)
+        self._set_entry_gate("syncing", "hot_reload_committing")
+
+        hot_reload_ok = bool(self.ui.update_multi_json(new_json_str, wait=True))
+        personal_sync_ok = bool(self._sync_runtime_snapshot("personal", result, runtime_kwargs))
+        global_sync_ok = bool(self._sync_runtime_snapshot("global", result, runtime_kwargs))
+        commit_ok = bool(hot_reload_ok and global_sync_ok)
+
+        if commit_ok:
+            self.last_good_json = new_json_str
+            self._bootstrap_completed = True
+            self._set_entry_gate("ready", "global_runtime_synced")
+        else:
+            if hot_reload_ok and previous_good_json and previous_good_json != new_json_str:
+                rollback_ok = bool(self.ui.update_multi_json(previous_good_json, wait=True))
+                if rollback_ok:
+                    log("【聖杯引擎】已回滾至上一版有效的本機策略組合。")
+            if previous_good_json:
+                self._sync_cached_runtime_snapshot("personal", runtime_kwargs, reason="rollback")
+                self._sync_cached_runtime_snapshot("global", runtime_kwargs, reason="rollback")
+
+            if was_bootstrap_completed:
+                self._set_entry_gate("ready", "rollback_previous_runtime")
+            else:
+                failed_reasons = []
+                if not hot_reload_ok:
+                    failed_reasons.append("hot_reload_failed")
+                if not global_sync_ok:
+                    failed_reasons.append("global_sync_failed")
+                self._set_entry_gate("failed", ",".join(failed_reasons) or "bootstrap_commit_failed")
+            log(
+                "【聖杯引擎】本輪發布未完成，"
+                f"hot_reload={'ok' if hot_reload_ok else 'fail'} / "
+                f"personal_sync={'ok' if personal_sync_ok else 'fail'} / "
+                f"global_sync={'ok' if global_sync_ok else 'fail'}。"
+            )
+            self._log_runtime_warnings(result.warnings)
+            return
 
         metrics = result.portfolio_metrics or {}
         log(
@@ -3160,8 +4157,11 @@ class AnimatedUI(tk.Tk):
         self.factor_updater = FactorPoolUpdater(self)
         self.factor_updater.start()
 
-    def update_multi_json(self, new_json_str):
+    def update_multi_json(self, new_json_str, wait: bool = False):
         """核心級別的動態 JSON 更新與實盤熱對接"""
+        done_event = threading.Event()
+        result_holder = {"ok": False}
+
         def _do_update():
             try:
                 # 覆寫唯讀面板
@@ -3232,10 +4232,21 @@ class AnimatedUI(tk.Tk):
                             
                     except Exception as hot_e:
                         log(f"【實盤熱對接異常】發生崩潰 (強制隔離保護): {hot_e}\n{traceback.format_exc()}")
+                        result_holder["ok"] = False
+                        done_event.set()
+                        return
+                result_holder["ok"] = True
             except Exception as e:
                 log(f"更新動態 JSON 面板時發生 UI 錯誤: {e}")
-                
+                result_holder["ok"] = False
+            finally:
+                done_event.set()
+
         self.after(0, _do_update)
+        if wait:
+            done_event.wait(timeout=180.0)
+            return bool(result_holder.get("ok"))
+        return True
 
     def _make_style(self):
         style = ttk.Style(self)
@@ -3863,6 +4874,10 @@ class AnimatedUI(tk.Tk):
                 log(f"帳戶餘額讀取失敗: {e}")
             trader = Trader(c, cfg)
             self.active_trader = trader
+            try:
+                self.factor_updater.attach_trader(trader)
+            except Exception:
+                pass
             
             # [專家級修正] 適應多幣種規格字典輸出，並修正 qty 為 default_qty
             for sym, info in trader.symbol_info.items():

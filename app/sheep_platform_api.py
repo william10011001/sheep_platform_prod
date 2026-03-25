@@ -1,5 +1,6 @@
 import asyncio
 import json
+import math
 import os
 import time
 import random
@@ -593,6 +594,18 @@ def _as_float(value: Any, default: float = 0.0) -> float:
         return float(default)
 
 
+def _as_optional_float(value: Any) -> Optional[float]:
+    if value in (None, ""):
+        return None
+    try:
+        number = float(value)
+    except Exception:
+        return None
+    if math.isnan(number) or math.isinf(number):
+        return None
+    return float(number)
+
+
 def _as_int(value: Any, default: int = 0) -> int:
     try:
         return int(value)
@@ -611,6 +624,13 @@ def _prefer_runtime_metric(value: Any, fallback: Any) -> float:
     if not _is_effectively_missing_metric(value):
         return _as_float(value, 0.0)
     return _as_float(fallback, 0.0)
+
+
+def _first_present_value(*values: Any) -> Any:
+    for value in values:
+        if value not in (None, ""):
+            return value
+    return None
 
 
 def _runtime_display_key(value: Any, *, strategy_id: Any = 0) -> str:
@@ -735,15 +755,39 @@ def _enrich_runtime_position_items(
         item["interval"] = str(item.get("interval") or match.get("timeframe_min") or "")
         item["display_interval"] = str(item.get("display_interval") or item.get("interval") or match.get("timeframe_min") or "")
         item["score"] = _as_float(item.get("score") or match.get("score") or metrics.get("sharpe") or 0.0)
-        item["entry_price"] = _as_float(item.get("entry_price") or item.get("entryPrice") or 0.0)
-        item["mark_price"] = _as_float(item.get("mark_price") or item.get("markPrice") or 0.0)
-        item["liquidation_price"] = _as_float(item.get("liquidation_price") or item.get("liq_price") or item.get("liquidationPrice") or item.get("liqPrice") or 0.0)
+        item["entry_price"] = _as_optional_float(_first_present_value(item.get("entry_price"), item.get("entryPrice")))
+        if item["entry_price"] is not None and item["entry_price"] <= 0:
+            item["entry_price"] = None
+        item["mark_price"] = _as_optional_float(_first_present_value(item.get("mark_price"), item.get("markPrice")))
+        item["liquidation_price"] = _as_optional_float(
+            _first_present_value(
+                item.get("liquidation_price"),
+                item.get("liq_price"),
+                item.get("liquidationPrice"),
+                item.get("liqPrice"),
+            )
+        )
+        if item["liquidation_price"] is not None and item["liquidation_price"] <= 0:
+            item["liquidation_price"] = None
         item["position_qty"] = _as_float(item.get("position_qty") or item.get("qty") or item.get("positionAmt") or 0.0)
         item["position_usdt"] = _as_float(item.get("position_usdt") or item.get("position_value") or item.get("positionValue") or 0.0)
         item["margin_usdt"] = _as_float(item.get("margin_usdt") or item.get("margin") or item.get("marginValue") or 0.0)
-        item["margin_ratio_pct"] = _as_float(item.get("margin_ratio_pct") or item.get("marginRatePct") or item.get("margin_rate_pct") or 0.0)
+        item["margin_ratio_pct"] = _as_optional_float(
+            _first_present_value(item.get("margin_ratio_pct"), item.get("marginRatePct"), item.get("margin_rate_pct"))
+        )
+        if item["margin_ratio_pct"] is not None and item["margin_ratio_pct"] <= 0:
+            item["margin_ratio_pct"] = None
         item["unrealized_pnl_usdt"] = _as_float(item.get("unrealized_pnl_usdt") or item.get("unrealizedPnl") or item.get("unrealized_pnl") or 0.0)
-        item["unrealized_pnl_pct"] = _as_float(item.get("unrealized_pnl_pct") or item.get("unrealizedPnlPct") or item.get("estimated_pnl_pct") or 0.0)
+        item["unrealized_pnl_roe_pct"] = _as_optional_float(
+            _first_present_value(
+                item.get("unrealized_pnl_roe_pct"),
+                item.get("unrealizedPnlRoePct"),
+                item.get("unrealized_pnl_pct"),
+                item.get("unrealizedPnlPct"),
+                item.get("estimated_pnl_pct"),
+            )
+        )
+        item["unrealized_pnl_pct"] = item["unrealized_pnl_roe_pct"]
         enriched.append(item)
     enriched.sort(
         key=lambda row: (

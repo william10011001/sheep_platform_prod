@@ -4,6 +4,9 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pandas as pd
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 APP_DIR = ROOT / "app"
@@ -254,8 +257,8 @@ def test_factor_pool_updater_refreshes_cached_runtime_snapshot_before_rebuild(mo
         factor_pool_user_var = _DummyVar("")
         factor_pool_pass_var = _DummyVar("")
 
-        def update_multi_json(self, _payload):
-            return None
+        def update_multi_json(self, _payload, wait=False):
+            return True
 
     updater = module.FactorPoolUpdater(_DummyUI())
     updater._build_holy_grail()
@@ -406,6 +409,197 @@ def test_live_trader_accepts_wrapped_multi_strategy_json():
     assert rows[0]["strategy_key"] == "tema-long"
     assert rows[1]["interval"] == "1h"
     assert active_pairs == [("BTCUSDT", "1h"), ("ETHUSDT", "30m")]
+
+
+def test_bitmart_client_place_order_accepts_scalar_order_id_payload():
+    module = _load_live_trader_module()
+
+    client = module.BitmartClient(
+        api_key="k",
+        secret="s",
+        memo="m",
+        trade_base="https://example.com",
+        quote_base="https://example.com",
+        dry_run=False,
+    )
+
+    client.get_contract_size = lambda _symbol: 1.0
+    client._request = lambda method, path, params=None, signed=True: {"code": 1000, "data": "abc123"}
+
+    result = client.place_order("INJUSDT", "BUY", "LONG", "MARKET", qty=9.3)
+
+    assert result["code"] == "0"
+    assert result["data"]["orderId"] == "abc123"
+
+
+def test_trader_open_market_handles_scalar_order_id_response(monkeypatch):
+    module = _load_live_trader_module()
+    logs = []
+    monkeypatch.setattr(module, "log", logs.append)
+
+    trader = module.Trader.__new__(module.Trader)
+    trader.strategies_cfg = {
+        "TEMA_RSI_11951": {
+            "symbol": "INJUSDT",
+            "stake_pct": 13.5331,
+        }
+    }
+    trader.max_retries = 1
+    trader.max_retry_total_sec = 0.1
+    trader.fee_bps = 2.0
+    trader.slip_bps = 0.0
+    trader._calc_qty_from_stake = lambda _sid: 9.3
+    trader._safe_get_mark_price = lambda _symbol: 3.05
+    trader._apply_cost_side = lambda _tag, px, _fee_bps, _slip_bps: px
+
+    class _DummyClient:
+        dry_run = True
+
+        @staticmethod
+        def _extract_order_id(payload):
+            return "scalar-oid" if payload else ""
+
+        @staticmethod
+        def _preview_payload(payload, limit=320):
+            return repr(payload)[:limit]
+
+        def cancel_all_open_orders(self, _symbol):
+            return {}
+
+        def place_order(self, _symbol, _side_bm, _pos_side, _otype, qty=None):
+            assert qty == 9.3
+            return {"code": "0", "data": "scalar-oid"}
+
+    trader.c = _DummyClient()
+
+    position_id, px_ref, entry_avg, filled_qty, exec_delay = module.Trader.open_market(
+        trader,
+        "LONG",
+        "TEMA_RSI_11951",
+    )
+
+    assert position_id == "INJUSDT:LONG"
+    assert px_ref == 3.05
+    assert entry_avg == 3.05
+    assert filled_qty == 9.3
+    assert exec_delay >= 0.0
+    assert any("order_id=scalar-oid" in msg for msg in logs)
+    assert not any("'str' object has no attribute 'get'" in msg for msg in logs)
+
+
+def test_trader_startup_gate_blocks_new_entry_before_consuming_signal(monkeypatch):
+    module = _load_live_trader_module()
+    logs = []
+    monkeypatch.setattr(module, "log", logs.append)
+
+    class _Gate:
+        @staticmethod
+        def allow_new_entries():
+            return False, "syncing:bootstrap_pending"
+
+    trader = module.Trader.__new__(module.Trader)
+    trader.entry_gate_controller = _Gate()
+    trader._last_entry_gate_log_ts = 0.0
+    trader._last_entry_gate_log_key = ""
+    trader.arm_tp_sl_sid = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not arm tp/sl while gate is closed"))
+    trader.open_market = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("should not attempt open while gate is closed"))
+
+    pos_data = {"cfg": {"params": {}}, "last_attempted_bar_ts": None}
+    active_signals = {"S1": (True, False, 123456789)}
+    df = pd.DataFrame({"time": [1234567890000]})
+
+    module.Trader._maybe_open_signal_entry(
+        trader,
+        "S1",
+        pos_data,
+        "INJUSDT",
+        "1h",
+        df,
+        0,
+        active_signals,
+    )
+
+    assert pos_data.get("last_attempted_bar_ts") is None
+    assert any("bootstrap_pending" in msg for msg in logs)
+
+
+def test_runtime_position_items_preserve_real_exchange_fields_and_null_missing_values(monkeypatch):
+    module = _load_live_trader_module()
+
+    class _DummyText:
+        def get(self, *_args):
+            return "[]"
+
+    class _DummyUI:
+        multi_json_text = _DummyText()
+
+    updater = module.FactorPoolUpdater(_DummyUI())
+
+    class _DummyClient:
+        @staticmethod
+        def get_contract_size(_symbol):
+            return 1.0
+
+        @staticmethod
+        def get_positions():
+            return {
+                "data": [
+                    {
+                        "positionId": "INJUSDT:LONG",
+                        "symbol": "INJUSDT",
+                        "positionSide": "LONG",
+                        "entryPrice": "3.05",
+                        "markPrice": "3.12",
+                        "positionAmt": "9.3",
+                        "positionValue": "29.02",
+                        "margin": "5.80",
+                        "unrealizedPnl": "0.66",
+                        "marginRatePct": "",
+                        "liquidationPrice": "",
+                        "raw": {},
+                    }
+                ]
+            }
+
+    class _DummyTrader:
+        def __init__(self):
+            self.c = _DummyClient()
+            self.positions = {
+                "STRAT_1": {
+                    "cfg": {
+                        "strategy_id": 101,
+                        "family": "TEMA_RSI",
+                        "symbol": "INJUSDT",
+                        "direction": "long",
+                        "interval": "4h",
+                        "stake_pct": 13.5,
+                    },
+                    "position_id": "INJUSDT:LONG",
+                    "in_pos": "LONG",
+                    "entry_avg": 9.99,
+                    "entry_qty": 9.3,
+                }
+            }
+
+        @staticmethod
+        def _safe_get_mark_price(_symbol):
+            return 3.12
+
+    updater.ui.active_trader = _DummyTrader()
+
+    items = updater._collect_runtime_position_items()
+
+    assert len(items) == 1
+    item = items[0]
+    assert item["entry_price"] == pytest.approx(3.05)
+    assert item["mark_price"] == pytest.approx(3.12)
+    assert item["position_usdt"] == pytest.approx(29.02)
+    assert item["margin_usdt"] == pytest.approx(5.80)
+    assert item["liquidation_price"] is None
+    assert item["margin_ratio_pct"] is None
+    assert item["unrealized_pnl_usdt"] == pytest.approx(0.66)
+    assert item["unrealized_pnl_roe_pct"] == pytest.approx((0.66 / 5.80) * 100.0)
+    assert item["unrealized_pnl_pct"] == pytest.approx((0.66 / 5.80) * 100.0)
 
 
 def test_leaderboard_stats_include_time_and_points_fallback(monkeypatch, tmp_path):

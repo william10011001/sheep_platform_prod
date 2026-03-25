@@ -142,9 +142,265 @@ def test_kline_loader_supports_exact_and_resample(monkeypatch, tmp_path):
     assert float(resampled.iloc[0]["open"]) == 200
     assert float(resampled.iloc[0]["close"]) == 203.5
 
-    missing = runtime.load_kline_data("SOL_USDT", 240)
+    missing = runtime.load_kline_data("UNITMISS_USDT", 240)
     assert missing is None
     assert any("missing kline" in msg.lower() for msg in runtime._warning_messages)
+
+
+def test_live_trader_runtime_auto_syncs_missing_canonical_kline_csv(monkeypatch, tmp_path):
+    monkeypatch.setenv("SHEEP_DATA_DIR", str(tmp_path))
+    live_mod = _load_live_trader_module()
+    logs = []
+    live_mod.log = logs.append
+    sync_calls = []
+
+    class _BT:
+        def ensure_bitmart_data(self, symbol, main_step_min, years=3, auto_sync=True, force_full=False, skip_1m=False, **_kwargs):
+            sync_calls.append(
+                {
+                    "symbol": symbol,
+                    "timeframe_min": int(main_step_min),
+                    "years": int(years),
+                    "auto_sync": bool(auto_sync),
+                    "force_full": bool(force_full),
+                    "skip_1m": bool(skip_1m),
+                }
+            )
+            csv_path = tmp_path / "AUTOSYNC_SOL_USDT_4h_3y.csv"
+            _write_ohlcv(
+                csv_path,
+                [
+                    {"ts": "2026-01-01T00:00:00+00:00", "open": 100, "high": 101, "low": 99, "close": 100.5, "volume": 10},
+                    {"ts": "2026-01-01T04:00:00+00:00", "open": 100.5, "high": 103, "low": 100, "close": 102.5, "volume": 11},
+                ],
+            )
+            return str(csv_path), ""
+
+        def load_and_validate_csv(self, path):
+            df = pd.read_csv(path)
+            df["ts"] = pd.to_datetime(df["ts"], utc=True, errors="coerce")
+            return df.dropna(subset=["ts"]).reset_index(drop=True)
+
+    live_mod.bt = _BT()
+
+    runtime = live_mod._new_holy_grail_runtime()
+    df = runtime.load_kline_data("AUTOSYNC_SOL_USDT", 240)
+
+    assert df is not None
+    assert len(df) == 2
+    assert sync_calls == [
+        {
+            "symbol": "AUTOSYNC_SOL_USDT",
+            "timeframe_min": 240,
+            "years": 3,
+            "auto_sync": True,
+            "force_full": False,
+            "skip_1m": True,
+        }
+    ]
+    assert (tmp_path / "AUTOSYNC_SOL_USDT_4h_3y.csv").exists()
+    assert any("auto-syncing canonical kline csv" in msg.lower() for msg in logs)
+
+
+def test_live_trader_runtime_repairs_legacy_kline_csv_by_force_full_sync(monkeypatch, tmp_path):
+    monkeypatch.setenv("SHEEP_DATA_DIR", str(tmp_path))
+    legacy_path = tmp_path / "AUTOSYNC_NEAR_USDT_4h_3y.csv"
+    pd.DataFrame(
+        [
+            {
+                "time": 1704067200000,
+                "open_price": 10.0,
+                "high_price": 10.5,
+                "low_price": 9.8,
+                "close_price": 10.2,
+                "volume": 123.0,
+            }
+        ]
+    ).to_csv(legacy_path, index=False)
+
+    live_mod = _load_live_trader_module()
+    force_full_calls = []
+
+    class _BT:
+        def ensure_bitmart_data(self, symbol, main_step_min, years=3, auto_sync=True, force_full=False, skip_1m=False, **_kwargs):
+            force_full_calls.append(bool(force_full))
+            if force_full:
+                _write_ohlcv(
+                    legacy_path,
+                    [
+                        {"ts": "2026-01-01T00:00:00+00:00", "open": 10, "high": 10.2, "low": 9.9, "close": 10.1, "volume": 100},
+                        {"ts": "2026-01-01T04:00:00+00:00", "open": 10.1, "high": 10.4, "low": 10.0, "close": 10.3, "volume": 90},
+                    ],
+                )
+            return str(legacy_path), ""
+
+        def load_and_validate_csv(self, path):
+            df = pd.read_csv(path)
+            need_cols = {"ts", "open", "high", "low", "close", "volume"}
+            if not need_cols.issubset(df.columns):
+                raise ValueError("legacy csv format")
+            df["ts"] = pd.to_datetime(df["ts"], utc=True, errors="coerce")
+            return df.dropna(subset=["ts"]).reset_index(drop=True)
+
+    live_mod.bt = _BT()
+    live_mod.log = lambda _msg: None
+
+    runtime = live_mod._new_holy_grail_runtime()
+    df = runtime.load_kline_data("AUTOSYNC_NEAR_USDT", 240)
+
+    assert df is not None
+    assert len(df) == 2
+    assert force_full_calls == [False, True]
+
+
+def test_live_trader_holy_grail_build_blocks_partial_publish_when_required_kline_unresolved(monkeypatch, tmp_path):
+    monkeypatch.setenv("SHEEP_DATA_DIR", str(tmp_path))
+    live_mod = _load_live_trader_module()
+    backtest_calls = {"count": 0}
+
+    class _BT:
+        def ensure_bitmart_data(self, *args, **kwargs):
+            raise RuntimeError("bitmart unavailable")
+
+        def run_backtest(self, **kwargs):
+            backtest_calls["count"] += 1
+            return {}
+
+    strategies = [
+        {
+            "strategy_id": 1,
+            "symbol": "UNITMISSING_XAUT_USDT",
+            "timeframe_min": 60,
+            "pool_name": "xaut-pool",
+            "params": {
+                "family": "TEMA_RSI",
+                "tp": 0.01,
+                "sl": 0.02,
+                "max_hold": 40,
+                "family_params": {"fast_len": 9, "slow_len": 30},
+            },
+            "metrics": {"sharpe": 1.8},
+        }
+    ]
+
+    monkeypatch.setattr(
+        live_mod.AutoSyncHolyGrailRuntime,
+        "fetch_factor_pool_data",
+        lambda self: (strategies, "https://example.com/api", "runtime-token"),
+    )
+    monkeypatch.setattr(
+        live_mod.requests,
+        "get",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("network disabled for test")),
+    )
+
+    result = live_mod.run_holy_grail_build(
+        bt_module=_BT(),
+        log=lambda _msg: None,
+        factor_pool_url="https://example.com",
+        factor_pool_token="runtime-token",
+    )
+
+    assert result.ok is False
+    assert "missing compatible kline data" in result.message
+    assert backtest_calls["count"] == 0
+    assert result.diagnostics["kline_sync"]["unresolved_pairs"][0]["symbol"] == "UNITMISSING_XAUT_USDT"
+    assert result.diagnostics["kline_sync"]["failed_count"] >= 1
+
+
+def test_live_trader_runtime_falls_back_to_contract_klines_for_xag(monkeypatch, tmp_path):
+    monkeypatch.setenv("SHEEP_DATA_DIR", str(tmp_path))
+    live_mod = _load_live_trader_module()
+    logs = []
+    live_mod.log = logs.append
+    spot_calls = {"count": 0}
+    contract_only_symbol = "XAGTEST_USDT"
+
+    class _BT:
+        def ensure_bitmart_data(self, *args, **kwargs):
+            spot_calls["count"] += 1
+            raise RuntimeError("spot symbol invalid")
+
+        def load_and_validate_csv(self, path):
+            df = pd.read_csv(path)
+            df["ts"] = pd.to_datetime(df["ts"], utc=True, errors="coerce")
+            return df.dropna(subset=["ts"]).reset_index(drop=True)
+
+    class _Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "code": 1000,
+                "message": "Ok",
+                "data": [
+                    {
+                        "timestamp": 1704067200,
+                        "open_price": "23.0",
+                        "high_price": "23.5",
+                        "low_price": "22.8",
+                        "close_price": "23.2",
+                        "volume": "111.0",
+                    },
+                    {
+                        "timestamp": 1704070800,
+                        "open_price": "23.2",
+                        "high_price": "23.6",
+                        "low_price": "23.1",
+                        "close_price": "23.4",
+                        "volume": "98.0",
+                    },
+                ],
+            }
+
+    def _fake_get(url, params=None, headers=None, timeout=None):
+        assert "contract/public/kline" in url
+        assert params["symbol"] == "XAGTESTUSDT"
+        return _Resp()
+
+    monkeypatch.setattr(live_mod.requests, "get", _fake_get)
+    monkeypatch.setattr(live_mod.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(live_mod, "CONTRACT_ONLY_KLINE_SYMBOLS", {contract_only_symbol})
+    live_mod.bt = _BT()
+
+    runtime = live_mod._new_holy_grail_runtime()
+    df = runtime.load_kline_data(contract_only_symbol, 60)
+
+    assert df is not None
+    assert len(df) == 2
+    assert spot_calls["count"] == 0
+    assert (tmp_path / "XAGTEST_USDT_1h_3y.csv").exists()
+    assert any("contract fallback" in msg.lower() for msg in logs)
+
+
+def test_live_trader_runtime_retries_transient_factor_pool_fetch(monkeypatch):
+    live_mod = _load_live_trader_module()
+    logs = []
+    live_mod.log = logs.append
+    attempts = {"count": 0}
+
+    def _fake_super_fetch(self):
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            raise RuntimeError(
+                "(\"Connection broken: ConnectionResetError(10054, '遠端主機已強制關閉一個現存的連線。')\")"
+            )
+        return ([{"strategy_id": 1, "symbol": "BTC_USDT", "timeframe_min": 60}], "https://example.com/api", "tok")
+
+    monkeypatch.setattr(live_mod.HolyGrailRuntime, "fetch_factor_pool_data", _fake_super_fetch)
+    monkeypatch.setattr(live_mod.time, "sleep", lambda _s: None)
+
+    runtime = live_mod._new_holy_grail_runtime()
+    strategies, api_base, token = runtime.fetch_factor_pool_data()
+
+    assert attempts["count"] == 3
+    assert api_base == "https://example.com/api"
+    assert token == "tok"
+    assert strategies[0]["symbol"] == "BTC_USDT"
+    assert any("transient network error" in msg.lower() for msg in logs)
 
 
 def test_fetch_factor_pool_data_supports_token_and_pagination(monkeypatch):
@@ -458,17 +714,7 @@ def _equity_from_returns(returns):
 
 
 def test_shared_runtime_builds_portfolio(monkeypatch, tmp_path):
-    monkeypatch.setenv("SHEEP_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("SHEEP_RUNTIME_DIR", str(tmp_path / "runtime"))
-
-    _write_ohlcv(
-        tmp_path / "data" / "UNITRUN_USDT_1h_3y.csv",
-        [
-            {"ts": "2026-01-01T00:00:00+00:00", "open": 100, "high": 101, "low": 99, "close": 100.5, "volume": 10},
-            {"ts": "2026-01-01T01:00:00+00:00", "open": 100.5, "high": 102, "low": 100, "close": 101.5, "volume": 12},
-            {"ts": "2026-01-01T02:00:00+00:00", "open": 101.5, "high": 103, "low": 101, "close": 102.5, "volume": 11},
-        ],
-    )
 
     def _fake_fetch(self):
         return (
@@ -482,14 +728,27 @@ def test_shared_runtime_builds_portfolio(monkeypatch, tmp_path):
                         "checkpoint_candidates": [
                             {
                                 "score": 9.5,
+                                "direction": "long",
                                 "params": {
                                     "family": "TEMA_Cross",
                                     "tp": 0.01,
                                     "sl": 0.02,
                                     "max_hold": 10,
-                                    "family_params": {"fast_len": 10, "slow_len": 30},
+                                    "family_params": {"curve_key": "LONG_A", "fast_len": 10, "slow_len": 30, "sharpe": 1.0, "cagr_pct": 12.0},
                                 },
-                                "metrics": {"sharpe": 1.5},
+                                "metrics": {"sharpe": 1.0},
+                            },
+                            {
+                                "score": 9.4,
+                                "direction": "short",
+                                "params": {
+                                    "family": "TEMA_Cross",
+                                    "tp": 0.01,
+                                    "sl": 0.02,
+                                    "max_hold": 10,
+                                    "family_params": {"curve_key": "SHORT_A", "fast_len": 12, "slow_len": 34, "sharpe": 1.0, "cagr_pct": 11.0},
+                                },
+                                "metrics": {"sharpe": 1.0},
                             }
                         ]
                     },
@@ -511,16 +770,41 @@ def test_shared_runtime_builds_portfolio(monkeypatch, tmp_path):
             "source_settings_updated_at": "2026-03-24T00:00:00+00:00",
         },
     )
+    monkeypatch.setattr(
+        HolyGrailRuntime,
+        "load_kline_data",
+        lambda self, symbol, timeframe_min: pd.DataFrame(
+            {
+                "ts": pd.date_range("2026-01-01", periods=6, freq="D", tz="UTC"),
+                "open": [100, 101, 102, 103, 104, 105],
+                "high": [101, 102, 103, 104, 105, 106],
+                "low": [99, 100, 101, 102, 103, 104],
+                "close": [100.5, 101.5, 102.5, 103.5, 104.5, 105.5],
+                "volume": [10, 11, 12, 13, 14, 15],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        HolyGrailRuntime,
+        "build_daily_equity_curve",
+        staticmethod(
+            lambda trades: {
+                "LONG_A": _equity_from_returns([0.02, 0.0, -0.02, 0.0, 0.02, 0.0]),
+                "SHORT_A": _equity_from_returns([0.0, 0.02, 0.0, -0.02, 0.0, 0.02]),
+            }[trades[0]["curve_key"]]
+        ),
+    )
 
-    result = run_holy_grail_build(bt_module=_DummyBT(), log=lambda _msg: None, base_stake_pct=50.0)
+    result = run_holy_grail_build(
+        bt_module=_SyntheticBT({"LONG_A": [0.01, 0.02, 0.0], "SHORT_A": [0.0, 0.015, 0.01]}),
+        log=lambda _msg: None,
+        base_stake_pct=50.0,
+    )
     assert result.ok
-    assert result.selected_count == 1
-    assert result.multi_payload[0]["strategy_id"] == 1
-    assert result.multi_payload[0]["interval"] == "1h"
-    assert result.multi_payload[0]["stake_pct"] == 50.0
-    assert result.multi_payload[0]["direction"] == "long"
-    assert result.multi_payload[0]["total_return_pct"] == 5.0
-    assert result.multi_payload[0]["max_drawdown_pct"] == 3.0
+    assert result.selected_count == 2
+    assert {item["direction"] for item in result.multi_payload} == {"long", "short"}
+    assert sum(float(item["stake_pct"]) for item in result.multi_payload) == pytest.approx(50.0)
+    assert all(item["interval"] == "1h" for item in result.multi_payload)
     assert result.cost_basis["fee_pct"] == pytest.approx(0.06)
     assert result.cost_basis["slippage_pct"] == pytest.approx(0.02)
     assert Path(result.report_paths["summary_report"]).exists()
@@ -563,12 +847,13 @@ def test_duplicate_trade_signatures_are_deduplicated(monkeypatch, tmp_path):
                             },
                             {
                                 "score": 9.2,
+                                "direction": "short",
                                 "params": {
                                     "family": "TEMA_Cross",
                                     "tp": 0.01,
                                     "sl": 0.02,
                                     "max_hold": 10,
-                                    "family_params": {"curve_key": "unique", "sharpe": 1.5, "cagr_pct": 11.0},
+                                    "family_params": {"curve_key": "unique_short", "sharpe": 1.5, "cagr_pct": 11.0},
                                 },
                                 "metrics": {"sharpe": 1.5},
                             },
@@ -596,7 +881,7 @@ def test_duplicate_trade_signatures_are_deduplicated(monkeypatch, tmp_path):
         curve_key = trades[0]["curve_key"]
         mapping = {
             "dup": _equity_from_returns([0.01, 0.02, 0.02, 0.015, 0.018, 0.017]),
-            "unique": _equity_from_returns([0.01, -0.02, 0.01, -0.02, 0.01, -0.02]),
+            "unique_short": _equity_from_returns([0.0, 0.02, 0.0, -0.02, 0.0, 0.02]),
         }
         return mapping[curve_key]
 
@@ -615,7 +900,10 @@ def test_duplicate_trade_signatures_are_deduplicated(monkeypatch, tmp_path):
     monkeypatch.setattr(HolyGrailRuntime, "load_kline_data", _fake_kline)
     monkeypatch.setattr(HolyGrailRuntime, "build_daily_equity_curve", staticmethod(_fake_equity))
 
-    result = run_holy_grail_build(bt_module=_SyntheticBT({"dup": [0.01, 0.02, 0.02], "unique": [0.0, 0.01, 0.005]}), log=lambda _msg: None)
+    result = run_holy_grail_build(
+        bt_module=_SyntheticBT({"dup": [0.01, 0.02, 0.02], "unique_short": [0.0, 0.01, 0.005]}),
+        log=lambda _msg: None,
+    )
     assert result.ok
     assert result.selected_count == 2
     assert len([item for item in result.selected_portfolio if item.get("duplicate_rank") == 1]) == 2
@@ -645,6 +933,7 @@ def test_pairwise_hard_threshold_blocks_highly_correlated_pair(monkeypatch, tmp_
                         "checkpoint_candidates": [
                             {
                                 "score": 10.0,
+                                "direction": "long",
                                 "params": {
                                     "family": "Alpha",
                                     "tp": 0.01,
@@ -656,6 +945,7 @@ def test_pairwise_hard_threshold_blocks_highly_correlated_pair(monkeypatch, tmp_
                             },
                             {
                                 "score": 9.8,
+                                "direction": "short",
                                 "params": {
                                     "family": "Beta",
                                     "tp": 0.01,
@@ -667,6 +957,7 @@ def test_pairwise_hard_threshold_blocks_highly_correlated_pair(monkeypatch, tmp_
                             },
                             {
                                 "score": 9.7,
+                                "direction": "short",
                                 "params": {
                                     "family": "Gamma",
                                     "tp": 0.01,
@@ -700,8 +991,8 @@ def test_pairwise_hard_threshold_blocks_highly_correlated_pair(monkeypatch, tmp_
         curve_key = trades[0]["curve_key"]
         mapping = {
             "A": _equity_from_returns([0.02, 0.0, -0.02, 0.0, 0.02, 0.0, -0.02, 0.0]),
-            "B": _equity_from_returns([0.01, 0.02, 0.01, 0.02, -0.01, -0.02, -0.01, -0.02]),
-            "C": _equity_from_returns([0.011, 0.021, 0.012, 0.022, -0.011, -0.021, -0.012, -0.022]),
+            "B": _equity_from_returns([0.0, 0.02, 0.0, -0.02, 0.0, 0.02, 0.0, -0.02]),
+            "C": _equity_from_returns([0.0, 0.021, 0.0, -0.021, 0.0, 0.022, 0.0, -0.022]),
         }
         return mapping[curve_key]
 
@@ -732,3 +1023,162 @@ def test_pairwise_hard_threshold_blocks_highly_correlated_pair(monkeypatch, tmp_
     rejected = full_report[full_report["selection_status"] == "rejected_corr"]
     assert not rejected.empty
     assert rejected["max_pairwise_corr_to_selected"].abs().max() > 0.4
+
+
+def test_candidate_pool_reserves_exploration_slots_for_metricless_templates():
+    runtime = HolyGrailRuntime(bt_module=object(), log=lambda _msg: None)
+    rows = []
+    for idx in range(5):
+        rows.append(
+            {
+                "strategy_id": idx + 1,
+                "family": f"LONG_{idx}",
+                "symbol": f"L_{idx}",
+                "timeframe_min": 60,
+                "direction": "long",
+                "param_reverse_mode": False,
+                "param_alpha": idx,
+                "cand_score": 10.0 - idx,
+                "metric_sharpe": 2.0 - (idx * 0.1),
+                "metric_cagr_pct": 20.0 - idx,
+                "metric_max_drawdown_pct": 5.0 + idx,
+                "allocation_pct": 5.0,
+                "created_at": f"2026-01-0{idx + 1}T00:00:00+00:00",
+                "candidate_source": "scored_strategy",
+                "has_metrics": True,
+            }
+        )
+    for idx in range(3):
+        rows.append(
+            {
+                "strategy_id": 100 + idx,
+                "family": f"SHORT_{idx}",
+                "symbol": f"S_{idx}",
+                "timeframe_min": 60,
+                "direction": "short",
+                "param_reverse_mode": True,
+                "param_alpha": idx,
+                "cand_score": 9.0 - idx,
+                "metric_sharpe": 1.8 - (idx * 0.1),
+                "metric_cagr_pct": 15.0 - idx,
+                "metric_max_drawdown_pct": 6.0 + idx,
+                "allocation_pct": 5.0,
+                "created_at": f"2026-02-0{idx + 1}T00:00:00+00:00",
+                "candidate_source": "checkpoint_candidate",
+                "has_metrics": True,
+            }
+        )
+    for idx in range(2):
+        rows.append(
+            {
+                "strategy_id": 200 + idx,
+                "family": f"TEMPLATE_SHORT_{idx}",
+                "symbol": f"TS_{idx}",
+                "timeframe_min": 60,
+                "direction": "short",
+                "param_reverse_mode": True,
+                "param_alpha": idx,
+                "cand_score": 0.0,
+                "metric_sharpe": np.nan,
+                "metric_cagr_pct": np.nan,
+                "metric_max_drawdown_pct": np.nan,
+                "allocation_pct": 20.0 - idx,
+                "created_at": f"2026-03-0{idx + 1}T00:00:00+00:00",
+                "candidate_source": "template",
+                "has_metrics": False,
+            }
+        )
+
+    pool_df = runtime._candidate_pool(pd.DataFrame(rows), top_n=10, max_per_group=3)
+
+    assert len(pool_df) == 10
+    assert len(pool_df[pool_df["direction"] == "long"]) == 5
+    assert len(pool_df[pool_df["direction"] == "short"]) == 5
+    template_short = pool_df[(pool_df["direction"] == "short") & (pool_df["candidate_source"] == "template")]
+    assert len(template_short) == 2
+    assert set(template_short["direction_bucket"]) == {"exploration"}
+
+
+def test_balanced_selection_stops_at_paired_count_when_one_side_underfills(monkeypatch, tmp_path):
+    monkeypatch.setenv("SHEEP_RUNTIME_DIR", str(tmp_path / "runtime"))
+
+    def _fake_fetch(self):
+        return (
+            [
+                {
+                    "strategy_id": 1,
+                    "symbol": "PAIR_USDT",
+                    "timeframe_min": 60,
+                    "pool_name": "pool",
+                    "progress": {
+                        "checkpoint_candidates": [
+                            {
+                                "score": 10.0,
+                                "direction": "long",
+                                "params": {
+                                    "family": "LongAlpha",
+                                    "tp": 0.01,
+                                    "sl": 0.02,
+                                    "max_hold": 10,
+                                    "family_params": {"curve_key": "LONG_1", "sharpe": 2.3},
+                                },
+                                "metrics": {"sharpe": 2.3},
+                            },
+                            {
+                                "score": 9.8,
+                                "direction": "long",
+                                "params": {
+                                    "family": "LongBeta",
+                                    "tp": 0.01,
+                                    "sl": 0.02,
+                                    "max_hold": 10,
+                                    "family_params": {"curve_key": "LONG_2", "sharpe": 2.0},
+                                },
+                                "metrics": {"sharpe": 2.0},
+                            },
+                            {
+                                "score": 9.7,
+                                "direction": "short",
+                                "params": {
+                                    "family": "ShortAlpha",
+                                    "tp": 0.01,
+                                    "sl": 0.02,
+                                    "max_hold": 10,
+                                    "family_params": {"curve_key": "SHORT_1", "sharpe": 1.9},
+                                },
+                                "metrics": {"sharpe": 1.9},
+                            },
+                        ]
+                    },
+                }
+            ],
+            "https://example.com/api",
+            "static-token",
+        )
+
+    monkeypatch.setattr(HolyGrailRuntime, "fetch_factor_pool_data", _fake_fetch)
+    monkeypatch.setattr(HolyGrailRuntime, "load_kline_data", lambda self, symbol, timeframe_min: pd.DataFrame({"ts": pd.date_range("2026-01-01", periods=6, freq="D", tz="UTC"), "open": [1] * 6, "high": [1] * 6, "low": [1] * 6, "close": [1] * 6, "volume": [1] * 6}))
+    monkeypatch.setattr(
+        HolyGrailRuntime,
+        "build_daily_equity_curve",
+        staticmethod(
+            lambda trades: {
+                "LONG_1": _equity_from_returns([0.02, 0.0, -0.02, 0.0, 0.02, 0.0]),
+                "LONG_2": _equity_from_returns([0.01, -0.01, 0.005, -0.005, 0.007, -0.007]),
+                "SHORT_1": _equity_from_returns([0.0, 0.02, 0.0, -0.02, 0.0, 0.02]),
+            }[trades[0]["curve_key"]]
+        ),
+    )
+
+    result = run_holy_grail_build(
+        bt_module=_SyntheticBT({"LONG_1": [0.01, 0.015], "LONG_2": [0.008, 0.012], "SHORT_1": [0.007, 0.011]}),
+        log=lambda _msg: None,
+    )
+
+    assert result.ok
+    assert result.selected_count == 2
+    assert {row["direction"] for row in result.selected_portfolio} == {"long", "short"}
+    full_report = pd.read_csv(result.report_paths["final_report"])
+    rejected_balance = full_report[full_report["selection_status"] == "rejected_balance"]
+    assert not rejected_balance.empty
+    assert "LongBeta" in set(rejected_balance["family"])
