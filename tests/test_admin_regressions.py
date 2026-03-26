@@ -398,6 +398,21 @@ def test_global_cost_settings_round_trip_snapshot_and_task_claim(admin_client):
     assert body["risk_spec"]["cost_basis"]["slippage_pct"] == pytest.approx(0.04)
 
 
+def test_compute_task_claim_gracefully_degrades_on_statement_timeout(admin_client, monkeypatch):
+    client = admin_client["client"]
+    web_headers = admin_client["web_headers"]
+    db_module = admin_client["db"]
+
+    def _raise_timeout(*_args, **_kwargs):
+        raise RuntimeError("statement timeout")
+
+    monkeypatch.setattr(db_module, "claim_next_task_any", _raise_timeout)
+
+    claimed = client.post("/tasks/claim", headers=_worker_headers(web_headers, worker_id="worker-claim-timeout"))
+    assert claimed.status_code == 200, claimed.text
+    assert claimed.json() is None
+
+
 def test_dashboard_exposes_global_combo_counters(admin_client):
     client = admin_client["client"]
     headers = admin_client["headers"]

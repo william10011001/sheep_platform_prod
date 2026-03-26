@@ -3745,7 +3745,22 @@ def claim_task(
 
     # compute token：跨用戶派工（只派給 run_enabled=1 的 user）
     if _is_compute_token(ctx):
-        task = db.claim_next_task_any(w["worker_id"])
+        try:
+            task = db.claim_next_task_any(w["worker_id"])
+        except Exception as exc:
+            if "statement timeout" in str(exc or "").lower():
+                logger.warning("compute claim degraded due to timeout: %s", exc)
+                try:
+                    db.log_sys_event(
+                        "TASK_CLAIM_TIMEOUT",
+                        int(ctx["user"]["id"]),
+                        "compute claim timed out; returning no task",
+                        {"worker_id": str(w.get("worker_id") or ""), "error": str(exc)},
+                    )
+                except Exception:
+                    pass
+                return None
+            raise
     else:
         user_id = int(ctx["user"]["id"])
         if not db.get_user_run_enabled(user_id):

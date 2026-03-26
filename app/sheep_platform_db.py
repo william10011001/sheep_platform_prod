@@ -6362,23 +6362,48 @@ def claim_next_task_any(worker_id: str) -> Optional[dict]:
     conn = _conn()
     try:
         _reap_expired_running(conn)
+        c_row = conn.execute("SELECT id FROM mining_cycles WHERE status = 'active' ORDER BY id DESC LIMIT 1").fetchone()
+        c_id = int(c_row["id"]) if c_row else 0
 
         if getattr(conn, "kind", "sqlite") == "postgres":
-            row = conn.execute(
-                """
-                SELECT t.id
-                FROM mining_tasks t
-                JOIN users u ON u.id = t.user_id
-                JOIN factor_pools p ON p.id = t.pool_id
-                WHERE t.status IN ('assigned','queued')
-                  AND COALESCE(u.disabled,0)=0
-                  AND COALESCE(u.run_enabled,1)=1
-                  AND COALESCE(p.active,1)=1
-                ORDER BY t.id ASC
-                FOR UPDATE OF t SKIP LOCKED
-                LIMIT 1
-                """
-            ).fetchone()
+            candidate_params = []
+            candidate_sql = """
+                SELECT id, user_id, pool_id
+                FROM mining_tasks
+                WHERE status IN ('assigned','queued')
+            """
+            if c_id > 0:
+                candidate_sql += "\n  AND cycle_id=?"
+                candidate_params.append(c_id)
+            candidate_sql += "\nORDER BY id ASC\nFOR UPDATE SKIP LOCKED\nLIMIT 64"
+            candidates = conn.execute(candidate_sql, tuple(candidate_params) if candidate_params else None).fetchall()
+            row = None
+            for candidate in list(candidates or []):
+                tid = int((dict(candidate) if candidate else {}).get("id") or 0)
+                uid = int((dict(candidate) if candidate else {}).get("user_id") or 0)
+                pool_id = int((dict(candidate) if candidate else {}).get("pool_id") or 0)
+                if tid <= 0 or uid <= 0 or pool_id <= 0:
+                    continue
+                user_row = conn.execute(
+                    "SELECT COALESCE(disabled,0) AS disabled, COALESCE(run_enabled,1) AS run_enabled FROM users WHERE id=?",
+                    (uid,),
+                ).fetchone()
+                if not user_row:
+                    continue
+                if int((dict(user_row).get("disabled") or 0)) != 0:
+                    continue
+                if int((dict(user_row).get("run_enabled") or 1)) == 0:
+                    continue
+                pool_row = conn.execute(
+                    "SELECT COALESCE(active,1) AS active FROM factor_pools WHERE id=?",
+                    (pool_id,),
+                ).fetchone()
+                if not pool_row:
+                    continue
+                if int((dict(pool_row).get("active") or 1)) == 0:
+                    continue
+                row = {"id": tid}
+                break
         else:
             row = conn.execute(
                 """
@@ -6387,12 +6412,14 @@ def claim_next_task_any(worker_id: str) -> Optional[dict]:
                 JOIN users u ON u.id = t.user_id
                 JOIN factor_pools p ON p.id = t.pool_id
                 WHERE t.status IN ('assigned','queued')
+                  AND (? <= 0 OR t.cycle_id=?)
                   AND COALESCE(u.disabled,0)=0
                   AND COALESCE(u.run_enabled,1)=1
                   AND COALESCE(p.active,1)=1
                 ORDER BY t.id ASC
                 LIMIT 1
-                """
+                """,
+                (c_id, c_id),
             ).fetchone()
 
         if not row:

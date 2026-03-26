@@ -173,6 +173,9 @@ class RealtimeService:
         self.current_state = "stopped"
         self.current_reason = "startup"
         self.started_at = time.time()
+        self._next_start_retry_at = 0.0
+        self._start_retry_delay_s = 15.0
+        self._config_issues: list[str] = []
         self.ui: Optional[HeadlessUIBridge] = None
         self.trader = None
         self.factor_updater = None
@@ -245,7 +248,7 @@ class RealtimeService:
         if updater is not None:
             diagnostics = dict(getattr(updater, "_last_holy_grail_diagnostics", {}) or {})
         return {
-            "ok": True,
+            "ok": self.current_state == "running",
             "state": self.current_state,
             "mode": self.current_mode,
             "desired_state": str(control.get("desired_state") or "stopped"),
@@ -262,6 +265,7 @@ class RealtimeService:
             "holy_grail_diagnostics": diagnostics,
             "control": control,
             "reason": self.current_reason,
+            "config_issues": list(self._config_issues),
         }
 
     def _write_status(self) -> None:
@@ -271,6 +275,23 @@ class RealtimeService:
         cfg = load_effective_config()
         cfg["dry_run"] = bool(str(mode or "").strip().lower() != "live")
         cfg["realtime_mode"] = "live" if not cfg["dry_run"] else "shadow"
+        issues = []
+        if not str(cfg.get("symbol") or "").strip():
+            issues.append("missing_symbol")
+        if not str(cfg.get("interval") or "").strip():
+            issues.append("missing_interval")
+        if not str(cfg.get("factor_pool_url") or "").strip():
+            issues.append("missing_factor_pool_url")
+        if not (str(cfg.get("factor_pool_token") or "").strip() or (str(cfg.get("factor_pool_user") or "").strip() and str(cfg.get("factor_pool_pass") or "").strip())):
+            issues.append("missing_factor_pool_auth")
+        if not bool(cfg.get("dry_run")):
+            if not str(cfg.get("api_key") or "").strip():
+                issues.append("missing_api_key")
+            if not str(cfg.get("secret") or "").strip():
+                issues.append("missing_secret")
+            if not str(cfg.get("memo") or "").strip():
+                issues.append("missing_memo")
+        self._config_issues = issues
         return cfg
 
     def _start_components(self, mode: str) -> None:
@@ -301,6 +322,7 @@ class RealtimeService:
         self.current_mode = str(mode or "shadow")
         self.current_state = "running"
         self.current_reason = f"started_{self.current_mode}"
+        self._next_start_retry_at = 0.0
 
     def _stop_components(self, reason: str) -> None:
         legacy.stop_event.set()
@@ -331,7 +353,24 @@ class RealtimeService:
                 desired_mode = str(control.get("mode") or self.initial_mode).lower() or self.initial_mode
                 if desired_state == "running":
                     if self.current_state != "running":
-                        self._start_components(desired_mode)
+                        if time.time() >= float(self._next_start_retry_at or 0.0):
+                            try:
+                                self._start_components(desired_mode)
+                            except Exception as exc:
+                                try:
+                                    self._stop_components("startup_failed_cleanup")
+                                except Exception:
+                                    self.trader = None
+                                    self.factor_updater = None
+                                    self.ui = None
+                                    self._trader_thread = None
+                                self.current_mode = str(desired_mode or "shadow")
+                                self.current_state = "degraded"
+                                self.current_reason = f"start_failed:{type(exc).__name__}:{exc}"
+                                self._next_start_retry_at = time.time() + float(self._start_retry_delay_s)
+                                legacy.log(
+                                    f"【RealtimeDaemon】啟動失敗，{int(self._start_retry_delay_s)} 秒後重試: {exc}"
+                                )
                     elif desired_mode != self.current_mode:
                         self._stop_components("mode_switch")
                         self._start_components(desired_mode)

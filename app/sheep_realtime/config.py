@@ -25,12 +25,71 @@ SECRET_FIELDS = {
     "telegram_chat_id",
 }
 
+DEFAULT_RUNTIME_CONFIG: Dict[str, Any] = {
+    "config_version": 4,
+    "api_key": "",
+    "secret": "",
+    "memo": "api",
+    "trade_base": "https://api-cloud-v2.bitmart.com/",
+    "quote_base": "https://api-cloud-v2.bitmart.com/",
+    "factor_pool_url": "https://sheep123.com",
+    "factor_pool_token": "",
+    "factor_pool_user": "",
+    "factor_pool_pass": "",
+    "timeout": 15,
+    "retries": 3,
+    "dry_run": False,
+    "symbol": "ETHUSDT",
+    "interval": "30m",
+    "order_qty_token": 1.0,
+    "use_mark_price": True,
+    "sleep_padding_sec": 0.5,
+    "trade_fetch_interval": 60,
+    "verbose": True,
+    "execution_mode": "symbol_net_executor",
+    "symbol_signal_buffer_ms": 1500,
+    "system_leverage": 5.0,
+    "telegram_enabled": False,
+    "telegram_bot_token": "",
+    "telegram_chat_id": "",
+    "telegram_scope": "critical_and_trade",
+    "telegram_dedupe_sec": 900,
+    "ui_perf_mode": "auto",
+    "ui_log_max_lines": 2500,
+    "ui_log_batch_limit": 200,
+    "daily_guard": {
+        "enable": True,
+        "limit_pct": 1.0,
+        "limit_usdt": 0.0,
+    },
+    "mode": "multi",
+    "multi_strategies_json": "[]",
+    "single_family": "TEMA_RSI",
+    "TEMA_RSI": {
+        "fast_len": 12,
+        "slow_len": 50,
+        "rsi_len": 14,
+        "rsi_thr": 5.0,
+        "activation_pct": 0.1,
+        "trail_ticks": 500,
+        "mintick": 0.01,
+        "stake_pct": 95.0,
+        "tp_pct_strat": 0.1,
+        "sl_pct_strat": 0.1,
+        "max_hold_list": [300],
+        "cooldown": 0,
+    },
+    "fee_bps": 2.0,
+    "slip_bps": 0.0,
+    "_ui": {"bg_url": ""},
+}
+
 
 def _load_json(path: Path) -> Dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
         return dict(data or {}) if isinstance(data, dict) else {}
     except Exception:
         return {}
@@ -60,7 +119,8 @@ def load_effective_config() -> Dict[str, Any]:
     template = _load_json(realtime_config_template_path())
     public_cfg = _load_json(realtime_public_config_path())
     local_cfg = _load_json(realtime_local_config_path())
-    cfg = _merge(template, public_cfg)
+    cfg = _merge(DEFAULT_RUNTIME_CONFIG, template)
+    cfg = _merge(cfg, public_cfg)
     cfg = _merge(cfg, local_cfg)
     for key, env_name in (
         ("factor_pool_url", "SHEEP_FACTOR_POOL_URL"),

@@ -35,6 +35,40 @@ def _load_live_trader_module():
     return module
 
 
+def test_realtime_service_stays_degraded_instead_of_crashing_on_start_failure(monkeypatch, tmp_path):
+    db_path = tmp_path / "realtime-service.sqlite3"
+    runtime_dir = tmp_path / "runtime"
+    monkeypatch.setenv("SHEEP_DB_URL", "")
+    monkeypatch.setenv("SHEEP_DB_PATH", str(db_path))
+    monkeypatch.setenv("SHEEP_RUNTIME_DIR", str(runtime_dir))
+    _reset_db_module()
+    for name in list(sys.modules):
+        if name == "sheep_realtime" or name.startswith("sheep_realtime."):
+            sys.modules.pop(name, None)
+    import sheep_platform_db as db
+    from sheep_realtime import service as service_mod
+
+    db.init_db()
+    service_mod.write_realtime_control(desired_state="running", mode="shadow", reason="test_boot")
+    svc = service_mod.RealtimeService(initial_mode="shadow")
+
+    def _boom(_mode):
+        raise KeyError("symbol")
+
+    def _sleep(_seconds):
+        svc._running = False
+
+    monkeypatch.setattr(svc, "_start_components", _boom)
+    monkeypatch.setattr(service_mod.time, "sleep", _sleep)
+
+    svc.run_forever()
+
+    status = service_mod.read_realtime_status()
+    assert status["state"] == "degraded"
+    assert "KeyError" in status["reason"]
+    assert status["ok"] is False
+
+
 def test_worker_client_normalizes_legacy_public_base_urls():
     assert sheep_worker_client.normalize_api_base_url("https://sheep123.com/api") == "https://sheep123.com/sheep123"
     assert sheep_worker_client.normalize_api_base_url("https://sheep123.com/api/") == "https://sheep123.com/sheep123"

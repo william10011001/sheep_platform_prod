@@ -13,6 +13,7 @@ if str(APP_DIR) not in sys.path:
 
 import sheep_platform_db as db
 from sheep_http import resolve_tls_verify
+from sheep_realtime.config import load_effective_config
 from sheep_secrets import REDACTION, contains_potential_secret, redact_text
 
 
@@ -66,3 +67,34 @@ def test_tls_verification_defaults_to_enabled(monkeypatch):
     monkeypatch.setenv("SHEEP_ALLOW_INSECURE_TLS", "1")
     assert resolve_tls_verify(default=True) is False
     assert REDACTION in redact_text("Authorization: Bearer secret-token")
+
+
+def test_load_effective_config_uses_defaults_and_parses_utf8_sig(monkeypatch, tmp_path):
+    runtime_dir = tmp_path / "runtime-realtime"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("SHEEP_RUNTIME_DIR", str(runtime_dir))
+
+    cfg = load_effective_config()
+    assert cfg["symbol"] == "ETHUSDT"
+    assert cfg["interval"] == "30m"
+    assert cfg["factor_pool_url"] == "https://sheep123.com"
+
+    local_path = runtime_dir / "tema_rsi_gui_config.local.json"
+    local_path.write_text(
+        json.dumps(
+            {
+                "symbol": "BTCUSDT",
+                "interval": "4h",
+                "factor_pool_user": "sheep",
+                "factor_pool_pass": "pw",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8-sig",
+    )
+
+    cfg = load_effective_config()
+    assert cfg["symbol"] == "BTCUSDT"
+    assert cfg["interval"] == "4h"
+    assert cfg["factor_pool_user"] == "sheep"
+    assert cfg["factor_pool_url"] == "https://sheep123.com"
