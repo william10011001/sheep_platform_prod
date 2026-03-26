@@ -66,6 +66,11 @@ _GLOBAL_COUNTERS_CACHE: Dict[str, Any] = {
     "invalidate_throttle": 15.0,
     "lock": threading.Lock(),
 }
+_LEADERBOARD_PG_AGG_BACKOFF: Dict[str, Any] = {
+    "until": 0.0,
+    "reason": "",
+    "lock": threading.Lock(),
+}
 
 _GLOBAL_COUNTER_TOTAL_POOL_COMBOS = "dashboard_total_strategy_pool_combo_count"
 _GLOBAL_COUNTER_GLOBAL_MINED_COMBOS = "dashboard_global_mined_combo_count"
@@ -5763,7 +5768,40 @@ def _leaderboard_task_scan_max_rows() -> int:
     return max(_leaderboard_task_scan_limit(), min(200000, value))
 
 
+def _leaderboard_pg_agg_backoff_seconds() -> float:
+    try:
+        value = float(os.environ.get("SHEEP_LEADERBOARD_PG_AGG_BACKOFF_SECONDS", "300") or "300")
+    except Exception:
+        value = 300.0
+    return max(15.0, min(3600.0, float(value)))
+
+
+def _looks_like_statement_timeout(exc: Exception) -> bool:
+    text = str(exc or "").strip().lower()
+    return "statement timeout" in text or "querycanceled" in text or "canceling statement" in text
+
+
+def _leaderboard_pg_agg_backoff_until() -> float:
+    with _LEADERBOARD_PG_AGG_BACKOFF["lock"]:
+        return float(_LEADERBOARD_PG_AGG_BACKOFF.get("until") or 0.0)
+
+
+def _arm_leaderboard_pg_agg_backoff(exc: Exception) -> None:
+    if not _looks_like_statement_timeout(exc):
+        return
+    now_ts = time.time()
+    next_until = now_ts + _leaderboard_pg_agg_backoff_seconds()
+    with _LEADERBOARD_PG_AGG_BACKOFF["lock"]:
+        current_until = float(_LEADERBOARD_PG_AGG_BACKOFF.get("until") or 0.0)
+        if next_until > current_until:
+            _LEADERBOARD_PG_AGG_BACKOFF["until"] = next_until
+            _LEADERBOARD_PG_AGG_BACKOFF["reason"] = str(exc or "")
+
+
 def _leaderboard_postgres_recent_agg(conn: Any, cutoff_iso: str, window_end_iso: str) -> Dict[str, List[Dict[str, Any]]]:
+    if _leaderboard_pg_agg_backoff_until() > time.time():
+        return _leaderboard_python_fallback(conn, cutoff_iso, window_end_iso)
+
     default_avatar_url = _default_avatar_url_from_conn(conn)
     results: Dict[str, List[Dict[str, Any]]] = {"combos": [], "time": []}
     combos_error: Optional[Exception] = None
@@ -5861,6 +5899,7 @@ def _leaderboard_postgres_recent_agg(conn: Any, cutoff_iso: str, window_end_iso:
         ]
     except Exception as exc:
         combos_error = exc
+        _arm_leaderboard_pg_agg_backoff(exc)
         print(f"[DB WARN] Leaderboard combos aggregate failed: {exc}")
 
     try:
@@ -5872,6 +5911,7 @@ def _leaderboard_postgres_recent_agg(conn: Any, cutoff_iso: str, window_end_iso:
         ]
     except Exception as exc:
         time_error = exc
+        _arm_leaderboard_pg_agg_backoff(exc)
         print(f"[DB WARN] Leaderboard time aggregate failed: {exc}")
 
     if combos_error is not None or time_error is not None:

@@ -1948,6 +1948,44 @@ def test_postgres_recent_aggregate_falls_back_only_for_failed_section(monkeypatc
     assert stats["time"][0]["username"] == "pg-time"
 
 
+def test_postgres_recent_aggregate_enters_backoff_after_timeout(monkeypatch, tmp_path):
+    db_path = tmp_path / "leaderboard-postgres-backoff.sqlite3"
+    monkeypatch.setenv("SHEEP_DB_URL", "")
+    monkeypatch.setenv("SHEEP_DB_PATH", str(db_path))
+    monkeypatch.setenv("SHEEP_LEADERBOARD_PG_AGG_BACKOFF_SECONDS", "300")
+    _reset_db_module()
+    import sheep_platform_db as db
+
+    fallback_calls = []
+
+    class _FakeConn:
+        def __init__(self):
+            self.calls = 0
+
+        def execute(self, sql, params=None):
+            self.calls += 1
+            raise RuntimeError("statement timeout")
+
+    def _fake_fallback(conn, cutoff_iso, window_end_iso):
+        fallback_calls.append((cutoff_iso, window_end_iso))
+        return {
+            "combos": [{"username": "fallback-combo", "total_done": 321.0}],
+            "time": [{"username": "fallback-time", "total_seconds": 111.0}],
+        }
+
+    fake_conn = _FakeConn()
+    monkeypatch.setattr(db, "_default_avatar_url_from_conn", lambda conn: "https://example.com/default.png")
+    monkeypatch.setattr(db, "_leaderboard_python_fallback", _fake_fallback)
+
+    first = db._leaderboard_postgres_recent_agg(fake_conn, "2026-03-01T00:00:00+00:00", "2026-03-25T00:00:00+00:00")
+    second = db._leaderboard_postgres_recent_agg(fake_conn, "2026-03-01T00:00:00+00:00", "2026-03-25T00:00:00+00:00")
+
+    assert first["combos"][0]["username"] == "fallback-combo"
+    assert second["time"][0]["username"] == "fallback-time"
+    assert len(fallback_calls) == 2
+    assert fake_conn.calls == 2
+
+
 def test_leaderboard_python_fallback_prefers_larger_timestamp_elapsed(monkeypatch, tmp_path):
     db_path = tmp_path / "leaderboard-elapsed-regression.sqlite3"
     monkeypatch.setenv("SHEEP_DB_URL", "")
