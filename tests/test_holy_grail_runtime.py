@@ -1,3 +1,4 @@
+import ast
 import importlib
 import importlib.util
 import json
@@ -111,6 +112,17 @@ def test_realtime_trader_import_does_not_emit_streamlit_runtime_warning():
     assert result.stdout.strip() == "True"
     assert "No runtime found" not in result.stderr
     assert "MemoryCacheStorageManager" not in result.stderr
+
+
+def test_runtime_legacy_uses_postponed_annotations_for_py311_compat():
+    runtime_legacy_path = APP_DIR / "sheep_realtime" / "runtime_legacy.py"
+    module = ast.parse(runtime_legacy_path.read_text(encoding="utf-8-sig"))
+    future_imports = [
+        node
+        for node in module.body
+        if isinstance(node, ast.ImportFrom) and node.module == "__future__"
+    ]
+    assert any(alias.name == "annotations" for node in future_imports for alias in node.names)
 
 
 def test_kline_loader_supports_exact_and_resample(monkeypatch, tmp_path):

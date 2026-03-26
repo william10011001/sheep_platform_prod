@@ -22,6 +22,8 @@ ethusdt_rsi_l05.py
 
 依賴：Python 3.9+；pip install requests pandas numpy pillow
 """
+from __future__ import annotations
+
 from decimal import Decimal, ROUND_FLOOR
 import atexit
 import asyncio
@@ -29,7 +31,7 @@ import sys, os, io, json, math, time, hmac, hashlib, threading, queue, traceback
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Optional, Tuple, Dict, Any, List
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 # ============ 可選相依（Pillow：背景圖載入/縮放/模糊） ============
 try:
