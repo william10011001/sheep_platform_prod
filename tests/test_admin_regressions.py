@@ -911,15 +911,33 @@ def test_admin_factor_pool_prune_preview_and_execute(admin_client):
     preview_body = preview.json()
     assert preview_body["dry_run"] is True
     assert preview_body["pool_count"] >= 1
+    assert preview_body["blocked_pool_count"] >= 1
+    assert preview_body["preview_generated_at"]
     assert int(prune_pool_id) in preview_body["sample_pool_ids"]
     assert int(blocked_pool_id) in preview_body["blocked_pool_ids"]
+    eligible_by_id = {int(item["id"]): item for item in preview_body["eligible_pools"]}
+    blocked_by_id = {int(item["id"]): item for item in preview_body["blocked_pools"]}
+    assert int(prune_pool_id) in eligible_by_id
+    assert eligible_by_id[int(prune_pool_id)]["delete_ready"] is True
+    assert eligible_by_id[int(prune_pool_id)]["task_count"] >= 1
+    assert int(blocked_pool_id) in blocked_by_id
+    assert blocked_by_id[int(blocked_pool_id)]["delete_ready"] is False
+    assert "has_inflight_tasks" in blocked_by_id[int(blocked_pool_id)]["blocked_reasons"]
+    assert "has_active_leases" in blocked_by_id[int(blocked_pool_id)]["blocked_reasons"]
+    assert preview_body["blocked_reason_counts"]["has_inflight_tasks"] >= 1
+    assert preview_body["blocked_reason_counts"]["has_active_leases"] >= 1
 
     execute = client.post("/admin/factor_pools/prune?dry_run=false", headers=headers)
     assert execute.status_code == 200, execute.text
     execute_body = execute.json()
     assert execute_body["dry_run"] is False
+    assert execute_body["executed_at"]
     assert int(prune_pool_id) in execute_body["deleted_pool_ids"]
+    assert execute_body["deleted_pool_count"] >= 1
     assert execute_body["deleted_task_count"] >= 1
+    deleted_by_id = {int(item["id"]): item for item in execute_body["deleted_pools"]}
+    assert int(prune_pool_id) in deleted_by_id
+    assert deleted_by_id[int(prune_pool_id)]["delete_ready"] is True
 
     remaining_ids = {int(pool["id"]) for pool in db_module.list_factor_pools(cycle_id)}
     assert int(prune_pool_id) not in remaining_ids

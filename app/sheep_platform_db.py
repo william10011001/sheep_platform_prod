@@ -2801,12 +2801,81 @@ def list_factor_pools(cycle_id: int) -> list:
     # [專家級防護] 絕對禁止因鎖死而回傳空陣列，這會導致前端誤判並將所有任務過濾掉變成空表格
     raise RuntimeError(f"資料庫高併發鎖定，無法讀取策略池列表。請稍後再試。({last_err})")
 
+def _strict_prune_block_reasons(row: Dict[str, Any]) -> List[str]:
+    reasons: List[str] = []
+    if int(row.get("total_progress") or 0) > 0:
+        reasons.append("has_progress")
+    if int(row.get("candidate_count") or 0) > 0:
+        reasons.append("has_candidates")
+    if int(row.get("submission_count") or 0) > 0:
+        reasons.append("has_submissions")
+    if int(row.get("strategy_count") or 0) > 0:
+        reasons.append("has_strategies")
+    if int(row.get("inflight_count") or 0) > 0:
+        reasons.append("has_inflight_tasks")
+    if int(row.get("active_lease_count") or 0) > 0:
+        reasons.append("has_active_leases")
+    return reasons
+
+
+def _strict_prune_row_payload(row: Dict[str, Any], *, blocked_reasons: Optional[List[str]] = None) -> Dict[str, Any]:
+    payload = {
+        "id": int(row.get("id") or 0),
+        "name": str(row.get("name") or ""),
+        "external_key": str(row.get("external_key") or ""),
+        "symbol": str(row.get("symbol") or ""),
+        "direction": str(row.get("direction") or "long"),
+        "timeframe_min": int(row.get("timeframe_min") or 0),
+        "years": int(row.get("years") or 0),
+        "family": str(row.get("family") or ""),
+        "param_combo_count": int(row.get("param_combo_count") or 0),
+        "task_count": int(row.get("task_count") or 0),
+        "total_progress": int(row.get("total_progress") or 0),
+        "inflight_count": int(row.get("inflight_count") or 0),
+        "active_lease_count": int(row.get("active_lease_count") or 0),
+        "candidate_count": int(row.get("candidate_count") or 0),
+        "submission_count": int(row.get("submission_count") or 0),
+        "strategy_count": int(row.get("strategy_count") or 0),
+    }
+    payload["blocked_reasons"] = list(blocked_reasons or [])
+    payload["delete_ready"] = not bool(payload["blocked_reasons"])
+    return payload
+
+
+def _strict_prune_preview_payload(scan: Dict[str, Any], *, detail_limit: int = 50) -> Dict[str, Any]:
+    eligible_rows = list(scan.get("eligible_rows") or [])
+    blocked_rows = list(scan.get("blocked_rows") or [])
+    return {
+        "ok": True,
+        "cycle_id": int(scan.get("cycle_id") or 0),
+        "pool_count": len(eligible_rows),
+        "task_count": sum(int(row.get("task_count") or 0) for row in eligible_rows),
+        "param_combo_count": int(sum(int(row.get("param_combo_count") or 0) for row in eligible_rows)),
+        "sample_pool_ids": [int(row.get("id") or 0) for row in eligible_rows[:20]],
+        "eligible_pools": eligible_rows,
+        "blocked_pool_ids": [int(row.get("id") or 0) for row in blocked_rows],
+        "blocked_pool_count": len(blocked_rows),
+        "blocked_pools": blocked_rows[: max(1, int(detail_limit or 50))],
+        "blocked_pool_detail_limit": max(1, int(detail_limit or 50)),
+        "blocked_reason_counts": dict(scan.get("blocked_reason_counts") or {}),
+        "preview_generated_at": _now_iso(),
+        "dry_run": True,
+    }
+
+
 def _strict_prune_cycle_scan(conn: Any, cycle_id: int) -> Dict[str, Any]:
     now_iso = _now_iso()
     rows = conn.execute(
         """
         SELECT
             fp.id,
+            fp.name,
+            COALESCE(fp.external_key, '') AS external_key,
+            fp.symbol,
+            COALESCE(fp.direction, 'long') AS direction,
+            fp.timeframe_min,
+            fp.years,
+            fp.family,
             COALESCE(fp.param_combo_count, 0) AS param_combo_count,
             COALESCE(mt.task_count, 0) AS task_count,
             COALESCE(mt.total_progress, 0) AS total_progress,
@@ -2848,28 +2917,23 @@ def _strict_prune_cycle_scan(conn: Any, cycle_id: int) -> Dict[str, Any]:
         (now_iso, int(cycle_id), int(cycle_id)),
     ).fetchall()
     eligible_rows: List[Dict[str, Any]] = []
-    blocked_pool_ids: List[int] = []
+    blocked_rows: List[Dict[str, Any]] = []
+    blocked_reason_counts: Dict[str, int] = {}
     for row in rows:
         data = dict(row)
-        pool_id = int(data.get("id") or 0)
-        total_progress = int(data.get("total_progress") or 0)
-        candidate_count = int(data.get("candidate_count") or 0)
-        submission_count = int(data.get("submission_count") or 0)
-        strategy_count = int(data.get("strategy_count") or 0)
-        inflight_count = int(data.get("inflight_count") or 0)
-        active_lease_count = int(data.get("active_lease_count") or 0)
-        if total_progress > 0:
+        blocked_reasons = _strict_prune_block_reasons(data)
+        payload = _strict_prune_row_payload(data, blocked_reasons=blocked_reasons)
+        if blocked_reasons:
+            blocked_rows.append(payload)
+            for reason in blocked_reasons:
+                blocked_reason_counts[reason] = int(blocked_reason_counts.get(reason) or 0) + 1
             continue
-        if candidate_count > 0 or submission_count > 0 or strategy_count > 0:
-            continue
-        if inflight_count > 0 or active_lease_count > 0:
-            blocked_pool_ids.append(pool_id)
-            continue
-        eligible_rows.append(data)
+        eligible_rows.append(payload)
     return {
         "cycle_id": int(cycle_id),
         "eligible_rows": eligible_rows,
-        "blocked_pool_ids": blocked_pool_ids,
+        "blocked_rows": blocked_rows,
+        "blocked_reason_counts": blocked_reason_counts,
     }
 
 
@@ -2884,7 +2948,13 @@ def preview_factor_pool_prune_current_cycle_strict() -> Dict[str, Any]:
             "task_count": 0,
             "param_combo_count": 0,
             "sample_pool_ids": [],
+            "eligible_pools": [],
             "blocked_pool_ids": [],
+            "blocked_pool_count": 0,
+            "blocked_pools": [],
+            "blocked_pool_detail_limit": 50,
+            "blocked_reason_counts": {},
+            "preview_generated_at": _now_iso(),
             "dry_run": True,
         }
     conn = _conn()
@@ -2892,17 +2962,7 @@ def preview_factor_pool_prune_current_cycle_strict() -> Dict[str, Any]:
         scan = _strict_prune_cycle_scan(conn, cycle_id)
     finally:
         conn.close()
-    eligible_rows = list(scan.get("eligible_rows") or [])
-    return {
-        "ok": True,
-        "cycle_id": cycle_id,
-        "pool_count": len(eligible_rows),
-        "task_count": sum(int(row.get("task_count") or 0) for row in eligible_rows),
-        "param_combo_count": int(sum(int(row.get("param_combo_count") or 0) for row in eligible_rows)),
-        "sample_pool_ids": [int(row.get("id") or 0) for row in eligible_rows[:20]],
-        "blocked_pool_ids": [int(x) for x in list(scan.get("blocked_pool_ids") or [])],
-        "dry_run": True,
-    }
+    return _strict_prune_preview_payload(scan)
 
 
 def prune_factor_pools_current_cycle_strict(*, dry_run: bool = True, requested_by: int = 0) -> Dict[str, Any]:
@@ -2915,10 +2975,19 @@ def prune_factor_pools_current_cycle_strict(*, dry_run: bool = True, requested_b
     try:
         scan = _strict_prune_cycle_scan(conn, cycle_id)
         eligible_rows = list(scan.get("eligible_rows") or [])
+        execute_preview = _strict_prune_preview_payload(scan)
         pool_ids = [int(row.get("id") or 0) for row in eligible_rows if int(row.get("id") or 0) > 0]
         if not pool_ids:
             conn.rollback()
-            return {**preview, "dry_run": False, "deleted_pool_ids": [], "deleted_task_count": 0}
+            return {
+                **execute_preview,
+                "dry_run": False,
+                "deleted_pool_ids": [],
+                "deleted_pools": [],
+                "deleted_pool_count": 0,
+                "deleted_task_count": 0,
+                "executed_at": _now_iso(),
+            }
         placeholders = ", ".join(["?"] * len(pool_ids))
         deleted_task_count = int(
             conn.execute(
@@ -2945,14 +3014,17 @@ def prune_factor_pools_current_cycle_strict(*, dry_run: bool = True, requested_b
             "cycle_id": cycle_id,
             "pool_ids": pool_ids,
             "deleted_task_count": deleted_task_count,
-            "blocked_pool_ids": preview.get("blocked_pool_ids") or [],
+            "blocked_pool_ids": execute_preview.get("blocked_pool_ids") or [],
         },
     )
     return {
-        **preview,
+        **execute_preview,
         "dry_run": False,
         "deleted_pool_ids": pool_ids,
+        "deleted_pools": eligible_rows,
+        "deleted_pool_count": len(pool_ids),
         "deleted_task_count": deleted_task_count,
+        "executed_at": _now_iso(),
     }
 
 

@@ -1108,8 +1108,93 @@
                                     </div>
                                 </div>
                                 <div v-if="adminPrunePreview" class="text-xs text-slate-400">
-                                    sample pool ids: {{ (adminPrunePreview.sample_pool_ids || []).join(', ') || '-' }}
+                                    {{ adminPrunePreview.dry_run ? 'eligible pool ids' : 'deleted pool ids' }}:
+                                    {{ ((adminPrunePreview.dry_run ? adminPrunePreview.sample_pool_ids : adminPrunePreview.deleted_pool_ids) || []).join(', ') || '-' }}
                                     <span class="ml-4">blocked pool ids: {{ (adminPrunePreview.blocked_pool_ids || []).join(', ') || '-' }}</span>
+                                    <span class="ml-4">generated: {{ formatDate(adminPrunePreview.executed_at || adminPrunePreview.preview_generated_at) }}</span>
+                                </div>
+                                <div v-if="adminPrunePreview && pruneReasonEntries(adminPrunePreview.blocked_reason_counts).length" class="rounded-lg border border-amber-400/20 bg-amber-400/5 p-3">
+                                    <div class="text-xs font-semibold text-amber-100">Blocked Summary</div>
+                                    <div class="mt-2 flex flex-wrap gap-2">
+                                        <span
+                                            v-for="[reason, count] in pruneReasonEntries(adminPrunePreview.blocked_reason_counts)"
+                                            :key="`prune-reason-${reason}`"
+                                            class="rounded-full border border-amber-400/20 bg-black/20 px-2 py-1 text-[11px] text-amber-100"
+                                        >
+                                            {{ pruneReasonLabel(reason) }} x {{ count }}
+                                        </span>
+                                    </div>
+                                </div>
+                                <div v-if="adminPrunePreview && ((adminPrunePreview.dry_run ? adminPrunePreview.eligible_pools : (adminPrunePreview.deleted_pools || adminPrunePreview.eligible_pools)) || []).length" class="rounded-lg border border-emerald-400/20 bg-emerald-400/5 p-3">
+                                    <div class="flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
+                                        <div class="text-xs font-semibold text-emerald-100">{{ adminPrunePreview.dry_run ? 'Delete Ready Pools' : 'Deleted Pools' }}</div>
+                                        <div class="text-[11px] text-emerald-200/80">
+                                            total {{ adminPrunePreview.dry_run ? (adminPrunePreview.pool_count || 0) : (adminPrunePreview.deleted_pool_count || 0) }}
+                                        </div>
+                                    </div>
+                                    <div class="mt-2 space-y-2">
+                                        <div
+                                            v-for="pool in ((adminPrunePreview.dry_run ? adminPrunePreview.eligible_pools : (adminPrunePreview.deleted_pools || adminPrunePreview.eligible_pools)) || []).slice(0, 20)"
+                                            :key="`prune-eligible-${pool.id}`"
+                                            class="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-slate-300"
+                                        >
+                                            <div class="flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
+                                                <div class="font-semibold text-white">{{ prunePoolLabel(pool) }}</div>
+                                                <div class="text-[11px] text-slate-500">{{ pool.name || '-' }}</div>
+                                            </div>
+                                            <div class="mt-2 grid grid-cols-2 gap-2 text-[11px] text-slate-400 md:grid-cols-4">
+                                                <div>tasks {{ pool.task_count || 0 }}</div>
+                                                <div>combos {{ pool.param_combo_count || 0 }}</div>
+                                                <div>direction {{ String(pool.direction || 'long').toUpperCase() }}</div>
+                                                <div>external {{ pool.external_key || '-' }}</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div v-if="((adminPrunePreview.dry_run ? adminPrunePreview.eligible_pools : (adminPrunePreview.deleted_pools || adminPrunePreview.eligible_pools)) || []).length > 20" class="mt-2 text-[11px] text-slate-500">
+                                        only the first 20 pools are shown here; the API response still contains the full eligible/delete-ready list.
+                                    </div>
+                                </div>
+                                <div v-if="adminPrunePreview && (adminPrunePreview.blocked_pools || []).length" class="rounded-lg border border-white/10 bg-black/20 p-3">
+                                    <div class="flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
+                                        <div class="text-xs font-semibold text-white">Blocked Pools</div>
+                                        <div class="text-[11px] text-slate-500">
+                                            showing {{ (adminPrunePreview.blocked_pools || []).length }} / {{ adminPrunePreview.blocked_pool_count || 0 }}
+                                        </div>
+                                    </div>
+                                    <div class="mt-2 space-y-2">
+                                        <div
+                                            v-for="pool in (adminPrunePreview.blocked_pools || [])"
+                                            :key="`prune-blocked-${pool.id}`"
+                                            class="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-slate-300"
+                                        >
+                                            <div class="flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
+                                                <div class="font-semibold text-white">{{ prunePoolLabel(pool) }}</div>
+                                                <div class="text-[11px] text-slate-500">{{ pool.name || '-' }}</div>
+                                            </div>
+                                            <div class="mt-2 flex flex-wrap gap-2">
+                                                <span
+                                                    v-for="reason in (pool.blocked_reasons || [])"
+                                                    :key="`prune-blocked-reason-${pool.id}-${reason}`"
+                                                    class="rounded-full border border-red-400/20 bg-red-400/10 px-2 py-1 text-[11px] text-red-100"
+                                                >
+                                                    {{ pruneReasonLabel(reason) }}
+                                                </span>
+                                            </div>
+                                            <div class="mt-2 grid grid-cols-2 gap-2 text-[11px] text-slate-400 md:grid-cols-4">
+                                                <div>progress {{ pool.total_progress || 0 }}</div>
+                                                <div>inflight {{ pool.inflight_count || 0 }}</div>
+                                                <div>leases {{ pool.active_lease_count || 0 }}</div>
+                                                <div>strategies {{ pool.strategy_count || 0 }}</div>
+                                                <div>candidates {{ pool.candidate_count || 0 }}</div>
+                                                <div>submissions {{ pool.submission_count || 0 }}</div>
+                                                <div>tasks {{ pool.task_count || 0 }}</div>
+                                                <div>combos {{ pool.param_combo_count || 0 }}</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div v-if="(adminPrunePreview.blocked_pool_count || 0) > (adminPrunePreview.blocked_pools || []).length" class="mt-2 text-[11px] text-slate-500">
+                                        blocked pool details are capped at {{ adminPrunePreview.blocked_pool_detail_limit || (adminPrunePreview.blocked_pools || []).length }} rows per preview to keep the page readable.
+                                    </div>
                                 </div>
                             </div>
                             <div v-if="adminPools.length === 0" class="text-gray-400 text-sm">目前週期無策略池。</div>
@@ -1595,6 +1680,14 @@
                 const adminRealtime = reactive({ runtime_sync: {}, symbol_state_items: [], holy_grail_diagnostics: {}, resource_summary: {}, control: {} });
                 const adminPrunePreview = ref(null);
                 const adminPruneBusy = ref(false);
+                const PRUNE_REASON_LABELS = {
+                    has_progress: '已有挖掘進度',
+                    has_candidates: '已有候選策略',
+                    has_submissions: '已有提交流水',
+                    has_strategies: '已有正式策略',
+                    has_inflight_tasks: '仍有進行中 task',
+                    has_active_leases: '仍有未過期 lease',
+                };
                 const adminStratSummary = reactive({ global_runtime: {}, personal_runtime: {} });
                 const adminStratFilters = reactive({ q: '', username: '', symbol: '', direction: '' });
                 const adminStratPage = ref(1);
@@ -2054,6 +2147,20 @@
                     } finally {
                         adminPruneBusy.value = false;
                     }
+                };
+
+                const pruneReasonEntries = (counts) => Object.entries(counts || {}).sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0));
+                const pruneReasonLabel = (reason) => PRUNE_REASON_LABELS[String(reason || '')] || String(reason || '-');
+                const prunePoolLabel = (pool) => {
+                    if (!pool || typeof pool !== 'object') return '-';
+                    const parts = [
+                        pool.id || '-',
+                        pool.symbol || '-',
+                        `${Number(pool.timeframe_min || 0)}m`,
+                        String(pool.direction || 'long').toUpperCase(),
+                        pool.family || '-',
+                    ];
+                    return parts.join(' | ');
                 };
 
                 const refreshAdminStrategies = async (resetPage = false) => {
@@ -3216,7 +3323,7 @@
                     activeTasks, activeTaskEmptyStateText, ratingView, setRatingView, paginatedRatingTasks, activeRatingPage, totalRatingPages, changeRatingPage,
                     qualifiedTasks, rejectedArchiveTasks, leaderboardSections, activeLeaderboardKey, activeLeaderboardSection, leaderboardState, leaderboardEmptyStateText, leaderboardStatusText, manualRefreshLeaderboard, formatLeaderboardValue,
                     getReviewStatus, getReviewStatusMeta, getReviewDetail,
-                    adminSubTab, adminThresholds, adminPools, adminStrats, adminError, adminDiagnostics, adminRealtime, adminPrunePreview, adminPruneBusy, realtimeHealthText, realtimeHealthClass, submitRealtimeControl, previewPrunePools, executePrunePools, adminStratSummary, adminStratFilters, adminStratPage, adminStratPageSize, adminStratTotal, adminStratHasNext, adminStratTotalPages, adminDefaultAvatar, loadAdminData, refreshAdminStrategies, resetAdminStrategyFilters, changeAdminStratPage, downloadAdminErrors, saveThresholds, savePool, handleDefaultAvatarChange, saveDefaultAvatar, clearDefaultAvatar,
+                    adminSubTab, adminThresholds, adminPools, adminStrats, adminError, adminDiagnostics, adminRealtime, adminPrunePreview, adminPruneBusy, realtimeHealthText, realtimeHealthClass, submitRealtimeControl, previewPrunePools, executePrunePools, pruneReasonEntries, pruneReasonLabel, prunePoolLabel, adminStratSummary, adminStratFilters, adminStratPage, adminStratPageSize, adminStratTotal, adminStratHasNext, adminStratTotalPages, adminDefaultAvatar, loadAdminData, refreshAdminStrategies, resetAdminStrategyFilters, changeAdminStratPage, downloadAdminErrors, saveThresholds, savePool, handleDefaultAvatarChange, saveDefaultAvatar, clearDefaultAvatar,
                     adminAnnouncements, adminAnnouncementTotal, adminAnnouncementPage, adminAnnouncementPageSize, adminAnnouncementTotalPages, adminAnnouncementFilters, announcementEditor, loadAdminAnnouncements, changeAdminAnnouncementPage, resetAnnouncementEditor, editAnnouncement, saveAnnouncement, publishAnnouncement, unpublishAnnouncement,
                     catalogImportText, catalogImportResult, handleCatalogFileChange, runCatalogImport
                 };
