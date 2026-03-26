@@ -968,6 +968,21 @@ def _verify_request_signature(req: Request, token_obj: Dict[str, Any], body: str
         logger.error(f"Signature verification error: {e}")
         return False
 
+
+def _looks_like_task_claim_timeout(exc: Exception) -> bool:
+    text = str(exc or "").strip().lower()
+    try:
+        if bool(getattr(db, "_looks_like_statement_timeout")(exc)):
+            return True
+    except Exception:
+        pass
+    return (
+        "lock timeout" in text
+        or "locknotavailable" in text
+        or "could not obtain lock" in text
+        or "canceling statement due to lock timeout" in text
+    )
+
 def _is_compute_token(ctx: Dict[str, Any]) -> bool:
     try:
         u = ctx.get("user") or {}
@@ -3835,42 +3850,55 @@ def claim_task(
 ):
     ctx = _auth_ctx(request, authorization)
     w = _require_worker(request, ctx, x_worker_id, x_worker_version, x_worker_protocol)
+    claim_user_id = int(ctx["user"]["id"])
+
+    def _degrade_claim_timeout(exc: Exception, *, mode: str) -> None:
+        logger.warning("%s claim degraded due to transient lock/timeout: %s", mode, exc)
+        try:
+            db.log_sys_event(
+                "TASK_CLAIM_TIMEOUT",
+                claim_user_id,
+                f"{mode} claim timed out; returning no task",
+                {"worker_id": str(w.get("worker_id") or ""), "mode": mode, "error": str(exc)},
+            )
+        except Exception:
+            pass
 
     # compute token：跨用戶派工（只派給 run_enabled=1 的 user）
     if _is_compute_token(ctx):
         try:
             task = db.claim_next_task_any(w["worker_id"])
         except Exception as exc:
-            if "statement timeout" in str(exc or "").lower():
-                logger.warning("compute claim degraded due to timeout: %s", exc)
-                try:
-                    db.log_sys_event(
-                        "TASK_CLAIM_TIMEOUT",
-                        int(ctx["user"]["id"]),
-                        "compute claim timed out; returning no task",
-                        {"worker_id": str(w.get("worker_id") or ""), "error": str(exc)},
-                    )
-                except Exception:
-                    pass
+            if _looks_like_task_claim_timeout(exc):
+                _degrade_claim_timeout(exc, mode="compute")
                 return None
             raise
     else:
-        user_id = int(ctx["user"]["id"])
+        user_id = claim_user_id
         if not db.get_user_run_enabled(user_id):
             return None
-            
-        # 1. 嘗試領取已存在的分配任務
-        task = db.claim_next_task(user_id, w["worker_id"])
-        
-        # 【專家級同步優化】若目前緩存無任務，主動觸發分配邏輯，消除 Daemon 的 5 分鐘週期延遲
-        if not task:
-            try:
-                cycle_id = _get_active_cycle_id()
-                if cycle_id > 0:
-                    _prime_user_task_queue(user_id, cycle_id)
-                    task = db.claim_next_task(user_id, w["worker_id"])
-            except Exception as assign_err:
-                logger.error(f"Instant assignment failed for user {user_id}: {assign_err}")
+
+        try:
+            # 1. 嘗試領取已存在的分配任務
+            task = db.claim_next_task(user_id, w["worker_id"])
+
+            # 【專家級同步優化】若目前緩存無任務，主動觸發分配邏輯，消除 Daemon 的 5 分鐘週期延遲
+            if not task:
+                try:
+                    cycle_id = _get_active_cycle_id()
+                    if cycle_id > 0:
+                        _prime_user_task_queue(user_id, cycle_id)
+                        task = db.claim_next_task(user_id, w["worker_id"])
+                except Exception as assign_err:
+                    if _looks_like_task_claim_timeout(assign_err):
+                        _degrade_claim_timeout(assign_err, mode="personal")
+                        return None
+                    logger.error(f"Instant assignment failed for user {user_id}: {assign_err}")
+        except Exception as exc:
+            if _looks_like_task_claim_timeout(exc):
+                _degrade_claim_timeout(exc, mode="personal")
+                return None
+            raise
 
     if not task:
         return None

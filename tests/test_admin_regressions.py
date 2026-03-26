@@ -413,6 +413,36 @@ def test_compute_task_claim_gracefully_degrades_on_statement_timeout(admin_clien
     assert claimed.json() is None
 
 
+def test_compute_task_claim_gracefully_degrades_on_lock_timeout(admin_client, monkeypatch):
+    client = admin_client["client"]
+    web_headers = admin_client["web_headers"]
+    db_module = admin_client["db"]
+
+    def _raise_timeout(*_args, **_kwargs):
+        raise RuntimeError("canceling statement due to lock timeout")
+
+    monkeypatch.setattr(db_module, "claim_next_task_any", _raise_timeout)
+
+    claimed = client.post("/tasks/claim", headers=_worker_headers(web_headers, worker_id="worker-claim-lock-timeout"))
+    assert claimed.status_code == 200, claimed.text
+    assert claimed.json() is None
+
+
+def test_personal_task_claim_gracefully_degrades_on_lock_timeout(admin_client, monkeypatch):
+    client = admin_client["client"]
+    headers = admin_client["headers"]
+    db_module = admin_client["db"]
+
+    def _raise_timeout(*_args, **_kwargs):
+        raise RuntimeError("canceling statement due to lock timeout")
+
+    monkeypatch.setattr(db_module, "claim_next_task", _raise_timeout)
+
+    claimed = client.post("/tasks/claim", headers=_worker_headers(headers, worker_id="worker-personal-claim-lock-timeout"))
+    assert claimed.status_code == 200, claimed.text
+    assert claimed.json() is None
+
+
 def test_dashboard_exposes_global_combo_counters(admin_client):
     client = admin_client["client"]
     headers = admin_client["headers"]
