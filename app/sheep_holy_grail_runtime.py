@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import copy
 import json
 import math
 import os
+import re
+import threading
 import time
 import traceback
 import hashlib
@@ -14,7 +17,9 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 import requests
-import urllib3
+
+from sheep_http import create_retry_session, request as http_request, resolve_tls_verify, summarize_http_detail
+from sheep_secrets import redact_text
 
 from sheep_runtime_paths import (
     kline_candidate_paths,
@@ -27,9 +32,6 @@ from sheep_runtime_paths import (
     unique_existing_paths,
 )
 from sheep_strategy_schema import normalize_direction
-
-
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 SUPPORTED_TIMEFRAMES = [1, 5, 15, 30, 60, 120, 240, 1440]
 
@@ -56,6 +58,11 @@ class HolyGrailResult:
 
 
 class HolyGrailRuntime:
+    _shared_factor_pool_cache_lock = threading.Lock()
+    _shared_factor_pool_cache: Optional[Tuple[List[Dict[str, Any]], str, str]] = None
+    _shared_factor_pool_cache_ts: float = 0.0
+    _shared_factor_pool_cache_ttl_sec: float = 900.0
+
     def __init__(
         self,
         *,
@@ -77,6 +84,15 @@ class HolyGrailRuntime:
         self._warning_keys: set[str] = set()
         self._warning_messages: List[str] = []
         self._kline_cache: Dict[str, pd.DataFrame] = {}
+        self._last_factor_pool_fetch_used_cached_payload = False
+        self._last_factor_pool_cache_age_s: Optional[float] = None
+        self._http = create_retry_session(
+            user_agent="sheep-holy-grail-runtime/3.0",
+            total_retries=3,
+            backoff_factor=0.5,
+            pool_connections=8,
+            pool_maxsize=8,
+        )
 
     def info(self, message: str) -> None:
         self.log(message)
@@ -127,7 +143,7 @@ class HolyGrailRuntime:
         for api_base in prefixes:
             test_url = f"{api_base}/healthz"
             try:
-                res = requests.get(test_url, verify=False, timeout=5)
+                res = http_request(self._http, "GET", test_url, timeout=5, verify=resolve_tls_verify(default=True))
                 if res.status_code == 200 and "ok" in res.text.lower():
                     return api_base
             except requests.exceptions.RequestException:
@@ -141,9 +157,17 @@ class HolyGrailRuntime:
             )
         login_url = f"{api_base}/token"
         payload = {"username": user, "password": password, "name": "compute"}
-        resp = requests.post(login_url, json=payload, verify=False, timeout=15)
+        resp = http_request(
+            self._http,
+            "POST",
+            login_url,
+            timeout=15,
+            verify=resolve_tls_verify(default=True),
+            json=payload,
+        )
         if resp.status_code != 200:
-            raise RuntimeError(f"factor-pool login failed ({resp.status_code}): {resp.text}")
+            detail = self._summarize_http_body(resp.text)
+            raise RuntimeError(f"factor-pool login failed ({resp.status_code}): {detail}")
         token = str((resp.json() or {}).get("token") or "").strip()
         if not token:
             raise RuntimeError("factor-pool login succeeded but token was empty")
@@ -152,6 +176,64 @@ class HolyGrailRuntime:
     @staticmethod
     def _factor_pool_headers(token: str) -> Dict[str, str]:
         return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    @staticmethod
+    def _summarize_http_body(text: Any, *, limit: int = 160) -> str:
+        raw = redact_text(text).strip()
+        if not raw:
+            return ""
+        if "<html" in raw.lower():
+            match = re.search(r"<title>(.*?)</title>", raw, flags=re.IGNORECASE | re.DOTALL)
+            if match:
+                raw = match.group(1)
+            else:
+                raw = re.sub(r"<[^>]+>", " ", raw)
+        raw = re.sub(r"\s+", " ", raw).strip()
+        return raw[:limit]
+
+    @classmethod
+    def _remember_shared_factor_pool_cache(cls, payload: Tuple[List[Dict[str, Any]], str, str]) -> None:
+        try:
+            cached_payload = copy.deepcopy(payload)
+        except Exception:
+            cached_payload = payload
+        with cls._shared_factor_pool_cache_lock:
+            cls._shared_factor_pool_cache = cached_payload
+            cls._shared_factor_pool_cache_ts = time.time()
+
+    @classmethod
+    def _get_fresh_shared_factor_pool_cache(cls) -> Tuple[Optional[Tuple[List[Dict[str, Any]], str, str]], Optional[float]]:
+        with cls._shared_factor_pool_cache_lock:
+            payload = cls._shared_factor_pool_cache
+            cached_ts = float(cls._shared_factor_pool_cache_ts or 0.0)
+        if payload is None or cached_ts <= 0:
+            return None, None
+        age_s = max(0.0, time.time() - cached_ts)
+        if age_s > float(cls._shared_factor_pool_cache_ttl_sec):
+            return None, age_s
+        try:
+            return copy.deepcopy(payload), age_s
+        except Exception:
+            return payload, age_s
+
+    @staticmethod
+    def _is_auth_factor_pool_error(exc: Exception) -> bool:
+        text = str(exc or "").lower()
+        auth_markers = [
+            "(401)",
+            "(403)",
+            " 401",
+            " 403",
+            "unauthorized",
+            "forbidden",
+            "invalid token",
+            "token expired",
+            "token invalid",
+            "auth failed",
+            "login failed (401)",
+            "login failed (403)",
+        ]
+        return any(marker in text for marker in auth_markers)
 
     def _fetch_factor_pool_pages(self, api_base: str, token: str) -> List[Dict[str, Any]]:
         strategies_url = f"{api_base}/admin/strategies"
@@ -162,17 +244,27 @@ class HolyGrailRuntime:
             resp = None
             last_error = ""
             for attempt in range(3):
-                resp = requests.get(
-                    strategies_url,
-                    params={"page": page, "page_size": page_size},
-                    headers=self._factor_pool_headers(token),
-                    verify=False,
-                    timeout=60,
-                )
+                try:
+                    resp = http_request(
+                        self._http,
+                        "GET",
+                        strategies_url,
+                        timeout=60,
+                        verify=resolve_tls_verify(default=True),
+                        params={"page": page, "page_size": page_size},
+                        headers=self._factor_pool_headers(token),
+                    )
+                except requests.exceptions.RequestException as exc:
+                    last_error = f"factor-pool fetch failed: {summarize_http_detail(exc)}"
+                    if attempt < 2:
+                        self.log(f"[HolyGrail] factor pool page {page} 暫時不可用，{attempt + 1}/3 重試中...")
+                        time.sleep(1.5 * (attempt + 1))
+                        continue
+                    raise RuntimeError(last_error) from exc
                 if resp.status_code == 200:
                     break
-                last_error = f"factor-pool fetch failed ({resp.status_code}): {resp.text}"
-                if resp.status_code not in {429, 500, 502, 503, 504}:
+                last_error = f"factor-pool fetch failed ({resp.status_code}): {self._summarize_http_body(resp.text)}"
+                if resp.status_code not in {408, 425, 429, 500, 502, 503, 504, 521, 522, 523, 524}:
                     raise RuntimeError(last_error)
                 if attempt < 2:
                     self.log(f"[HolyGrail] factor pool page {page} 暫時不可用，{attempt + 1}/3 重試中...")
@@ -197,11 +289,13 @@ class HolyGrailRuntime:
 
     def _fetch_cost_settings(self, api_base: str, token: str, *, fallback_fee_side: float) -> Dict[str, Any]:
         try:
-            resp = requests.get(
+            resp = http_request(
+                self._http,
+                "GET",
                 f"{api_base}/settings/snapshot",
-                headers=self._factor_pool_headers(token),
-                verify=False,
                 timeout=20,
+                verify=resolve_tls_verify(default=True),
+                headers=self._factor_pool_headers(token),
             )
             if resp.status_code == 200:
                 payload = resp.json() or {}
@@ -238,22 +332,28 @@ class HolyGrailRuntime:
         host, token, user, password = self._factor_pool_creds()
         api_base = self.detect_api_base(host)
         attempts: List[str] = []
+        self._last_factor_pool_fetch_used_cached_payload = False
+        self._last_factor_pool_cache_age_s = None
 
         if token:
             try:
-                return self._fetch_factor_pool_pages(api_base, token), api_base, token
+                payload = (self._fetch_factor_pool_pages(api_base, token), api_base, token)
+                self._remember_shared_factor_pool_cache(payload)
+                return payload
             except Exception as exc:
                 attempts.append(str(exc))
+                if not user or not password or not self._is_auth_factor_pool_error(exc):
+                    raise
                 self.warn_once(
                     "factor-pool-token-fetch-failed",
                     f"[HolyGrail] factor pool token fetch failed, retrying with password auth: {exc}",
                 )
-                if not user or not password:
-                    raise
 
         login_token = self._issue_factor_pool_token(api_base, user, password)
         try:
-            return self._fetch_factor_pool_pages(api_base, login_token), api_base, login_token
+            payload = (self._fetch_factor_pool_pages(api_base, login_token), api_base, login_token)
+            self._remember_shared_factor_pool_cache(payload)
+            return payload
         except Exception as exc:
             attempts.append(str(exc))
             raise RuntimeError(" | ".join(attempts))
@@ -442,15 +542,146 @@ class HolyGrailRuntime:
             kind="mergesort",
         )
 
-    def _augment_directional_coverage(self, df_params: pd.DataFrame, *, top_n: int) -> Tuple[pd.DataFrame, Dict[str, int], Dict[str, int]]:
+    @staticmethod
+    def _timeframe_min_value(raw_value: Any) -> int:
+        try:
+            return int(raw_value or 0)
+        except Exception:
+            return 0
+
+    def _candidate_param_fingerprint(
+        self,
+        row: Any,
+        *,
+        direction: Optional[str] = None,
+        include_timeframe: bool = True,
+    ) -> str:
+        row_dict = dict(getattr(row, "items", lambda: [])())
+        param_dict = {
+            key: self._normalize_scalar(value)
+            for key, value in row_dict.items()
+            if str(key).startswith("param_") and pd.notna(value)
+        }
+        payload = {
+            "family": str(row_dict.get("family") or ""),
+            "symbol": str(row_dict.get("symbol") or ""),
+            "direction": normalize_direction(
+                direction if direction is not None else row_dict.get("direction"),
+                default="long",
+            ),
+            "params": param_dict,
+        }
+        if include_timeframe:
+            payload["timeframe_min"] = self._timeframe_min_value(row_dict.get("timeframe_min"))
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+
+    def _candidate_group_key(
+        self,
+        row: Any,
+        *,
+        direction: Optional[str] = None,
+    ) -> Tuple[str, str, str, int]:
+        row_dict = dict(getattr(row, "items", lambda: [])())
+        return (
+            str(row_dict.get("family") or ""),
+            str(row_dict.get("symbol") or ""),
+            normalize_direction(direction if direction is not None else row_dict.get("direction"), default="long"),
+            self._timeframe_min_value(row_dict.get("timeframe_min")),
+        )
+
+    def _distinct_group_count(self, frame: pd.DataFrame, *, direction: Optional[str] = None) -> int:
+        if frame is None or frame.empty:
+            return 0
+        group_keys = set()
+        for _, row in frame.iterrows():
+            group_keys.add(self._candidate_group_key(row, direction=direction))
+        return len(group_keys)
+
+    def _diversified_preselection_rows(
+        self,
+        frame: pd.DataFrame,
+        *,
+        limit: int,
+    ) -> Tuple[List[pd.Series], int]:
+        if frame is None or frame.empty or limit <= 0:
+            return [], 0
+
+        grouped_rows: Dict[Tuple[int, str, str], List[pd.Series]] = {}
+        timeframe_family_order: Dict[int, List[str]] = {}
+        family_groups: Dict[Tuple[int, str], List[Tuple[int, str, str]]] = {}
+        for _, row in frame.iterrows():
+            group_key = (
+                self._timeframe_min_value(row.get("timeframe_min")),
+                str(row.get("family") or ""),
+                str(row.get("symbol") or ""),
+            )
+            if group_key not in grouped_rows:
+                grouped_rows[group_key] = []
+                timeframe_min, family, _symbol = group_key
+                if timeframe_min not in timeframe_family_order:
+                    timeframe_family_order[timeframe_min] = []
+                if family not in timeframe_family_order[timeframe_min]:
+                    timeframe_family_order[timeframe_min].append(family)
+                family_groups.setdefault((timeframe_min, family), []).append(group_key)
+            grouped_rows[group_key].append(row.copy())
+
+        selected_rows: List[pd.Series] = []
+        selected_fingerprints: set[str] = set()
+        diversified_groups_used: set[Tuple[int, str, str]] = set()
+        timeframe_order = sorted(timeframe_family_order.keys())
+
+        made_progress = True
+        while made_progress and len(selected_rows) < limit:
+            made_progress = False
+            for timeframe_min in timeframe_order:
+                for family in timeframe_family_order.get(timeframe_min) or []:
+                    family_key = (timeframe_min, family)
+                    for group_key in family_groups.get(family_key) or []:
+                        bucket = grouped_rows.get(group_key) or []
+                        while bucket:
+                            candidate_row = bucket.pop(0)
+                            candidate_fp = self._candidate_param_fingerprint(candidate_row)
+                            if candidate_fp in selected_fingerprints:
+                                continue
+                            selected_rows.append(candidate_row)
+                            selected_fingerprints.add(candidate_fp)
+                            diversified_groups_used.add(group_key)
+                            made_progress = True
+                            break
+                        if made_progress and len(selected_rows) >= limit:
+                            break
+                    if len(selected_rows) >= limit:
+                        break
+                if len(selected_rows) >= limit:
+                    break
+
+        if len(selected_rows) < limit:
+            for _, row in frame.iterrows():
+                candidate_fp = self._candidate_param_fingerprint(row)
+                if candidate_fp in selected_fingerprints:
+                    continue
+                selected_rows.append(row.copy())
+                selected_fingerprints.add(candidate_fp)
+                if len(selected_rows) >= limit:
+                    break
+
+        return selected_rows[:limit], len(diversified_groups_used)
+
+    def _augment_directional_coverage(
+        self,
+        df_params: pd.DataFrame,
+        *,
+        top_n: int,
+    ) -> Tuple[pd.DataFrame, Dict[str, int], Dict[str, int], Dict[str, int]]:
         if df_params.empty:
             empty_counts = {"long": 0, "short": 0}
-            return df_params.copy(), empty_counts, empty_counts
+            return df_params.copy(), empty_counts, empty_counts, {"mirror_diversified_source_count": 0}
 
         working = self._prepare_candidate_sort_columns(df_params)
         source_counts = self._direction_counts(working)
         per_direction = max(1, int(top_n) // 2)
         augmented_rows: List[Dict[str, Any]] = []
+        mirror_diversified_source_count = 0
 
         for target_direction in ("long", "short"):
             existing_count = int(source_counts.get(target_direction) or 0)
@@ -467,42 +698,25 @@ class HolyGrailRuntime:
             seen_fingerprints: set[str] = set()
             target_frame = working[working["direction"] == target_direction]
             for _, row in target_frame.iterrows():
-                param_dict = {
-                    key: self._normalize_scalar(value)
-                    for key, value in row.items()
-                    if str(key).startswith("param_") and pd.notna(value)
-                }
-                fingerprint = json.dumps(
-                    {
-                        "family": str(row.get("family") or ""),
-                        "symbol": str(row.get("symbol") or ""),
-                        "direction": target_direction,
-                        "params": param_dict,
-                    },
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    default=str,
+                fingerprint = self._candidate_param_fingerprint(
+                    row,
+                    direction=target_direction,
+                    include_timeframe=True,
                 )
                 seen_fingerprints.add(fingerprint)
 
             added_count = 0
-            for _, row in source_frame.iterrows():
+            source_rows, diversified_count = self._diversified_preselection_rows(
+                source_frame,
+                limit=max(0, per_direction - existing_count),
+            )
+            mirror_diversified_source_count += int(diversified_count or 0)
+            for row in source_rows:
                 mirror = row.copy()
-                param_dict = {
-                    key: self._normalize_scalar(value)
-                    for key, value in mirror.items()
-                    if str(key).startswith("param_") and pd.notna(value)
-                }
-                fingerprint = json.dumps(
-                    {
-                        "family": str(mirror.get("family") or ""),
-                        "symbol": str(mirror.get("symbol") or ""),
-                        "direction": target_direction,
-                        "params": param_dict,
-                    },
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    default=str,
+                fingerprint = self._candidate_param_fingerprint(
+                    mirror,
+                    direction=target_direction,
+                    include_timeframe=True,
                 )
                 if fingerprint in seen_fingerprints:
                     continue
@@ -542,7 +756,15 @@ class HolyGrailRuntime:
             working = pd.concat([working, pd.DataFrame(augmented_rows)], ignore_index=True, sort=False)
             working = self._prepare_candidate_sort_columns(working)
         augmented_counts = self._direction_counts(working)
-        return working, source_counts, augmented_counts
+        return working, source_counts, augmented_counts, {
+            "mirror_diversified_source_count": int(mirror_diversified_source_count),
+            "augmented_long_distinct_groups": int(
+                self._distinct_group_count(working[working["direction"] == "long"].copy(), direction="long")
+            ),
+            "augmented_short_distinct_groups": int(
+                self._distinct_group_count(working[working["direction"] == "short"].copy(), direction="short")
+            ),
+        }
 
     def _candidate_pool(self, df_params: pd.DataFrame, *, top_n: int = 150, max_per_group: int = 3) -> pd.DataFrame:
         if df_params.empty:
@@ -566,7 +788,7 @@ class HolyGrailRuntime:
                 continue
 
             dir_selected: List[pd.Series] = []
-            group_counts: Dict[Tuple[str, str, str], int] = {}
+            group_counts: Dict[Tuple[str, str, str, int], int] = {}
             seen_params: set[str] = set()
 
             scored_df = self._sorted_preselection_frame(dir_df[dir_df["has_metrics"] == True].copy())
@@ -579,32 +801,36 @@ class HolyGrailRuntime:
             def _extend_from_frame(frame: pd.DataFrame, *, limit: int, bucket: str) -> None:
                 if limit <= 0 or frame.empty:
                     return
-                for _, row in frame.iterrows():
-                    family = str(row.get("family", "Unknown"))
-                    symbol = str(row.get("symbol", "Unknown"))
-                    row_direction = str(row.get("direction") or direction)
-                    group_key = (family, symbol, row_direction)
-                    param_dict = {
-                        key: value
-                        for key, value in row.items()
-                        if str(key).startswith("param_") and pd.notna(value)
-                    }
-                    param_fingerprint = f"{family}_{symbol}_{row_direction}_{json.dumps(param_dict, sort_keys=True, default=str)}"
-                    if param_fingerprint in seen_params:
-                        continue
-                    if group_counts.get(group_key, 0) >= max_per_group:
-                        continue
+                bucket_count = lambda: len([item for item in dir_selected if str(item.get("direction_bucket")) == bucket])
+                diversity_first = direction == "short"
+                pass_limits = list(range(1, int(max_per_group) + 1)) if diversity_first else [int(max_per_group)]
+                for pass_limit in pass_limits:
+                    if bucket_count() >= limit or len(dir_selected) >= per_direction:
+                        break
+                    for _, row in frame.iterrows():
+                        family = str(row.get("family", "Unknown"))
+                        symbol = str(row.get("symbol", "Unknown"))
+                        row_direction = str(row.get("direction") or direction)
+                        timeframe_min = self._timeframe_min_value(row.get("timeframe_min"))
+                        group_key = (family, symbol, row_direction, timeframe_min)
+                        param_fingerprint = self._candidate_param_fingerprint(
+                            row,
+                            direction=row_direction,
+                            include_timeframe=True,
+                        )
+                        if param_fingerprint in seen_params:
+                            continue
+                        if group_counts.get(group_key, 0) >= min(pass_limit, int(max_per_group)):
+                            continue
 
-                    row_copy = row.copy()
-                    row_copy["direction_bucket"] = bucket
-                    row_copy["preselect_rank"] = len(dir_selected) + 1
-                    dir_selected.append(row_copy)
-                    group_counts[group_key] = group_counts.get(group_key, 0) + 1
-                    seen_params.add(param_fingerprint)
-                    if len([item for item in dir_selected if str(item.get("direction_bucket")) == bucket]) >= limit:
-                        break
-                    if len(dir_selected) >= per_direction:
-                        break
+                        row_copy = row.copy()
+                        row_copy["direction_bucket"] = bucket
+                        row_copy["preselect_rank"] = len(dir_selected) + 1
+                        dir_selected.append(row_copy)
+                        group_counts[group_key] = group_counts.get(group_key, 0) + 1
+                        seen_params.add(param_fingerprint)
+                        if bucket_count() >= limit or len(dir_selected) >= per_direction:
+                            break
 
             _extend_from_frame(scored_df, limit=scored_target, bucket="scored")
             _extend_from_frame(explore_df, limit=exploration_target, bucket="exploration")
@@ -809,6 +1035,167 @@ class HolyGrailRuntime:
         )
 
     @staticmethod
+    def _candidate_score_vector(candidate: Dict[str, Any]) -> Tuple[float, float, float, float]:
+        perf = candidate.get("perf") or {}
+        row_data = candidate.get("row_data") or {}
+        return (
+            float(perf.get("sharpe") or 0.0),
+            float(perf.get("cagr_pct") or 0.0),
+            float(row_data.get("cand_score") or 0.0),
+            -float(perf.get("max_drawdown_pct") or 0.0),
+        )
+
+    def _select_balanced_pairing(
+        self,
+        *,
+        long_candidates: List[Dict[str, Any]],
+        short_candidates: List[Dict[str, Any]],
+        corr_matrix: pd.DataFrame,
+        corr_threshold: float,
+        max_pairs: int,
+    ) -> Tuple[List[Tuple[Dict[str, Any], Dict[str, Any]]], int]:
+        longs = [candidate for candidate in list(long_candidates or []) if candidate]
+        shorts = [candidate for candidate in list(short_candidates or []) if candidate]
+        if not longs or not shorts or max_pairs <= 0:
+            return [], 0
+
+        candidate_by_key: Dict[str, Dict[str, Any]] = {}
+        for candidate in longs + shorts:
+            curve_key = str(candidate.get("curve_key") or "")
+            if curve_key:
+                candidate_by_key[curve_key] = candidate
+
+        compat_cache: Dict[Tuple[str, str], bool] = {}
+
+        def _compatible(left_key: str, right_key: str) -> bool:
+            if not left_key or not right_key:
+                return False
+            if left_key == right_key:
+                return False
+            cache_key = tuple(sorted((left_key, right_key)))
+            cached = compat_cache.get(cache_key)
+            if cached is not None:
+                return cached
+            compatible = abs(self._corr_value(corr_matrix, left_key, right_key)) <= float(corr_threshold)
+            compat_cache[cache_key] = compatible
+            return compatible
+
+        feasible_shorts_by_long: Dict[str, List[str]] = {}
+        feasible_edges_count = 0
+        for long_candidate in longs:
+            long_key = str(long_candidate.get("curve_key") or "")
+            feasible_shorts: List[str] = []
+            for short_candidate in shorts:
+                short_key = str(short_candidate.get("curve_key") or "")
+                if _compatible(long_key, short_key):
+                    feasible_shorts.append(short_key)
+            feasible_shorts_by_long[long_key] = feasible_shorts
+            feasible_edges_count += len(feasible_shorts)
+
+        if feasible_edges_count <= 0:
+            return [], 0
+
+        long_keys = [str(candidate.get("curve_key") or "") for candidate in longs if str(candidate.get("curve_key") or "")]
+        short_keys = [str(candidate.get("curve_key") or "") for candidate in shorts if str(candidate.get("curve_key") or "")]
+        score_vector_by_key = {
+            curve_key: self._candidate_score_vector(candidate_by_key[curve_key])
+            for curve_key in list(candidate_by_key.keys())
+        }
+
+        def _pair_score(long_key: str, short_key: str) -> Tuple[float, float, float, float]:
+            left = score_vector_by_key.get(long_key, (0.0, 0.0, 0.0, 0.0))
+            right = score_vector_by_key.get(short_key, (0.0, 0.0, 0.0, 0.0))
+            return tuple(float(left[idx]) + float(right[idx]) for idx in range(len(left)))
+
+        best_pairs: List[Tuple[str, str]] = []
+        best_score: Tuple[float, float, float, float] = (0.0, 0.0, 0.0, 0.0)
+
+        def _search(
+            remaining_long_keys: List[str],
+            remaining_short_keys: List[str],
+            selected_pairs: List[Tuple[str, str]],
+            selected_keys: List[str],
+            total_score: Tuple[float, float, float, float],
+        ) -> None:
+            nonlocal best_pairs, best_score
+
+            current_pair_count = len(selected_pairs)
+            best_pair_count = len(best_pairs)
+            max_possible_pairs = current_pair_count + min(
+                max(0, int(max_pairs) - current_pair_count),
+                len(remaining_long_keys),
+                len(remaining_short_keys),
+            )
+            if max_possible_pairs < best_pair_count:
+                return
+
+            if (
+                current_pair_count > best_pair_count
+                or (current_pair_count == best_pair_count and total_score > best_score)
+            ):
+                best_pairs = list(selected_pairs)
+                best_score = tuple(total_score)
+
+            if current_pair_count >= int(max_pairs) or not remaining_long_keys or not remaining_short_keys:
+                return
+
+            chosen_long_key = ""
+            chosen_short_keys: List[str] = []
+            for long_key in remaining_long_keys:
+                feasible_short_keys: List[str] = []
+                for short_key in remaining_short_keys:
+                    if short_key not in feasible_shorts_by_long.get(long_key, []):
+                        continue
+                    if any(not _compatible(long_key, selected_key) for selected_key in selected_keys):
+                        continue
+                    if any(not _compatible(short_key, selected_key) for selected_key in selected_keys):
+                        continue
+                    feasible_short_keys.append(short_key)
+                if not chosen_long_key or len(feasible_short_keys) < len(chosen_short_keys):
+                    chosen_long_key = long_key
+                    chosen_short_keys = feasible_short_keys
+                    if not chosen_short_keys:
+                        break
+
+            if not chosen_long_key:
+                return
+
+            next_long_keys = [key for key in remaining_long_keys if key != chosen_long_key]
+            for short_key in sorted(
+                chosen_short_keys,
+                key=lambda key: _pair_score(chosen_long_key, key),
+                reverse=True,
+            ):
+                next_short_keys = [key for key in remaining_short_keys if key != short_key]
+                pair_score = _pair_score(chosen_long_key, short_key)
+                next_total_score = tuple(
+                    float(total_score[idx]) + float(pair_score[idx]) for idx in range(len(total_score))
+                )
+                _search(
+                    next_long_keys,
+                    next_short_keys,
+                    selected_pairs + [(chosen_long_key, short_key)],
+                    selected_keys + [chosen_long_key, short_key],
+                    next_total_score,
+                )
+
+            _search(
+                next_long_keys,
+                remaining_short_keys,
+                selected_pairs,
+                selected_keys,
+                total_score,
+            )
+
+        _search(long_keys, short_keys, [], [], (0.0, 0.0, 0.0, 0.0))
+        ordered_pairs = sorted(best_pairs, key=lambda item: _pair_score(item[0], item[1]), reverse=True)
+        return [
+            (candidate_by_key[long_key], candidate_by_key[short_key])
+            for long_key, short_key in ordered_pairs
+            if long_key in candidate_by_key and short_key in candidate_by_key
+        ], int(feasible_edges_count)
+
+    @staticmethod
     def _corr_value(corr_matrix: pd.DataFrame, left_key: str, right_key: str) -> float:
         if corr_matrix.empty or left_key not in corr_matrix.index or right_key not in corr_matrix.columns:
             return 0.0
@@ -908,7 +1295,12 @@ class HolyGrailRuntime:
                 warnings=list(self._warning_messages),
             )
 
-        df_params, source_direction_counts, augmented_direction_counts = self._augment_directional_coverage(
+        (
+            df_params,
+            source_direction_counts,
+            augmented_direction_counts,
+            augment_diagnostics,
+        ) = self._augment_directional_coverage(
             df_params,
             top_n=top_n_candidates,
         )
@@ -923,10 +1315,16 @@ class HolyGrailRuntime:
                 diagnostics={
                     "source_direction_counts": source_direction_counts,
                     "augmented_direction_counts": augmented_direction_counts,
+                    "mirror_diversified_source_count": int(augment_diagnostics.get("mirror_diversified_source_count") or 0),
                 },
                 warnings=list(self._warning_messages),
             )
         candidate_pool_direction_counts = self._direction_counts(pool_df)
+        short_pool = pool_df[pool_df["direction"] == "short"].copy() if "direction" in pool_df.columns else pool_df.iloc[0:0].copy()
+        candidate_pool_unique_short_groups = int(self._distinct_group_count(short_pool, direction="short"))
+        candidate_pool_unique_short_timeframes = int(
+            short_pool["timeframe_min"].nunique(dropna=True)
+        ) if not short_pool.empty and "timeframe_min" in short_pool.columns else 0
 
         equity_curves: Dict[str, pd.Series] = {}
         detailed_results_cache: Dict[str, Dict[str, Any]] = {}
@@ -1102,48 +1500,21 @@ class HolyGrailRuntime:
         selected_curve_keys: List[str] = []
         selected_counts_by_direction: Dict[str, int] = {"long": 0, "short": 0}
         pair_count = 0
+        selected_pairs, feasible_pair_edges = self._select_balanced_pairing(
+            long_candidates=eligible_by_direction.get("long") or [],
+            short_candidates=eligible_by_direction.get("short") or [],
+            corr_matrix=corr_matrix,
+            corr_threshold=float(corr_threshold),
+            max_pairs=max_pairs,
+        )
 
-        for pair_rank in range(1, max_pairs + 1):
-            feasible_pair: Optional[Tuple[Dict[str, Any], Dict[str, Any], Tuple[float, float], Tuple[float, float]]] = None
-            for long_candidate in eligible_by_direction.get("long", []):
-                if str(long_candidate.get("selection_status") or "") != "candidate":
-                    continue
-                long_curve_key = str(long_candidate.get("curve_key") or "")
-                long_avg_corr, long_max_corr = _corr_stats(long_curve_key, selected_curve_keys)
-                if long_max_corr > float(corr_threshold):
-                    long_candidate["avg_pairwise_corr_to_selected"] = long_avg_corr
-                    long_candidate["max_pairwise_corr_to_selected"] = long_max_corr
-                    long_candidate["selection_status"] = "rejected_corr"
-                    long_candidate["selection_reject_reason"] = f"pairwise_corr>{float(corr_threshold):.4f}"
-                    continue
-
-                for short_candidate in eligible_by_direction.get("short", []):
-                    if str(short_candidate.get("selection_status") or "") != "candidate":
-                        continue
-                    short_curve_key = str(short_candidate.get("curve_key") or "")
-                    short_against = list(selected_curve_keys) + [long_curve_key]
-                    short_avg_corr, short_max_corr = _corr_stats(short_curve_key, short_against)
-                    if short_max_corr > float(corr_threshold):
-                        continue
-                    feasible_pair = (
-                        long_candidate,
-                        short_candidate,
-                        (long_avg_corr, long_max_corr),
-                        (short_avg_corr, short_max_corr),
-                    )
-                    break
-                if feasible_pair is not None:
-                    break
-
-            if feasible_pair is None:
-                break
-
-            long_candidate, short_candidate, long_corr_stats, short_corr_stats = feasible_pair
-            for selected_candidate, direction, corr_stats in (
-                (long_candidate, "long", long_corr_stats),
-                (short_candidate, "short", short_corr_stats),
+        for pair_rank, (long_candidate, short_candidate) in enumerate(selected_pairs, start=1):
+            for selected_candidate, direction in (
+                (long_candidate, "long"),
+                (short_candidate, "short"),
             ):
                 curve_key = str(selected_candidate.get("curve_key") or "")
+                avg_corr, max_corr = _corr_stats(curve_key, selected_curve_keys)
                 selected_curve_keys.append(curve_key)
                 selected_counts_by_direction[direction] = int(selected_counts_by_direction.get(direction, 0)) + 1
                 selected_candidate["selection_status"] = "selected"
@@ -1151,9 +1522,36 @@ class HolyGrailRuntime:
                 selected_candidate["selected_rank"] = len(selected_curve_keys)
                 selected_candidate["selected_pair_rank"] = int(pair_rank)
                 selected_candidate["selected_direction_rank"] = int(selected_counts_by_direction[direction])
-                selected_candidate["avg_pairwise_corr_to_selected"] = float(corr_stats[0])
-                selected_candidate["max_pairwise_corr_to_selected"] = float(corr_stats[1])
+                selected_candidate["avg_pairwise_corr_to_selected"] = float(avg_corr)
+                selected_candidate["max_pairwise_corr_to_selected"] = float(max_corr)
             pair_count += 1
+
+        def _has_feasible_opposite_pair(candidate: Dict[str, Any]) -> bool:
+            direction = normalize_direction(candidate.get("direction"), default="long")
+            opposite_direction = "short" if direction == "long" else "long"
+            curve_key = str(candidate.get("curve_key") or "")
+            avg_corr, max_corr = _corr_stats(curve_key, selected_curve_keys)
+            if max_corr > float(corr_threshold):
+                return False
+            for opposite_candidate in representative_candidates:
+                if opposite_candidate is candidate:
+                    continue
+                if normalize_direction(opposite_candidate.get("direction"), default="long") != opposite_direction:
+                    continue
+                if str(opposite_candidate.get("selection_status") or "") == "rejected_performance":
+                    continue
+                opposite_curve_key = str(opposite_candidate.get("curve_key") or "")
+                if not opposite_curve_key:
+                    continue
+                if abs(self._corr_value(corr_matrix, curve_key, opposite_curve_key)) > float(corr_threshold):
+                    continue
+                if str(opposite_candidate.get("selection_status") or "") == "selected":
+                    return True
+                opposite_against = list(selected_curve_keys) + [curve_key]
+                _opp_avg_corr, opp_max_corr = _corr_stats(opposite_curve_key, opposite_against)
+                if opp_max_corr <= float(corr_threshold):
+                    return True
+            return False
 
         for candidate in representative_candidates:
             if str(candidate.get("selection_status") or "") != "candidate":
@@ -1168,6 +1566,9 @@ class HolyGrailRuntime:
             elif max_corr > float(corr_threshold):
                 candidate["selection_status"] = "rejected_corr"
                 candidate["selection_reject_reason"] = f"pairwise_corr>{float(corr_threshold):.4f}"
+            elif not _has_feasible_opposite_pair(candidate):
+                candidate["selection_status"] = "rejected_corr"
+                candidate["selection_reject_reason"] = "no_feasible_pair_under_corr"
             else:
                 candidate["selection_status"] = "rejected_balance"
                 candidate["selection_reject_reason"] = "no_balanced_pair_available"
@@ -1364,12 +1765,18 @@ class HolyGrailRuntime:
                 "source_short_candidates": int(source_direction_counts.get("short") or 0),
                 "augmented_long_candidates": int(augmented_direction_counts.get("long") or 0),
                 "augmented_short_candidates": int(augmented_direction_counts.get("short") or 0),
+                "mirror_diversified_source_count": int(augment_diagnostics.get("mirror_diversified_source_count") or 0),
+                "augmented_short_distinct_groups": int(augment_diagnostics.get("augmented_short_distinct_groups") or 0),
                 "candidate_pool_long": int(candidate_pool_direction_counts.get("long") or 0),
                 "candidate_pool_short": int(candidate_pool_direction_counts.get("short") or 0),
+                "candidate_pool_unique_short_groups": int(candidate_pool_unique_short_groups),
+                "candidate_pool_unique_short_timeframes": int(candidate_pool_unique_short_timeframes),
                 "backtested_long": int(backtested_direction_counts.get("long") or 0),
                 "backtested_short": int(backtested_direction_counts.get("short") or 0),
                 "eligible_long": int(eligible_direction_counts.get("long") or 0),
                 "eligible_short": int(eligible_direction_counts.get("short") or 0),
+                "balanced_pair_feasible_edges": int(feasible_pair_edges),
+                "balanced_pair_count_max_possible": int(len(selected_pairs)),
                 "sharpe": round(sharpe, 6),
                 "sortino": round(sortino, 6),
                 "calmar": round(calmar, 6),
@@ -1464,9 +1871,15 @@ class HolyGrailRuntime:
                 "cost_basis": cost_basis,
                 "source_direction_counts": source_direction_counts,
                 "augmented_direction_counts": augmented_direction_counts,
+                "mirror_diversified_source_count": int(augment_diagnostics.get("mirror_diversified_source_count") or 0),
+                "augmented_short_distinct_groups": int(augment_diagnostics.get("augmented_short_distinct_groups") or 0),
                 "candidate_pool_direction_counts": candidate_pool_direction_counts,
+                "candidate_pool_unique_short_groups": int(candidate_pool_unique_short_groups),
+                "candidate_pool_unique_short_timeframes": int(candidate_pool_unique_short_timeframes),
                 "backtested_direction_counts": backtested_direction_counts,
                 "eligible_direction_counts": eligible_direction_counts,
+                "balanced_pair_feasible_edges": int(feasible_pair_edges),
+                "balanced_pair_count_max_possible": int(len(selected_pairs)),
                 "empty_result_reason": empty_result_reason,
             },
         )

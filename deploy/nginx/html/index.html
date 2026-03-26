@@ -1022,6 +1022,96 @@
                         </div>
 
                         <div v-if="adminSubTab === 'pools'" class="space-y-6">
+                            <div class="rounded-xl border border-white/10 bg-black/30 p-4 space-y-4">
+                                <div class="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+                                    <div>
+                                        <div class="text-sm font-semibold text-white">Realtime Daemon Control</div>
+                                        <div class="mt-1 text-xs text-slate-400">狀態由 VM 上的 headless realtime daemon heartbeat 回報，網站只讀 shared runtime status，不直接碰 Docker socket。</div>
+                                    </div>
+                                    <div class="flex flex-wrap gap-2">
+                                        <button @click="submitRealtimeControl('start_shadow')" class="rounded-lg border border-sky-400/30 px-3 py-2 text-xs text-sky-200 hover:bg-sky-400/10">start shadow</button>
+                                        <button @click="submitRealtimeControl('promote_live')" class="rounded-lg border border-emerald-400/30 px-3 py-2 text-xs text-emerald-200 hover:bg-emerald-400/10">promote live</button>
+                                        <button @click="submitRealtimeControl('restart_shadow')" class="rounded-lg border border-amber-400/30 px-3 py-2 text-xs text-amber-200 hover:bg-amber-400/10">restart shadow</button>
+                                        <button @click="submitRealtimeControl('stop')" class="rounded-lg border border-red-400/30 px-3 py-2 text-xs text-red-200 hover:bg-red-400/10">stop</button>
+                                    </div>
+                                </div>
+                                <div class="grid grid-cols-1 gap-3 md:grid-cols-5">
+                                    <div class="rounded-lg border border-white/10 bg-black/20 p-3">
+                                        <div class="text-[11px] text-slate-500">health</div>
+                                        <div class="mt-1 text-lg font-semibold uppercase" :class="realtimeHealthClass">{{ realtimeHealthText }}</div>
+                                    </div>
+                                    <div class="rounded-lg border border-white/10 bg-black/20 p-3">
+                                        <div class="text-[11px] text-slate-500">daemon mode</div>
+                                        <div class="mt-1 text-lg text-white cyber-num">{{ adminRealtime.mode || '--' }}</div>
+                                    </div>
+                                    <div class="rounded-lg border border-white/10 bg-black/20 p-3">
+                                        <div class="text-[11px] text-slate-500">heartbeat</div>
+                                        <div class="mt-1 text-sm text-white">{{ formatDate(adminRealtime.last_heartbeat_at) }}</div>
+                                    </div>
+                                    <div class="rounded-lg border border-white/10 bg-black/20 p-3">
+                                        <div class="text-[11px] text-slate-500">last round</div>
+                                        <div class="mt-1 text-lg text-white cyber-num">{{ Number(adminRealtime.last_round_ms || 0).toFixed(0) }} ms</div>
+                                    </div>
+                                    <div class="rounded-lg border border-white/10 bg-black/20 p-3">
+                                        <div class="text-[11px] text-slate-500">rss / cpu</div>
+                                        <div class="mt-1 text-sm text-white">{{ Number(adminRealtime.resource_summary?.rss_mb || 0).toFixed(1) }} MB / {{ Number(adminRealtime.resource_summary?.cpu_percent || 0).toFixed(1) }}%</div>
+                                    </div>
+                                </div>
+                                <div class="rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-slate-400">
+                                    desired: {{ adminRealtime.desired_state || adminRealtime.control?.desired_state || 'stopped' }}
+                                    <span class="ml-4">mode: {{ adminRealtime.desired_mode || adminRealtime.control?.mode || 'shadow' }}</span>
+                                    <span class="ml-4">short bottleneck: {{ adminRealtime.holy_grail_diagnostics?.empty_result_reason || adminRealtime.holy_grail_diagnostics?.upstream_failure_stage || '-' }}</span>
+                                </div>
+                                <div class="rounded-lg border border-white/10 bg-black/20 p-3">
+                                    <div class="text-xs font-semibold text-white">Symbol Executor Monitor</div>
+                                    <div class="mt-2 grid gap-2" v-if="(adminRealtime.symbol_state_items || []).length > 0">
+                                        <div v-for="item in adminRealtime.symbol_state_items" :key="`realtime-symbol-${item.symbol}`" class="grid grid-cols-1 gap-2 rounded-lg border border-white/10 bg-black/20 p-3 text-xs text-slate-300 md:grid-cols-6">
+                                            <div><span class="text-slate-500">symbol</span><div class="mt-1 text-white">{{ item.symbol || '-' }}</div></div>
+                                            <div><span class="text-slate-500">actual</span><div class="mt-1 text-white cyber-num">{{ item.actual_qty ?? '--' }}</div></div>
+                                            <div><span class="text-slate-500">target</span><div class="mt-1 text-white cyber-num">{{ item.target_qty ?? '--' }}</div></div>
+                                            <div><span class="text-slate-500">delta</span><div class="mt-1 text-white cyber-num">{{ item.delta_qty ?? ((Number(item.target_qty || 0) - Number(item.actual_qty || 0)).toFixed(8)) }}</div></div>
+                                            <div><span class="text-slate-500">buffer</span><div class="mt-1 text-white">{{ item.buffer_state || '-' }}</div></div>
+                                            <div><span class="text-slate-500">mode</span><div class="mt-1 text-white">{{ item.executor_mode || '-' }}<span class="ml-2 text-slate-500" v-if="item.offboarding">offboarding</span></div></div>
+                                        </div>
+                                    </div>
+                                    <div v-else class="mt-2 text-xs text-slate-500">目前沒有 symbol executor state。</div>
+                                </div>
+                            </div>
+
+                            <div class="rounded-xl border border-white/10 bg-black/30 p-4 space-y-3">
+                                <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                                    <div>
+                                        <div class="text-sm font-semibold text-white">Strict Prune 未挖掘策略池</div>
+                                        <div class="mt-1 text-xs text-slate-400">僅刪除目前 active cycle 中，未挖掘、無 candidates / submissions / strategies，且沒有 in-flight task 或未過期 lease 的 pool。</div>
+                                    </div>
+                                    <div class="flex flex-wrap gap-2">
+                                        <button @click="previewPrunePools" :disabled="adminPruneBusy" class="rounded-lg border border-white/10 px-3 py-2 text-xs text-slate-200 hover:bg-white/5 disabled:opacity-40">Dry Run 預覽</button>
+                                        <button @click="executePrunePools" :disabled="adminPruneBusy || !adminPrunePreview || !Number(adminPrunePreview.pool_count || 0)" class="rounded-lg bg-red-600 px-3 py-2 text-xs font-semibold text-white hover:bg-red-500 disabled:opacity-40">一鍵刪除未挖掘 pool</button>
+                                    </div>
+                                </div>
+                                <div v-if="adminPrunePreview" class="grid grid-cols-1 gap-3 md:grid-cols-4">
+                                    <div class="rounded-lg border border-white/10 bg-black/20 p-3">
+                                        <div class="text-[11px] text-slate-500">Cycle</div>
+                                        <div class="mt-1 text-lg text-white cyber-num">{{ adminPrunePreview.cycle_id || 0 }}</div>
+                                    </div>
+                                    <div class="rounded-lg border border-white/10 bg-black/20 p-3">
+                                        <div class="text-[11px] text-slate-500">可刪除 pool</div>
+                                        <div class="mt-1 text-lg text-white cyber-num">{{ adminPrunePreview.pool_count || 0 }}</div>
+                                    </div>
+                                    <div class="rounded-lg border border-white/10 bg-black/20 p-3">
+                                        <div class="text-[11px] text-slate-500">關聯 task</div>
+                                        <div class="mt-1 text-lg text-white cyber-num">{{ adminPrunePreview.task_count || 0 }}</div>
+                                    </div>
+                                    <div class="rounded-lg border border-white/10 bg-black/20 p-3">
+                                        <div class="text-[11px] text-slate-500">Param Combos</div>
+                                        <div class="mt-1 text-lg text-white cyber-num">{{ adminPrunePreview.param_combo_count || 0 }}</div>
+                                    </div>
+                                </div>
+                                <div v-if="adminPrunePreview" class="text-xs text-slate-400">
+                                    sample pool ids: {{ (adminPrunePreview.sample_pool_ids || []).join(', ') || '-' }}
+                                    <span class="ml-4">blocked pool ids: {{ (adminPrunePreview.blocked_pool_ids || []).join(', ') || '-' }}</span>
+                                </div>
+                            </div>
                             <div v-if="adminPools.length === 0" class="text-gray-400 text-sm">目前週期無策略池。</div>
                             <div v-for="(p, index) in adminPools" :key="p.id" class="border border-white/10 p-4 rounded-md bg-black/30 transition-colors">
                                 <div class="flex justify-between items-center cursor-pointer" @click="p._expanded = !p._expanded">
@@ -1058,6 +1148,19 @@
                         </div>
 
                         <div v-if="adminSubTab === 'livestrats'" class="space-y-4">
+                            <div class="rounded-xl border border-white/10 bg-black/30 p-4">
+                                <div class="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                                    <div>
+                                        <div class="text-sm font-semibold text-white">Realtime Health Strip</div>
+                                        <div class="mt-1 text-xs text-slate-400">目前 daemon：<span :class="realtimeHealthClass">{{ realtimeHealthText }}</span>，heartbeat {{ formatDate(adminRealtime.last_heartbeat_at) }}，last round {{ Number(adminRealtime.last_round_ms || 0).toFixed(0) }} ms。</div>
+                                    </div>
+                                    <div class="flex flex-wrap gap-2">
+                                        <button @click="submitRealtimeControl('start_shadow')" class="rounded-lg border border-sky-400/30 px-3 py-2 text-xs text-sky-200 hover:bg-sky-400/10">start shadow</button>
+                                        <button @click="submitRealtimeControl('promote_live')" class="rounded-lg border border-emerald-400/30 px-3 py-2 text-xs text-emerald-200 hover:bg-emerald-400/10">promote live</button>
+                                        <button @click="submitRealtimeControl('stop')" class="rounded-lg border border-red-400/30 px-3 py-2 text-xs text-red-200 hover:bg-red-400/10">stop</button>
+                                    </div>
+                                </div>
+                            </div>
                             <div class="grid grid-cols-1 xl:grid-cols-3 gap-3">
                                 <div class="rounded-xl border border-white/10 bg-black/30 p-4">
                                     <div class="text-xs text-slate-400">網站已上線策略</div>
@@ -1489,6 +1592,9 @@
                 const adminStrats = ref([]);
                 const adminError = ref('');
                 const adminDiagnostics = reactive({ runtime_sync: {} });
+                const adminRealtime = reactive({ runtime_sync: {}, symbol_state_items: [], holy_grail_diagnostics: {}, resource_summary: {}, control: {} });
+                const adminPrunePreview = ref(null);
+                const adminPruneBusy = ref(false);
                 const adminStratSummary = reactive({ global_runtime: {}, personal_runtime: {} });
                 const adminStratFilters = reactive({ q: '', username: '', symbol: '', direction: '' });
                 const adminStratPage = ref(1);
@@ -1875,6 +1981,81 @@
                     Object.assign(adminDiagnostics, res || { runtime_sync: {} });
                 };
 
+                const loadAdminRealtimeStatus = async () => {
+                    if (!user.value || user.value.role !== 'admin') return;
+                    const [statusRes, diagRes] = await Promise.all([
+                        fetchApi('/admin/realtime/status'),
+                        fetchApi('/admin/holy-grail/diagnostics/latest'),
+                    ]);
+                    Object.assign(adminRealtime, statusRes || { runtime_sync: {}, symbol_state_items: [], holy_grail_diagnostics: {}, resource_summary: {}, control: {} });
+                    adminRealtime.holy_grail_diagnostics = diagRes?.diagnostics || adminRealtime.holy_grail_diagnostics || {};
+                };
+
+                const realtimeHealthText = computed(() => {
+                    const state = String(adminRealtime.health_state || adminRealtime.daemon?.state || 'stopped').toLowerCase();
+                    if (state === 'shadow') return 'shadow';
+                    if (state === 'live') return 'live';
+                    if (state === 'stale') return 'stale';
+                    if (state === 'degraded') return 'degraded';
+                    if (state === 'running') return 'retrying';
+                    return 'stopped';
+                });
+
+                const realtimeHealthClass = computed(() => {
+                    const state = realtimeHealthText.value;
+                    if (state === 'live') return 'text-emerald-300';
+                    if (state === 'shadow') return 'text-sky-300';
+                    if (state === 'stale') return 'text-amber-300';
+                    if (state === 'degraded' || state === 'retrying') return 'text-orange-300';
+                    return 'text-slate-400';
+                });
+
+                const submitRealtimeControl = async (action) => {
+                    if (!user.value || user.value.role !== 'admin') return;
+                    try {
+                        await fetchApi('/admin/realtime/control', {
+                            method: 'POST',
+                            body: JSON.stringify({ action, reason: `web_admin_${action}` }),
+                        });
+                        await loadAdminRealtimeStatus();
+                        showToast(`Realtime control 已送出：${action}`, 'success', 3000);
+                    } catch (e) {
+                        showToast(`Realtime control 失敗：${e.message}`, 'error', 4000);
+                    }
+                };
+
+                const previewPrunePools = async () => {
+                    if (!user.value || user.value.role !== 'admin') return;
+                    try {
+                        adminPruneBusy.value = true;
+                        adminPrunePreview.value = await fetchApi('/admin/factor_pools/prune?dry_run=true', { method: 'POST' });
+                    } catch (e) {
+                        showToast(`策略池預覽失敗：${e.message}`, 'error', 4000);
+                    } finally {
+                        adminPruneBusy.value = false;
+                    }
+                };
+
+                const executePrunePools = async () => {
+                    if (!adminPrunePreview.value || !Number(adminPrunePreview.value.pool_count || 0)) {
+                        showToast('沒有可刪除的未挖掘策略池。', 'info', 3000);
+                        return;
+                    }
+                    if (!window.confirm(`確定要硬刪 ${adminPrunePreview.value.pool_count} 個未挖掘策略池嗎？`)) {
+                        return;
+                    }
+                    try {
+                        adminPruneBusy.value = true;
+                        adminPrunePreview.value = await fetchApi('/admin/factor_pools/prune?dry_run=false', { method: 'POST' });
+                        await loadAdminData();
+                        showToast('未挖掘策略池已完成 strict prune。', 'success', 3000);
+                    } catch (e) {
+                        showToast(`策略池刪除失敗：${e.message}`, 'error', 4000);
+                    } finally {
+                        adminPruneBusy.value = false;
+                    }
+                };
+
                 const refreshAdminStrategies = async (resetPage = false) => {
                     try {
                         adminError.value = '';
@@ -1949,6 +2130,7 @@
                         await Promise.all([
                             loadAdminStrategies({ resetPage: false }),
                             loadAdminDiagnostics(),
+                            loadAdminRealtimeStatus(),
                             loadAdminAnnouncements(false),
                         ]);
                     } catch(e) {
@@ -3034,7 +3216,7 @@
                     activeTasks, activeTaskEmptyStateText, ratingView, setRatingView, paginatedRatingTasks, activeRatingPage, totalRatingPages, changeRatingPage,
                     qualifiedTasks, rejectedArchiveTasks, leaderboardSections, activeLeaderboardKey, activeLeaderboardSection, leaderboardState, leaderboardEmptyStateText, leaderboardStatusText, manualRefreshLeaderboard, formatLeaderboardValue,
                     getReviewStatus, getReviewStatusMeta, getReviewDetail,
-                    adminSubTab, adminThresholds, adminPools, adminStrats, adminError, adminDiagnostics, adminStratSummary, adminStratFilters, adminStratPage, adminStratPageSize, adminStratTotal, adminStratHasNext, adminStratTotalPages, adminDefaultAvatar, loadAdminData, refreshAdminStrategies, resetAdminStrategyFilters, changeAdminStratPage, downloadAdminErrors, saveThresholds, savePool, handleDefaultAvatarChange, saveDefaultAvatar, clearDefaultAvatar,
+                    adminSubTab, adminThresholds, adminPools, adminStrats, adminError, adminDiagnostics, adminRealtime, adminPrunePreview, adminPruneBusy, realtimeHealthText, realtimeHealthClass, submitRealtimeControl, previewPrunePools, executePrunePools, adminStratSummary, adminStratFilters, adminStratPage, adminStratPageSize, adminStratTotal, adminStratHasNext, adminStratTotalPages, adminDefaultAvatar, loadAdminData, refreshAdminStrategies, resetAdminStrategyFilters, changeAdminStratPage, downloadAdminErrors, saveThresholds, savePool, handleDefaultAvatarChange, saveDefaultAvatar, clearDefaultAvatar,
                     adminAnnouncements, adminAnnouncementTotal, adminAnnouncementPage, adminAnnouncementPageSize, adminAnnouncementTotalPages, adminAnnouncementFilters, announcementEditor, loadAdminAnnouncements, changeAdminAnnouncementPage, resetAnnouncementEditor, editAnnouncement, saveAnnouncement, publishAnnouncement, unpublishAnnouncement,
                     catalogImportText, catalogImportResult, handleCatalogFileChange, runCatalogImport
                 };

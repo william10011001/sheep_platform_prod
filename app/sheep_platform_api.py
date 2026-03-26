@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 import sheep_platform_db as db
 import backtest_runtime_core as bt
+from sheep_realtime.service import read_realtime_control, read_realtime_status, write_realtime_control
 from sheep_review import (
     count_review_pipeline_tasks as _count_review_pipeline_tasks,
     enrich_task_row as _enrich_task_row,
@@ -61,49 +62,7 @@ logger = logging.getLogger("api")
 from sheep_platform_rate_limit import RateLimiter
 from sheep_platform_version import semver_gte
 
-_run_init_db_on_boot = str(os.environ.get("SHEEP_INIT_DB_ON_BOOT", "1") or "1").strip().lower() in {"1", "true", "yes", "on"}
-if hasattr(db, "init_db"):
-    if _run_init_db_on_boot:
-        db.init_db()
-    else:
-        logger.info("db.init_db() skipped on API boot")
-
-# [極致修復] 自動對齊 Compute 算力節點的系統帳號與權限
-try:
-    _c_user = os.environ.get("SHEEP_COMPUTE_USER", "").strip()
-    _c_pass = os.environ.get("SHEEP_COMPUTE_PASS", "").strip()
-    if _c_user and _c_pass:
-        from sheep_platform_security import hash_password, normalize_username
-        _c_norm = normalize_username(_c_user)
-        _u = db.get_user_by_username(_c_user)
-        _pw_hashed = hash_password(_c_pass)
-        _pw_str = _pw_hashed.decode('utf-8') if isinstance(_pw_hashed, bytes) else str(_pw_hashed)
-        if not _u:
-            db.create_user(_c_user, _pw_str, role="admin")
-        else:
-            _conn = db._conn()
-            try:
-                # 霸道覆寫密碼，確保與 .env 絕對一致，並強制解鎖、給予 admin 權限
-                _conn.execute(
-                    "UPDATE users SET role = 'admin', run_enabled = 1, disabled = 0 WHERE username_norm = ?",
-                    (_c_norm,),
-                )
-                _conn.commit()
-            finally:
-                _conn.close()
-except Exception as e:
-    print(f"[BOOT WARN] Auto-provision compute user failed: {e}")
-
-try:
-    _run_review_rebuild_on_boot = str(os.environ.get("SHEEP_REBUILD_REVIEW_STATE_ON_BOOT", "0") or "0").strip().lower() in {"1", "true", "yes", "on"}
-    if _run_review_rebuild_on_boot:
-        _review_rebuild_summary = _rebuild_review_state(db_module=db)
-        if int(_review_rebuild_summary.get("updated") or 0) > 0:
-            logger.info("review-state maintenance updated %s completed tasks", _review_rebuild_summary.get("updated"))
-    else:
-        logger.info("review-state maintenance skipped on boot")
-except Exception as e:
-    print(f"[BOOT WARN] review-state maintenance failed: {e}")
+logger.info("API boot is side-effect free; use sheep_platform_bootstrap.py for init/bootstrap/maintenance.")
 
 API_ROOT_PATH = os.environ.get("SHEEP_API_ROOT_PATH", "").strip()
 
@@ -512,6 +471,65 @@ def _runtime_snapshot_status(snapshot: Dict[str, Any], *, threshold_minutes: int
         "count_mismatch_reasons": count_mismatch_reasons,
         "stale": bool(stale),
         "age_seconds": age_seconds,
+    }
+
+
+def _allow_runtime_password_auth() -> bool:
+    raw = str(os.environ.get("SHEEP_ALLOW_RUNTIME_PASSWORD_AUTH", "") or "").strip().lower()
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    realtime_mode = str(os.environ.get("SHEEP_REALTIME_MODE", "") or "").strip().lower()
+    if realtime_mode == "live":
+        return False
+    return raw in {"", "1", "true", "yes", "on"}
+
+
+def _admin_realtime_payload(ctx: Dict[str, Any]) -> Dict[str, Any]:
+    status = dict(read_realtime_status() or {})
+    control = dict(read_realtime_control() or {})
+    global_snapshot = db.get_runtime_portfolio_snapshot("global") or {}
+    personal_snapshot = db.get_runtime_portfolio_snapshot("personal", user_id=int(ctx["user"]["id"])) or {}
+    global_status = _runtime_snapshot_status(global_snapshot)
+    personal_status = _runtime_snapshot_status(personal_snapshot)
+    holy_grail_diagnostics = dict(status.get("holy_grail_diagnostics") or {})
+    symbol_state_items = list(status.get("symbol_state_items") or [])
+    resource_summary = dict(status.get("resource_summary") or {})
+    daemon_state = str(status.get("state") or "stopped").strip().lower() or "stopped"
+    health_state = daemon_state
+    if daemon_state == "running":
+        heartbeat_dt = _parse_iso_datetime(str(status.get("last_heartbeat_at") or ""))
+        if heartbeat_dt is None:
+            health_state = "degraded"
+        else:
+            age_s = max(0.0, (datetime.now(timezone.utc) - heartbeat_dt.astimezone(timezone.utc)).total_seconds())
+            if age_s > 45:
+                health_state = "stale"
+            elif bool(global_snapshot) and bool(global_status.get("stale")):
+                health_state = "degraded"
+            elif str(status.get("mode") or "").strip().lower() == "shadow":
+                health_state = "shadow"
+            else:
+                health_state = "live"
+    return {
+        "ok": True,
+        "daemon": status,
+        "control": control,
+        "health_state": health_state,
+        "mode": str(status.get("mode") or control.get("mode") or "shadow"),
+        "desired_state": str(control.get("desired_state") or status.get("desired_state") or "stopped"),
+        "desired_mode": str(control.get("mode") or status.get("desired_mode") or "shadow"),
+        "last_heartbeat_at": str(status.get("last_heartbeat_at") or ""),
+        "last_round_ms": float(status.get("last_round_ms") or 0.0),
+        "last_round_started_at": str(status.get("last_round_started_at") or holy_grail_diagnostics.get("round_started_at") or ""),
+        "last_round_finished_at": str(status.get("last_round_finished_at") or holy_grail_diagnostics.get("round_finished_at") or ""),
+        "resource_summary": resource_summary,
+        "runtime_sync": {
+            "global": {**global_status, **_runtime_sync_event_detail("global")},
+            "personal": {**personal_status, **_runtime_sync_event_detail("personal", int(ctx["user"]["id"]))},
+            **dict(status.get("runtime_sync") or {}),
+        },
+        "symbol_state_items": symbol_state_items,
+        "holy_grail_diagnostics": holy_grail_diagnostics,
     }
 
 
@@ -1002,6 +1020,8 @@ def _runtime_sync_auth_ctx(
 ) -> Dict[str, Any]:
     if authorization:
         return _auth_ctx(req, authorization)
+    if not _allow_runtime_password_auth():
+        raise HTTPException(status_code=401, detail="runtime_password_auth_disabled")
     uname = str(username or "").strip()
     pwd = str(password or "")
     if not uname or not pwd:
@@ -1388,6 +1408,11 @@ class RuntimePortfolioSyncIn(BaseModel):
     checksum: Optional[str] = None
     username: str = ""
     password: str = ""
+
+
+class RealtimeControlIn(BaseModel):
+    action: str
+    reason: str = ""
 
 
 class CatalogImportIn(BaseModel):
@@ -2097,8 +2122,72 @@ def get_admin_system_diagnostics(req: Request, authorization: Optional[str] = He
             "personal": {**personal_status, **_runtime_sync_event_detail("personal", int(ctx["user"]["id"]))},
             "global_active_strategy_mismatch": runtime_mismatch,
         },
+        "realtime": _admin_realtime_payload(ctx),
         "server_time": _utc_iso(),
     }
+
+
+@app.get("/admin/realtime/status")
+def get_admin_realtime_status(req: Request, authorization: Optional[str] = Header(None)):
+    ctx = _auth_ctx(req, authorization)
+    if not _is_admin_ctx(ctx):
+        raise HTTPException(status_code=403, detail="admin_required")
+    return _admin_realtime_payload(ctx)
+
+
+@app.post("/admin/realtime/control")
+def post_admin_realtime_control(req: Request, body: RealtimeControlIn, authorization: Optional[str] = Header(None)):
+    ctx = _auth_ctx(req, authorization)
+    if not _is_admin_ctx(ctx):
+        raise HTTPException(status_code=403, detail="admin_required")
+    action = str(body.action or "").strip().lower()
+    mapping = {
+        "start_shadow": {"desired_state": "running", "mode": "shadow"},
+        "promote_live": {"desired_state": "running", "mode": "live"},
+        "stop": {"desired_state": "stopped", "mode": "shadow"},
+        "restart_shadow": {"desired_state": "running", "mode": "shadow"},
+    }
+    if action not in mapping:
+        raise HTTPException(status_code=400, detail="invalid_realtime_action")
+    payload = write_realtime_control(
+        desired_state=mapping[action]["desired_state"],
+        mode=mapping[action]["mode"],
+        reason=str(body.reason or action),
+        requested_by=int(ctx["user"]["id"]),
+    )
+    db.log_sys_event(
+        "REALTIME_CONTROL_UPDATED",
+        int(ctx["user"]["id"]),
+        f"Realtime control updated: {action}",
+        {"action": action, **payload, "ip": _client_ip(req)},
+    )
+    return {"ok": True, "action": action, "control": payload}
+
+
+@app.get("/admin/holy-grail/diagnostics/latest")
+def get_admin_holy_grail_diagnostics(req: Request, authorization: Optional[str] = Header(None)):
+    ctx = _auth_ctx(req, authorization)
+    if not _is_admin_ctx(ctx):
+        raise HTTPException(status_code=403, detail="admin_required")
+    realtime = _admin_realtime_payload(ctx)
+    return {
+        "ok": True,
+        "diagnostics": dict(realtime.get("holy_grail_diagnostics") or {}),
+        "last_round_ms": float(realtime.get("last_round_ms") or 0.0),
+        "last_round_started_at": str(realtime.get("last_round_started_at") or ""),
+        "last_round_finished_at": str(realtime.get("last_round_finished_at") or ""),
+    }
+
+
+@app.post("/admin/factor_pools/prune")
+def admin_prune_factor_pools(req: Request, authorization: Optional[str] = Header(None), dry_run: bool = True):
+    ctx = _auth_ctx(req, authorization)
+    if not _is_admin_ctx(ctx):
+        raise HTTPException(status_code=403, detail="admin_required")
+    result = db.prune_factor_pools_current_cycle_strict(dry_run=bool(dry_run), requested_by=int(ctx["user"]["id"]))
+    if not bool(dry_run):
+        _invalidate_live_state("dashboard", "runtime")
+    return result
 
 
 @app.get("/admin/errors/export.txt")

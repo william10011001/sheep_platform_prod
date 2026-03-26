@@ -289,8 +289,8 @@ def test_live_trader_holy_grail_build_blocks_partial_publish_when_required_kline
         lambda self: (strategies, "https://example.com/api", "runtime-token"),
     )
     monkeypatch.setattr(
-        live_mod.requests,
-        "get",
+        live_mod,
+        "http_request",
         lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("network disabled for test")),
     )
 
@@ -356,12 +356,13 @@ def test_live_trader_runtime_falls_back_to_contract_klines_for_xag(monkeypatch, 
                 ],
             }
 
-    def _fake_get(url, params=None, headers=None, timeout=None):
+    def _fake_http_request(_session, method, url, timeout=None, verify=None, params=None, headers=None, **_kwargs):
+        assert method == "GET"
         assert "contract/public/kline" in url
         assert params["symbol"] == "XAGTESTUSDT"
         return _Resp()
 
-    monkeypatch.setattr(live_mod.requests, "get", _fake_get)
+    monkeypatch.setattr(live_mod, "http_request", _fake_http_request)
     monkeypatch.setattr(live_mod.time, "sleep", lambda _s: None)
     monkeypatch.setattr(live_mod, "CONTRACT_ONLY_KLINE_SYMBOLS", {contract_only_symbol})
     live_mod.bt = _BT()
@@ -403,6 +404,80 @@ def test_live_trader_runtime_retries_transient_factor_pool_fetch(monkeypatch):
     assert any("transient network error" in msg.lower() for msg in logs)
 
 
+def test_live_trader_runtime_reuses_recent_factor_pool_cache_on_transient_failure(monkeypatch):
+    live_mod = _load_live_trader_module()
+    logs = []
+    live_mod.log = logs.append
+    calls = {"count": 0}
+
+    def _fake_fetch_pages(self, api_base, token):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return [{"strategy_id": 1, "symbol": "BTC_USDT", "timeframe_min": 60}]
+        raise RuntimeError("Response ended prematurely")
+
+    monkeypatch.setattr(live_mod.HolyGrailRuntime, "_fetch_factor_pool_pages", _fake_fetch_pages)
+    monkeypatch.setattr(live_mod.HolyGrailRuntime, "detect_api_base", lambda self, host: "https://example.com/api")
+    monkeypatch.setattr(live_mod.time, "sleep", lambda _s: None)
+
+    runtime1 = live_mod._new_holy_grail_runtime(
+        factor_pool_url="https://example.com",
+        factor_pool_token="static-token",
+    )
+    first = runtime1.fetch_factor_pool_data()
+
+    runtime2 = live_mod._new_holy_grail_runtime(
+        factor_pool_url="https://example.com",
+        factor_pool_token="static-token",
+    )
+    second = runtime2.fetch_factor_pool_data()
+
+    assert first[0][0]["strategy_id"] == 1
+    assert second[0][0]["strategy_id"] == 1
+    assert calls["count"] == 4
+    assert runtime2._last_factor_pool_fetch_used_cached_payload is True
+    assert any("reusing cached factor-pool payload" in msg.lower() for msg in logs)
+
+
+def test_live_trader_build_portfolio_retries_transient_preflight(monkeypatch):
+    live_mod = _load_live_trader_module()
+    logs = []
+    live_mod.log = logs.append
+    attempts = {"count": 0}
+
+    def _fake_prime(self):
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            raise RuntimeError("Response ended prematurely")
+        return {
+            "api_base": "https://example.com/api",
+            "token_present": True,
+            "required_pairs": [],
+            "ready_pairs": [],
+            "unresolved_pairs": [],
+            "details": [],
+            "existing_count": 0,
+            "synced_count": 0,
+            "resampled_count": 0,
+            "failed_count": 0,
+        }
+
+    def _fake_base_build(self, **kwargs):
+        return live_mod.HolyGrailResult(ok=True, message="ok")
+
+    monkeypatch.setattr(live_mod.AutoSyncHolyGrailRuntime, "prime_required_klines", _fake_prime)
+    monkeypatch.setattr(live_mod.HolyGrailRuntime, "build_portfolio", _fake_base_build)
+    monkeypatch.setattr(live_mod.time, "sleep", lambda _s: None)
+
+    runtime = live_mod._new_holy_grail_runtime()
+    result = runtime.build_portfolio()
+
+    assert result.ok is True
+    assert attempts["count"] == 3
+    assert result.diagnostics["preflight_retry_count"] == 2
+    assert any("kline preflight hit a transient upstream error" in msg.lower() for msg in logs)
+
+
 def test_fetch_factor_pool_data_supports_token_and_pagination(monkeypatch):
     calls = {"get_pages": [], "post_calls": 0}
 
@@ -415,7 +490,8 @@ def test_fetch_factor_pool_data_supports_token_and_pagination(monkeypatch):
         def json(self):
             return self._body
 
-    def _fake_get(url, params=None, headers=None, verify=None, timeout=None):
+    def _fake_http_request(_session, method, url, timeout=None, verify=None, params=None, headers=None, json=None, **_kwargs):
+        assert method in {"GET", "POST"}
         if params is None:
             return _Resp(200, {"ok": True})
         calls["get_pages"].append(int((params or {}).get("page") or 0))
@@ -439,12 +515,13 @@ def test_fetch_factor_pool_data_supports_token_and_pagination(monkeypatch):
             },
         )
 
-    def _unexpected_post(*args, **kwargs):
+    def _unexpected_http_request(_session, method, *args, **kwargs):
+        if method != "POST":
+            return _fake_http_request(_session, method, *args, **kwargs)
         calls["post_calls"] += 1
         raise AssertionError("token fetch should not need password login")
 
-    monkeypatch.setattr(holy_runtime_mod.requests, "get", _fake_get)
-    monkeypatch.setattr(holy_runtime_mod.requests, "post", _unexpected_post)
+    monkeypatch.setattr(holy_runtime_mod, "http_request", _unexpected_http_request)
 
     runtime = HolyGrailRuntime(
         bt_module=object(),
@@ -532,8 +609,9 @@ def test_tema_rsi_python_fallback_produces_trades():
     assert float(equity[-1]) > 1.0
 
 
-def test_cached_runtime_snapshot_preserves_full_strategy_metrics(monkeypatch):
+def test_cached_runtime_snapshot_preserves_full_strategy_metrics(monkeypatch, tmp_path):
     live_mod = _load_live_trader_module()
+    live_mod.STATE_FILE = str(tmp_path / "tema_rsi_state.json")
     captured = {}
 
     class _TextBox:
@@ -590,8 +668,9 @@ def test_cached_runtime_snapshot_preserves_full_strategy_metrics(monkeypatch):
     assert item["sharpe"] == pytest.approx(4.19)
 
 
-def test_cached_runtime_snapshot_skips_config_only_payload(monkeypatch):
+def test_cached_runtime_snapshot_skips_config_only_payload(monkeypatch, tmp_path):
     live_mod = _load_live_trader_module()
+    live_mod.STATE_FILE = str(tmp_path / "tema_rsi_state.json")
     captured = {}
 
     class _TextBox:
@@ -1099,6 +1178,162 @@ def test_candidate_pool_reserves_exploration_slots_for_metricless_templates():
     assert set(template_short["direction_bucket"]) == {"exploration"}
 
 
+def test_candidate_pool_preserves_cross_timeframe_mirrors():
+    runtime = HolyGrailRuntime(bt_module=object(), log=lambda _msg: None)
+    rows = []
+    for timeframe_min, score in ((5, 10.0), (60, 9.8), (240, 9.6)):
+        rows.append(
+            {
+                "strategy_id": timeframe_min,
+                "family": "TEMA_RSI",
+                "symbol": "BTC_USDT",
+                "timeframe_min": timeframe_min,
+                "direction": "long",
+                "cand_score": score,
+                "metric_sharpe": 2.0,
+                "metric_cagr_pct": 25.0,
+                "metric_max_drawdown_pct": 8.0,
+                "allocation_pct": 10.0,
+                "created_at": f"2026-03-0{min(timeframe_min, 9)}T00:00:00+00:00",
+                "candidate_source": "template",
+                "has_metrics": True,
+                "param_fast_len": 9,
+                "param_slow_len": 30,
+            }
+        )
+
+    augmented_df, source_counts, augmented_counts, diagnostics = runtime._augment_directional_coverage(
+        pd.DataFrame(rows),
+        top_n=6,
+    )
+    pool_df = runtime._candidate_pool(augmented_df, top_n=6, max_per_group=3)
+
+    assert source_counts["short"] == 0
+    assert augmented_counts["short"] == 3
+    assert int(diagnostics["mirror_diversified_source_count"]) >= 3
+    short_pool = pool_df[pool_df["direction"] == "short"].copy()
+    assert len(short_pool) == 3
+    assert set(short_pool["timeframe_min"]) == {5, 60, 240}
+
+
+def test_short_exploration_preselection_prioritizes_distinct_groups():
+    runtime = HolyGrailRuntime(bt_module=object(), log=lambda _msg: None)
+    rows = []
+
+    for idx, timeframe_min in enumerate((60, 240, 1440), start=1):
+        rows.append(
+            {
+                "strategy_id": 1000 + idx,
+                "family": f"LongFamily{idx}",
+                "symbol": f"LONG_{idx}_USDT",
+                "timeframe_min": timeframe_min,
+                "direction": "long",
+                "cand_score": 10.0 - idx,
+                "metric_sharpe": 2.5 - (idx * 0.1),
+                "metric_cagr_pct": 30.0 - idx,
+                "metric_max_drawdown_pct": 8.0 + idx,
+                "allocation_pct": 10.0,
+                "created_at": f"2026-03-0{idx}T00:00:00+00:00",
+                "candidate_source": "template",
+                "has_metrics": True,
+                "param_fast_len": 9,
+                "param_slow_len": 30,
+            }
+        )
+
+    for rank, (family, symbol, timeframe_min) in enumerate(
+        [
+            ("MirrorAlpha", "BTC_USDT", 240),
+            ("MirrorAlpha", "BTC_USDT", 240),
+            ("MirrorAlpha", "BTC_USDT", 240),
+            ("MirrorBeta", "ETH_USDT", 60),
+            ("MirrorBeta", "ETH_USDT", 60),
+            ("MirrorGamma", "INJ_USDT", 15),
+        ],
+        start=1,
+    ):
+        rows.append(
+            {
+                "strategy_id": 2000 + rank,
+                "family": family,
+                "symbol": symbol,
+                "timeframe_min": timeframe_min,
+                "direction": "short",
+                "cand_score": 20.0 - rank,
+                "allocation_pct": 5.0,
+                "created_at": f"2026-03-{10 + rank:02d}T00:00:00+00:00",
+                "candidate_source": "synthetic_mirror",
+                "has_metrics": False,
+                "param_fast_len": 9 + rank,
+                "param_slow_len": 30 + rank,
+            }
+        )
+
+    pool_df = runtime._candidate_pool(pd.DataFrame(rows), top_n=8, max_per_group=3)
+    short_pool = pool_df[pool_df["direction"] == "short"].copy()
+
+    assert len(short_pool) == 4
+    distinct_groups = {
+        (str(row["family"]), str(row["symbol"]), int(row["timeframe_min"]))
+        for _, row in short_pool.iterrows()
+    }
+    assert len(distinct_groups) >= 3
+    assert ("MirrorBeta", "ETH_USDT", 60) in distinct_groups
+    assert ("MirrorGamma", "INJ_USDT", 15) in distinct_groups
+
+
+def test_balanced_pairing_maximizes_pair_count_before_score():
+    runtime = HolyGrailRuntime(bt_module=object(), log=lambda _msg: None)
+
+    def _candidate(curve_key, *, sharpe, cagr, cand_score):
+        return {
+            "curve_key": curve_key,
+            "perf": {
+                "sharpe": sharpe,
+                "cagr_pct": cagr,
+                "max_drawdown_pct": 5.0,
+            },
+            "row_data": {
+                "cand_score": cand_score,
+            },
+        }
+
+    long_candidates = [
+        _candidate("L1", sharpe=4.5, cagr=45.0, cand_score=11.0),
+        _candidate("L2", sharpe=3.3, cagr=31.0, cand_score=8.5),
+        _candidate("L3", sharpe=3.1, cagr=29.0, cand_score=8.0),
+    ]
+    short_candidates = [
+        _candidate("S1", sharpe=4.0, cagr=41.0, cand_score=10.0),
+        _candidate("S2", sharpe=1.2, cagr=14.0, cand_score=2.5),
+    ]
+    corr_matrix = pd.DataFrame(
+        [
+            [1.0, 0.95, 0.95, 0.10, 0.10],
+            [0.95, 1.0, 0.10, 0.10, 0.10],
+            [0.95, 0.10, 1.0, 0.10, 0.10],
+            [0.10, 0.10, 0.10, 1.0, 0.10],
+            [0.10, 0.10, 0.10, 0.10, 1.0],
+        ],
+        index=["L1", "L2", "L3", "S1", "S2"],
+        columns=["L1", "L2", "L3", "S1", "S2"],
+    )
+
+    selected_pairs, feasible_edges = runtime._select_balanced_pairing(
+        long_candidates=long_candidates,
+        short_candidates=short_candidates,
+        corr_matrix=corr_matrix,
+        corr_threshold=0.80,
+        max_pairs=2,
+    )
+
+    assert feasible_edges == 6
+    assert len(selected_pairs) == 2
+    selected_curve_keys = {(left["curve_key"], right["curve_key"]) for left, right in selected_pairs}
+    assert ("L2", "S1") in selected_curve_keys
+    assert ("L3", "S2") in selected_curve_keys
+
+
 def test_balanced_selection_stops_at_paired_count_when_one_side_underfills(monkeypatch, tmp_path):
     monkeypatch.setenv("SHEEP_RUNTIME_DIR", str(tmp_path / "runtime"))
 
@@ -1276,3 +1511,6 @@ def test_long_only_source_generates_mirrored_short_candidates(monkeypatch, tmp_p
     summary_df = pd.read_csv(result.report_paths["summary_report"])
     assert int(summary_df.iloc[0]["source_short_candidates"]) == 0
     assert int(summary_df.iloc[0]["augmented_short_candidates"]) > 0
+    assert int(summary_df.iloc[0]["augmented_short_distinct_groups"]) > 0
+    assert int(summary_df.iloc[0]["candidate_pool_unique_short_groups"]) > 0
+    assert int(summary_df.iloc[0]["balanced_pair_count_max_possible"]) >= 1

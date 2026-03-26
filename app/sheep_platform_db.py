@@ -32,6 +32,7 @@ from sheep_strategy_schema import (
     unwrap_family_params,
 )
 from sheep_combo_stats import extract_progress_counters, pool_combo_count
+from sheep_secrets import redact_json, redact_text
 # ─────────────────────────────────────────────────────────────────────────────
 # DB API (sqlite/postgres) — production: Postgres via SHEEP_DB_URL
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2794,6 +2795,161 @@ def list_factor_pools(cycle_id: int) -> list:
     # [專家級防護] 絕對禁止因鎖死而回傳空陣列，這會導致前端誤判並將所有任務過濾掉變成空表格
     raise RuntimeError(f"資料庫高併發鎖定，無法讀取策略池列表。請稍後再試。({last_err})")
 
+def _strict_prune_cycle_scan(conn: Any, cycle_id: int) -> Dict[str, Any]:
+    now_iso = _now_iso()
+    rows = conn.execute(
+        """
+        SELECT
+            fp.id,
+            COALESCE(fp.param_combo_count, 0) AS param_combo_count,
+            COALESCE(mt.task_count, 0) AS task_count,
+            COALESCE(mt.total_progress, 0) AS total_progress,
+            COALESCE(mt.inflight_count, 0) AS inflight_count,
+            COALESCE(mt.active_lease_count, 0) AS active_lease_count,
+            COALESCE(c.candidate_count, 0) AS candidate_count,
+            COALESCE(su.submission_count, 0) AS submission_count,
+            COALESCE(st.strategy_count, 0) AS strategy_count
+        FROM factor_pools fp
+        LEFT JOIN (
+            SELECT
+                pool_id,
+                COUNT(*) AS task_count,
+                COALESCE(SUM(COALESCE(progress_combos_done, 0)), 0) AS total_progress,
+                SUM(CASE WHEN COALESCE(status, '') IN ('assigned', 'running', 'syncing') THEN 1 ELSE 0 END) AS inflight_count,
+                SUM(CASE WHEN lease_expires_at IS NOT NULL AND lease_expires_at > ? THEN 1 ELSE 0 END) AS active_lease_count
+            FROM mining_tasks
+            WHERE cycle_id = ?
+            GROUP BY pool_id
+        ) mt ON mt.pool_id = fp.id
+        LEFT JOIN (
+            SELECT pool_id, COUNT(*) AS candidate_count
+            FROM candidates
+            GROUP BY pool_id
+        ) c ON c.pool_id = fp.id
+        LEFT JOIN (
+            SELECT pool_id, COUNT(*) AS submission_count
+            FROM submissions
+            GROUP BY pool_id
+        ) su ON su.pool_id = fp.id
+        LEFT JOIN (
+            SELECT pool_id, COUNT(*) AS strategy_count
+            FROM strategies
+            GROUP BY pool_id
+        ) st ON st.pool_id = fp.id
+        WHERE fp.cycle_id = ? AND COALESCE(fp.active, 1) = 1
+        ORDER BY fp.id ASC
+        """,
+        (now_iso, int(cycle_id), int(cycle_id)),
+    ).fetchall()
+    eligible_rows: List[Dict[str, Any]] = []
+    blocked_pool_ids: List[int] = []
+    for row in rows:
+        data = dict(row)
+        pool_id = int(data.get("id") or 0)
+        total_progress = int(data.get("total_progress") or 0)
+        candidate_count = int(data.get("candidate_count") or 0)
+        submission_count = int(data.get("submission_count") or 0)
+        strategy_count = int(data.get("strategy_count") or 0)
+        inflight_count = int(data.get("inflight_count") or 0)
+        active_lease_count = int(data.get("active_lease_count") or 0)
+        if total_progress > 0:
+            continue
+        if candidate_count > 0 or submission_count > 0 or strategy_count > 0:
+            continue
+        if inflight_count > 0 or active_lease_count > 0:
+            blocked_pool_ids.append(pool_id)
+            continue
+        eligible_rows.append(data)
+    return {
+        "cycle_id": int(cycle_id),
+        "eligible_rows": eligible_rows,
+        "blocked_pool_ids": blocked_pool_ids,
+    }
+
+
+def preview_factor_pool_prune_current_cycle_strict() -> Dict[str, Any]:
+    cycle = get_active_cycle() or {}
+    cycle_id = int(cycle.get("id") or 0)
+    if cycle_id <= 0:
+        return {
+            "ok": True,
+            "cycle_id": 0,
+            "pool_count": 0,
+            "task_count": 0,
+            "param_combo_count": 0,
+            "sample_pool_ids": [],
+            "blocked_pool_ids": [],
+            "dry_run": True,
+        }
+    conn = _conn()
+    try:
+        scan = _strict_prune_cycle_scan(conn, cycle_id)
+    finally:
+        conn.close()
+    eligible_rows = list(scan.get("eligible_rows") or [])
+    return {
+        "ok": True,
+        "cycle_id": cycle_id,
+        "pool_count": len(eligible_rows),
+        "task_count": sum(int(row.get("task_count") or 0) for row in eligible_rows),
+        "param_combo_count": int(sum(int(row.get("param_combo_count") or 0) for row in eligible_rows)),
+        "sample_pool_ids": [int(row.get("id") or 0) for row in eligible_rows[:20]],
+        "blocked_pool_ids": [int(x) for x in list(scan.get("blocked_pool_ids") or [])],
+        "dry_run": True,
+    }
+
+
+def prune_factor_pools_current_cycle_strict(*, dry_run: bool = True, requested_by: int = 0) -> Dict[str, Any]:
+    preview = preview_factor_pool_prune_current_cycle_strict()
+    if bool(dry_run) or int(preview.get("cycle_id") or 0) <= 0:
+        return preview
+
+    cycle_id = int(preview.get("cycle_id") or 0)
+    conn = _conn()
+    try:
+        scan = _strict_prune_cycle_scan(conn, cycle_id)
+        eligible_rows = list(scan.get("eligible_rows") or [])
+        pool_ids = [int(row.get("id") or 0) for row in eligible_rows if int(row.get("id") or 0) > 0]
+        if not pool_ids:
+            conn.rollback()
+            return {**preview, "dry_run": False, "deleted_pool_ids": [], "deleted_task_count": 0}
+        placeholders = ", ".join(["?"] * len(pool_ids))
+        deleted_task_count = int(
+            conn.execute(
+                f"DELETE FROM mining_tasks WHERE cycle_id = ? AND pool_id IN ({placeholders})",
+                (cycle_id, *pool_ids),
+            ).rowcount
+            or 0
+        )
+        conn.execute(
+            f"DELETE FROM factor_pools WHERE cycle_id = ? AND id IN ({placeholders})",
+            (cycle_id, *pool_ids),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    _invalidate_active_pool_cache(cycle_id)
+    invalidate_global_dashboard_counters(force=True)
+    log_sys_event(
+        "FACTOR_POOL_PRUNE_STRICT",
+        requested_by or None,
+        f"Strict prune deleted {len(pool_ids)} factor pools in cycle {cycle_id}",
+        {
+            "cycle_id": cycle_id,
+            "pool_ids": pool_ids,
+            "deleted_task_count": deleted_task_count,
+            "blocked_pool_ids": preview.get("blocked_pool_ids") or [],
+        },
+    )
+    return {
+        **preview,
+        "dry_run": False,
+        "deleted_pool_ids": pool_ids,
+        "deleted_task_count": deleted_task_count,
+    }
+
+
 def log_sys_event(event_type: str, user_id: Optional[int], message: str, detail: dict = None) -> None:
     """終極監視：非同步背景獨立執行緒，保證絕對不被主程式的死鎖拖累 (專家級強化：消除靜默失敗)"""
     if event_type == "TASK_ASSIGN_SKIP":
@@ -2804,13 +2960,14 @@ def log_sys_event(event_type: str, user_id: Optional[int], message: str, detail:
     import threading
     import traceback
 
+    safe_message = redact_text(message)
     try:
-        payload_str = json.dumps(detail or {}, ensure_ascii=False)
+        payload_str = redact_json(detail or {})
     except Exception:
         payload_str = "{}"
 
     # 第一道防線：直接印到 Docker Console，就算資料庫炸了也看得到
-    print(f"[SYS_EVENT] {event_type} | UID:{user_id} | MSG:{message} | DETAIL:{payload_str}", file=sys.stderr, flush=True)
+    print(f"[SYS_EVENT] {event_type} | UID:{user_id} | MSG:{safe_message} | DETAIL:{payload_str}", file=sys.stderr, flush=True)
 
     def _write_event():
         try:
@@ -2818,7 +2975,7 @@ def log_sys_event(event_type: str, user_id: Optional[int], message: str, detail:
             try:
                 conn.execute(
                     "INSERT INTO sys_monitor_events (event_type, user_id, message, detail_json, created_at) VALUES (?, ?, ?, ?, ?)",
-                    (event_type, user_id, message, payload_str, _now_iso())
+                    (event_type, user_id, safe_message, payload_str, _now_iso())
                 )
                 conn.commit()
             finally:

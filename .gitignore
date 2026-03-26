@@ -37,6 +37,8 @@ app/worker_config.json
 worker_config.json
 **/tema_rsi_gui_config.json
 **/tema_rsi_gui_config.local.json
+實盤程式/backups/
+runtime/
 .sheep_worker_id
 app/.sheep_worker_id
 app/data/.sheep_compute_worker_id

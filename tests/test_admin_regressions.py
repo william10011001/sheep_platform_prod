@@ -2,6 +2,7 @@ import importlib
 import json
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -226,6 +227,7 @@ def admin_client(tmp_path, monkeypatch):
     db_path = tmp_path / "admin-regression.sqlite3"
     monkeypatch.setenv("SHEEP_DB_URL", "")
     monkeypatch.setenv("SHEEP_DB_PATH", str(db_path))
+    monkeypatch.setenv("SHEEP_RUNTIME_DIR", str(tmp_path / "runtime"))
     monkeypatch.setenv("SHEEP_COMPUTE_USER", "sheep")
     monkeypatch.setenv("SHEEP_COMPUTE_PASS", "@@Wm105020")
     monkeypatch.setenv("SHEEP_SECRET_KEY", FIXED_SECRET_KEY)
@@ -234,6 +236,9 @@ def admin_client(tmp_path, monkeypatch):
     _reset_app_modules()
     api_module = importlib.import_module("sheep_platform_api")
     db_module = sys.modules["sheep_platform_db"]
+    bootstrap_module = importlib.import_module("sheep_platform_bootstrap")
+    db_module.init_db()
+    bootstrap_module._provision_compute_admin()
 
     seeded = _seed_runtime_state(db_module)
     client = TestClient(api_module.app)
@@ -255,6 +260,7 @@ def admin_client(tmp_path, monkeypatch):
             "client": client,
             "db": db_module,
             "headers": {"Authorization": f"Bearer {token}"},
+            "runtime_dir": tmp_path / "runtime",
         }
     )
     web_token = db_module.create_api_token(seeded["user_id"], ttl_seconds=3600, name="web_session")["token"]
@@ -310,6 +316,21 @@ def test_threshold_alias_round_trip_persists_candidate_keep_top_n(admin_client):
 
     alias_events = _query_sys_events(db_module, "DEPRECATED_ALIAS_USED")
     assert any("/admin/settings/thresholds" in row["message"] for row in alias_events)
+
+
+def test_api_import_is_side_effect_free(tmp_path, monkeypatch):
+    db_path = tmp_path / "side-effect-free.sqlite3"
+    monkeypatch.setenv("SHEEP_DB_URL", "")
+    monkeypatch.setenv("SHEEP_DB_PATH", str(db_path))
+    monkeypatch.setenv("SHEEP_COMPUTE_USER", "sideeffect-admin")
+    monkeypatch.setenv("SHEEP_COMPUTE_PASS", "sideeffect-password")
+    monkeypatch.setenv("SHEEP_SECRET_KEY", FIXED_SECRET_KEY)
+    _reset_app_modules()
+    importlib.import_module("sheep_platform_api")
+    db_module = sys.modules["sheep_platform_db"]
+    db_module.init_db()
+    assert db_module.get_user_by_username("sideeffect-admin") is None
+    _reset_app_modules()
 
 
 def test_global_cost_settings_round_trip_snapshot_and_task_claim(admin_client):
@@ -722,6 +743,172 @@ def test_system_diagnostics_and_stop_route_reflect_runtime_state(admin_client):
     assert body["active_strategy_count"] == 1
     assert body["thresholds"]["candidate_keep_top_n"] == body["thresholds"]["keep_top_n"]
     assert body["threshold_updated_at"]["candidate_keep_top_n"]
+
+
+def test_admin_realtime_status_control_and_holy_grail_diagnostics(admin_client):
+    client = admin_client["client"]
+    headers = admin_client["headers"]
+    runtime_dir = admin_client["runtime_dir"]
+
+    from sheep_realtime.service import write_realtime_control, write_realtime_status
+
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    write_realtime_control(desired_state="running", mode="shadow", reason="test_seed", requested_by=admin_client["user_id"])
+    now_iso = datetime.now(timezone.utc).isoformat()
+    write_realtime_status(
+        {
+            "ok": True,
+            "state": "running",
+            "mode": "shadow",
+            "desired_state": "running",
+            "desired_mode": "shadow",
+            "last_heartbeat_at": now_iso,
+            "last_round_ms": 812.5,
+            "last_round_started_at": now_iso,
+            "last_round_finished_at": now_iso,
+            "resource_summary": {"rss_mb": 321.5, "cpu_percent": 12.0},
+            "runtime_sync": {"global": {"ok": True}, "personal": {"ok": True}},
+            "symbol_state_items": [
+                {
+                    "symbol": "BTC_USDT",
+                    "actual_qty": 1.0,
+                    "target_qty": 1.25,
+                    "buffer_state": "tight",
+                    "executor_mode": "shadow",
+                    "offboarding": False,
+                }
+            ],
+            "holy_grail_diagnostics": {
+                "empty_result_reason": "short_pool_underfill",
+                "eligible_counts": {"long": 5, "short": 2},
+                "round_started_at": now_iso,
+                "round_finished_at": now_iso,
+            },
+        }
+    )
+
+    status_res = client.get("/admin/realtime/status", headers=headers)
+    assert status_res.status_code == 200, status_res.text
+    status_body = status_res.json()
+    assert status_body["health_state"] == "shadow"
+    assert status_body["mode"] == "shadow"
+    assert status_body["symbol_state_items"][0]["symbol"] == "BTC_USDT"
+    assert status_body["holy_grail_diagnostics"]["empty_result_reason"] == "short_pool_underfill"
+
+    control_res = client.post(
+        "/admin/realtime/control",
+        headers=headers,
+        json={"action": "promote_live", "reason": "cutover_test"},
+    )
+    assert control_res.status_code == 200, control_res.text
+    assert control_res.json()["control"]["mode"] == "live"
+
+    diag_res = client.get("/admin/holy-grail/diagnostics/latest", headers=headers)
+    assert diag_res.status_code == 200, diag_res.text
+    assert diag_res.json()["diagnostics"]["empty_result_reason"] == "short_pool_underfill"
+
+
+def test_admin_factor_pool_prune_preview_and_execute(admin_client):
+    client = admin_client["client"]
+    headers = admin_client["headers"]
+    db_module = admin_client["db"]
+    cycle_id = admin_client["cycle_id"]
+    user_id = admin_client["user_id"]
+
+    prune_pool_id = db_module.create_factor_pool(
+        cycle_id=cycle_id,
+        name="Prune Eligible",
+        symbol="ETH_USDT",
+        timeframe_min=60,
+        years=2,
+        family="trend",
+        grid_spec={"alpha": [1]},
+        risk_spec={"max_leverage": 1},
+        num_partitions=2,
+        seed=11,
+        active=True,
+    )[0]
+    blocked_pool_id = db_module.create_factor_pool(
+        cycle_id=cycle_id,
+        name="Prune Blocked",
+        symbol="SOL_USDT",
+        timeframe_min=60,
+        years=2,
+        family="trend",
+        grid_spec={"alpha": [2]},
+        risk_spec={"max_leverage": 1},
+        num_partitions=2,
+        seed=13,
+        active=True,
+    )[0]
+
+    now = db_module._now_iso()
+    future_lease = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+    conn = db_module._conn()
+    try:
+        conn.execute(
+            """
+            INSERT INTO mining_tasks (
+                user_id, pool_id, cycle_id, partition_idx, num_partitions,
+                status, progress_json, progress_combos_done, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(user_id),
+                int(prune_pool_id),
+                int(cycle_id),
+                0,
+                2,
+                "completed",
+                json.dumps({"phase": "done"}),
+                0,
+                now,
+                now,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO mining_tasks (
+                user_id, pool_id, cycle_id, partition_idx, num_partitions,
+                status, progress_json, progress_combos_done, lease_expires_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(user_id),
+                int(blocked_pool_id),
+                int(cycle_id),
+                0,
+                2,
+                "assigned",
+                json.dumps({"phase": "lease"}),
+                0,
+                future_lease,
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    preview = client.post("/admin/factor_pools/prune?dry_run=true", headers=headers)
+    assert preview.status_code == 200, preview.text
+    preview_body = preview.json()
+    assert preview_body["dry_run"] is True
+    assert preview_body["pool_count"] >= 1
+    assert int(prune_pool_id) in preview_body["sample_pool_ids"]
+    assert int(blocked_pool_id) in preview_body["blocked_pool_ids"]
+
+    execute = client.post("/admin/factor_pools/prune?dry_run=false", headers=headers)
+    assert execute.status_code == 200, execute.text
+    execute_body = execute.json()
+    assert execute_body["dry_run"] is False
+    assert int(prune_pool_id) in execute_body["deleted_pool_ids"]
+    assert execute_body["deleted_task_count"] >= 1
+
+    remaining_ids = {int(pool["id"]) for pool in db_module.list_factor_pools(cycle_id)}
+    assert int(prune_pool_id) not in remaining_ids
+    assert int(blocked_pool_id) in remaining_ids
 
 
 def test_dashboard_start_route_workers_token_and_task_review_fields(admin_client):

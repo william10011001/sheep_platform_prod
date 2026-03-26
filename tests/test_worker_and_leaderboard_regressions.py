@@ -1,3 +1,4 @@
+import asyncio
 import importlib.util
 import json
 import sys
@@ -77,11 +78,12 @@ def test_factor_pool_updater_pauses_cleanly_without_credentials(monkeypatch):
     assert not any("本輪更新失敗" in msg for msg in logs)
 
 
-def test_factor_pool_updater_accepts_token_only_and_syncs_cached_snapshot_on_failure(monkeypatch):
+def test_factor_pool_updater_accepts_token_only_and_syncs_cached_snapshot_on_failure(monkeypatch, tmp_path):
     module = _load_live_trader_module()
     logs = []
     module.log = logs.append
     module.bt = type("_BT", (), {"NUMBA_OK": False})()
+    module.STATE_FILE = str(tmp_path / "tema_rsi_state.json")
 
     build_calls = []
     sync_calls = []
@@ -109,12 +111,15 @@ def test_factor_pool_updater_accepts_token_only_and_syncs_cached_snapshot_on_fai
         def json(self):
             return {"ok": True, "snapshot": {"strategy_count": 1}}
 
-    def _fake_post(url, json=None, headers=None, timeout=None, verify=None):
+    def _fake_http_request(_session, method, url, timeout=None, verify=None, json=None, headers=None, **_kwargs):
+        if method == "GET":
+            return _SyncResp()
+        assert method == "POST"
         sync_calls.append({"url": url, "json": json, "headers": headers})
         return _SyncResp()
 
     module.run_holy_grail_build = _fake_build
-    monkeypatch.setattr(module.requests, "post", _fake_post)
+    monkeypatch.setattr(module, "http_request", _fake_http_request)
 
     class _DummyVar:
         def __init__(self, value):
@@ -165,11 +170,12 @@ def test_factor_pool_updater_accepts_token_only_and_syncs_cached_snapshot_on_fai
     assert any("cached runtime 快照缺少有效績效欄位" in msg for msg in logs)
 
 
-def test_factor_pool_updater_refreshes_cached_runtime_snapshot_before_rebuild(monkeypatch):
+def test_factor_pool_updater_refreshes_cached_runtime_snapshot_before_rebuild(monkeypatch, tmp_path):
     module = _load_live_trader_module()
     logs = []
     module.log = logs.append
     module.bt = type("_BT", (), {"NUMBA_OK": True})()
+    module.STATE_FILE = str(tmp_path / "tema_rsi_state.json")
 
     sync_calls = []
 
@@ -211,12 +217,15 @@ def test_factor_pool_updater_refreshes_cached_runtime_snapshot_before_rebuild(mo
         def json(self):
             return {"ok": True, "snapshot": {"strategy_count": 1}}
 
-    def _fake_post(url, json=None, headers=None, timeout=None, verify=None):
+    def _fake_http_request(_session, method, url, timeout=None, verify=None, json=None, headers=None, **_kwargs):
+        if method == "GET":
+            return _SyncResp()
+        assert method == "POST"
         sync_calls.append({"url": url, "json": json, "headers": headers})
         return _SyncResp()
 
     module.run_holy_grail_build = _fake_build
-    monkeypatch.setattr(module.requests, "post", _fake_post)
+    monkeypatch.setattr(module, "http_request", _fake_http_request)
 
     class _DummyVar:
         def __init__(self, value):
@@ -343,12 +352,15 @@ def test_factor_pool_updater_recovers_bootstrap_with_persisted_runtime_cache(mon
         def json(self):
             return {"ok": True, "snapshot": {"strategy_count": 1}}
 
-    def _fake_post(url, json=None, headers=None, timeout=None, verify=None):
+    def _fake_http_request(_session, method, url, timeout=None, verify=None, json=None, headers=None, **_kwargs):
+        if method == "GET":
+            return _SyncResp()
+        assert method == "POST"
         sync_calls.append({"url": url, "json": json, "headers": headers})
         return _SyncResp()
 
     module.run_holy_grail_build = _fake_build
-    monkeypatch.setattr(module.requests, "post", _fake_post)
+    monkeypatch.setattr(module, "http_request", _fake_http_request)
 
     class _DummyVar:
         def __init__(self, value):
@@ -385,6 +397,553 @@ def test_factor_pool_updater_recovers_bootstrap_with_persisted_runtime_cache(mon
     assert update_calls, "cached runtime should be restored locally before opening entries"
     assert any(str(call["json"].get("source") or "").startswith("holy_grail_cached_") for call in sync_calls)
     assert any("恢復新開倉" in msg for msg in logs)
+
+
+def test_factor_pool_updater_bootstrap_uses_prior_global_sync_when_retry_sync_fails(tmp_path):
+    module = _load_live_trader_module()
+    logs = []
+    module.log = logs.append
+    module.bt = type("_BT", (), {"NUMBA_OK": True})()
+    state_path = tmp_path / "tema_rsi_state.json"
+    module.STATE_FILE = str(state_path)
+
+    cached_items = [
+        {
+            "strategy_id": 601,
+            "strategy_key": "cached-long",
+            "family": "EMA_Cross",
+            "symbol": "BTCUSDT",
+            "direction": "long",
+            "interval": "4h",
+            "family_params": {"fast_len": 9, "slow_len": 30},
+            "tp_pct": 1.0,
+            "sl_pct": 0.8,
+            "max_hold": 24,
+            "stake_pct": 50.0,
+            "enabled": True,
+            "sharpe": 2.4,
+            "total_return_pct": 45.0,
+            "max_drawdown_pct": 6.0,
+        }
+    ]
+    state_path.write_text(
+        json.dumps(
+            {
+                "holy_grail_runtime_cache": {
+                    "updated_at": "2026-03-25T01:00:00+00:00",
+                    "multi_strategies_json": json.dumps({"schema_version": 1, "strategies": cached_items}, ensure_ascii=False),
+                    "items": cached_items,
+                    "summary": {
+                        "selected_count": 1,
+                        "candidate_count": 5,
+                        "backtested_count": 5,
+                        "portfolio_metrics": {"sharpe": 2.4, "cagr_pct": 18.0, "max_drawdown_pct": 6.0},
+                    },
+                }
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    class _DummyVar:
+        def __init__(self, value):
+            self._value = value
+
+        def get(self):
+            return self._value
+
+    class _DummyText:
+        def __init__(self, value):
+            self._value = value
+
+        def get(self, *_args):
+            return self._value
+
+    class _DummyUI:
+        global_stake_pct_var = _DummyVar(95.0)
+        multi_json_text = _DummyText("[]")
+        factor_pool_url_var = _DummyVar("https://example.com")
+        factor_pool_token_var = _DummyVar("runtime-token")
+        factor_pool_user_var = _DummyVar("")
+        factor_pool_pass_var = _DummyVar("")
+
+        @staticmethod
+        def update_multi_json(_payload, wait=False):
+            return True
+
+    updater = module.FactorPoolUpdater(_DummyUI())
+    updater._mark_runtime_sync_success("global")
+    updater._post_runtime_snapshot = lambda scope, payload, runtime_kwargs: False
+
+    ok = updater._bootstrap_with_cached_runtime(updater._factor_pool_runtime_kwargs(), reason="bootstrap_cached_runtime")
+
+    assert ok is True
+    assert updater._bootstrap_completed is True
+    assert updater.allow_new_entries()[0] is True
+    assert any("沿用本次啟動內已成功同步的上一版全域快照" in msg for msg in logs)
+
+
+def test_factor_pool_updater_startup_cached_publish_runs_once_per_scope(monkeypatch, tmp_path):
+    module = _load_live_trader_module()
+    logs = []
+    module.log = logs.append
+    module.bt = type("_BT", (), {"NUMBA_OK": True})()
+    module.STATE_FILE = str(tmp_path / "tema_rsi_state.json")
+
+    cached_items = [
+        {
+            "strategy_id": 701,
+            "strategy_key": "cached-long",
+            "family": "EMA_Cross",
+            "symbol": "BTCUSDT",
+            "direction": "long",
+            "interval": "4h",
+            "family_params": {"fast_len": 9, "slow_len": 30},
+            "tp_pct": 1.0,
+            "sl_pct": 0.8,
+            "max_hold": 24,
+            "stake_pct": 50.0,
+            "enabled": True,
+            "sharpe": 2.6,
+            "total_return_pct": 48.0,
+            "max_drawdown_pct": 6.1,
+        }
+    ]
+    cached_json = json.dumps(cached_items, ensure_ascii=False, indent=2)
+
+    class _Result:
+        ok = True
+        message = "selected 1 balanced strategies"
+        warnings = []
+        multi_payload = list(cached_items)
+        multi_strategies_json = cached_json
+        portfolio_metrics = {"sharpe": 2.6, "cagr_pct": 20.0, "max_drawdown_pct": 6.1}
+        selected_count = 1
+        candidate_count = 4
+        backtested_count = 4
+        report_paths = {}
+        cost_basis = {}
+
+    class _DummyVar:
+        def __init__(self, value):
+            self._value = value
+
+        def get(self):
+            return self._value
+
+    class _DummyText:
+        def __init__(self, value):
+            self._value = value
+
+        def get(self, *_args):
+            return self._value
+
+    update_calls = []
+
+    class _DummyUI:
+        global_stake_pct_var = _DummyVar(95.0)
+        multi_json_text = _DummyText("[]")
+        factor_pool_url_var = _DummyVar("https://example.com")
+        factor_pool_token_var = _DummyVar("runtime-token")
+        factor_pool_user_var = _DummyVar("")
+        factor_pool_pass_var = _DummyVar("")
+
+        @staticmethod
+        def update_multi_json(payload, wait=False):
+            update_calls.append({"payload": payload, "wait": wait})
+            return True
+
+    module.run_holy_grail_build = lambda **_kwargs: _Result()
+    updater = module.FactorPoolUpdater(_DummyUI())
+    updater.last_good_snapshot = {
+        "updated_at": "2026-03-26T00:00:00+00:00",
+        "multi_strategies_json": cached_json,
+        "items": list(cached_items),
+        "summary": {
+            "selected_count": 1,
+            "candidate_count": 4,
+            "backtested_count": 4,
+            "portfolio_metrics": {"sharpe": 2.6, "cagr_pct": 20.0, "max_drawdown_pct": 6.1},
+            "cost_basis": {},
+        },
+    }
+    updater.last_good_json = cached_json
+    updater._last_good_summary_checksum = updater._runtime_publish_summary_checksum(updater.last_good_snapshot["summary"])
+    updater._last_good_publish_fingerprint = updater._runtime_publish_fingerprint(
+        items=updater.last_good_snapshot["items"],
+        summary=updater.last_good_snapshot["summary"],
+    )
+    updater._pending_cached_runtime_publish_reason = "startup"
+
+    sync_calls = []
+
+    def _fake_sync_cached(scope, runtime_kwargs, *, reason):
+        sync_calls.append((scope, reason))
+        updater._mark_runtime_sync_success(
+            scope,
+            payload=updater._cached_runtime_snapshot_payload(scope, reason=reason),
+            auth_mode="token",
+            reason=f"holy_grail_cached_{reason}",
+        )
+        return True
+
+    updater._sync_cached_runtime_snapshot = _fake_sync_cached
+    updater._sync_runtime_snapshot = lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unchanged publish should skip final runtime sync"))
+
+    updater._build_holy_grail()
+
+    assert sync_calls == [("personal", "startup"), ("global", "startup")]
+    assert not update_calls
+    assert updater.allow_new_entries()[0] is True
+    assert any("略過熱更新與網站重送" in msg for msg in logs)
+
+
+def test_factor_pool_updater_unchanged_result_skips_hot_reload_and_runtime_sync(monkeypatch, tmp_path):
+    module = _load_live_trader_module()
+    logs = []
+    module.log = logs.append
+    module.bt = type("_BT", (), {"NUMBA_OK": True})()
+    module.STATE_FILE = str(tmp_path / "tema_rsi_state.json")
+
+    cached_items = [
+        {
+            "strategy_id": 801,
+            "strategy_key": "cached-short",
+            "family": "TEMA_RSI",
+            "symbol": "ETHUSDT",
+            "direction": "short",
+            "interval": "1h",
+            "family_params": {"fast_len": 12, "slow_len": 50},
+            "tp_pct": 1.3,
+            "sl_pct": 0.9,
+            "max_hold": 18,
+            "stake_pct": 42.0,
+            "enabled": True,
+            "sharpe": 2.9,
+            "total_return_pct": 52.0,
+            "max_drawdown_pct": 7.4,
+        }
+    ]
+    cached_json = json.dumps(cached_items, ensure_ascii=False, indent=2)
+
+    class _Result:
+        ok = True
+        message = "selected 1 balanced strategies"
+        warnings = []
+        multi_payload = list(cached_items)
+        multi_strategies_json = cached_json
+        portfolio_metrics = {"sharpe": 2.9, "cagr_pct": 22.0, "max_drawdown_pct": 7.4}
+        selected_count = 1
+        candidate_count = 5
+        backtested_count = 5
+        report_paths = {}
+        cost_basis = {}
+
+    class _DummyVar:
+        def __init__(self, value):
+            self._value = value
+
+        def get(self):
+            return self._value
+
+    class _DummyText:
+        def __init__(self, value):
+            self._value = value
+
+        def get(self, *_args):
+            return self._value
+
+    update_calls = []
+
+    class _DummyUI:
+        global_stake_pct_var = _DummyVar(95.0)
+        multi_json_text = _DummyText(cached_json)
+        factor_pool_url_var = _DummyVar("https://example.com")
+        factor_pool_token_var = _DummyVar("runtime-token")
+        factor_pool_user_var = _DummyVar("")
+        factor_pool_pass_var = _DummyVar("")
+
+        @staticmethod
+        def update_multi_json(payload, wait=False):
+            update_calls.append({"payload": payload, "wait": wait})
+            return True
+
+    module.run_holy_grail_build = lambda **_kwargs: _Result()
+    updater = module.FactorPoolUpdater(_DummyUI())
+    updater.last_good_snapshot = {
+        "updated_at": "2026-03-26T00:00:00+00:00",
+        "multi_strategies_json": cached_json,
+        "items": list(cached_items),
+        "summary": {
+            "selected_count": 1,
+            "candidate_count": 5,
+            "backtested_count": 5,
+            "portfolio_metrics": {"sharpe": 2.9, "cagr_pct": 22.0, "max_drawdown_pct": 7.4},
+            "cost_basis": {},
+        },
+    }
+    updater.last_good_json = cached_json
+    updater._last_good_summary_checksum = updater._runtime_publish_summary_checksum(updater.last_good_snapshot["summary"])
+    updater._last_good_publish_fingerprint = updater._runtime_publish_fingerprint(
+        items=updater.last_good_snapshot["items"],
+        summary=updater.last_good_snapshot["summary"],
+    )
+    updater._bootstrap_completed = True
+    updater._mark_runtime_sync_success("global")
+    updater._set_entry_gate("ready", "global_runtime_synced")
+    updater._sync_cached_runtime_snapshot = lambda *args, **kwargs: True
+    updater._sync_runtime_snapshot = lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("unchanged result should not POST runtime snapshot"))
+
+    updater._build_holy_grail()
+
+    assert not update_calls
+    assert updater.allow_new_entries()[0] is True
+    assert any("略過熱更新與網站重送" in msg for msg in logs)
+
+
+def test_runtime_snapshot_post_retries_transient_failures(monkeypatch):
+    module = _load_live_trader_module()
+    logs = []
+    module.log = logs.append
+
+    class _DummyText:
+        def get(self, *_args):
+            return "[]"
+
+    class _DummyUI:
+        multi_json_text = _DummyText()
+
+    updater = module.FactorPoolUpdater(_DummyUI())
+
+    attempts = {"count": 0}
+
+    class _Resp:
+        def __init__(self, status_code, payload=None, text=""):
+            self.status_code = status_code
+            self.headers = {"content-type": "application/json"}
+            self._payload = payload or {}
+            self.text = text or json.dumps(self._payload, ensure_ascii=False)
+
+        def json(self):
+            return self._payload
+
+    def _fake_http_request(_session, method, url, timeout=None, verify=None, json=None, headers=None, **_kwargs):
+        if method == "GET":
+            return _Resp(200, {"ok": True})
+        assert method == "POST"
+        attempts["count"] += 1
+        if attempts["count"] < 3:
+            return _Resp(502, {"ok": False, "detail": "bad gateway"})
+        return _Resp(200, {"ok": True, "snapshot": {"strategy_count": 1}})
+
+    monkeypatch.setattr(module, "http_request", _fake_http_request)
+    monkeypatch.setattr(module.time, "sleep", lambda _s: None)
+
+    ok = updater._post_runtime_snapshot(
+        "global",
+        {"scope": "global", "items": [], "summary": {}, "updated_at": "2026-03-25T00:00:00+00:00"},
+        {
+            "factor_pool_url": "https://example.com",
+            "factor_pool_token": "runtime-token",
+            "factor_pool_user": "",
+            "factor_pool_pass": "",
+        },
+    )
+
+    assert ok is True
+    assert attempts["count"] == 3
+    assert updater._has_runtime_sync_success("global") is True
+    assert any("runtime 快照暫時失敗" in msg for msg in logs)
+
+
+def test_cached_runtime_snapshot_deduplicates_recent_success(monkeypatch):
+    module = _load_live_trader_module()
+    logs = []
+    module.log = logs.append
+
+    class _DummyText:
+        def get(self, *_args):
+            return "[]"
+
+    class _DummyUI:
+        multi_json_text = _DummyText()
+
+    updater = module.FactorPoolUpdater(_DummyUI())
+    updater.last_good_snapshot = {
+        "updated_at": "2026-03-25T00:00:00+00:00",
+        "items": [
+            {
+                "strategy_id": 1,
+                "strategy_key": "cached-long",
+                "family": "EMA_Cross",
+                "symbol": "BTCUSDT",
+                "direction": "long",
+                "interval": "4h",
+                "stake_pct": 50.0,
+                "sharpe": 2.4,
+                "total_return_pct": 45.0,
+                "max_drawdown_pct": 6.0,
+            }
+        ],
+        "summary": {
+            "selected_count": 1,
+            "candidate_count": 4,
+            "backtested_count": 4,
+            "portfolio_metrics": {"sharpe": 2.4},
+        },
+    }
+    updater.last_good_json = json.dumps(updater.last_good_snapshot["items"], ensure_ascii=False)
+    monkeypatch.setattr(updater, "_collect_runtime_position_items", lambda: [])
+
+    calls = []
+
+    class _Resp:
+        status_code = 200
+        headers = {"content-type": "application/json"}
+        text = '{"ok": true}'
+
+        def json(self):
+            return {"ok": True, "snapshot": {"strategy_count": 1}}
+
+    def _fake_http_request(_session, method, url, timeout=None, verify=None, json=None, headers=None, **_kwargs):
+        if method == "GET":
+            return _Resp()
+        assert method == "POST"
+        calls.append({"url": url, "json": json, "headers": headers})
+        return _Resp()
+
+    monkeypatch.setattr(module, "http_request", _fake_http_request)
+
+    runtime_kwargs = {
+        "factor_pool_url": "https://example.com",
+        "factor_pool_token": "runtime-token",
+        "factor_pool_user": "",
+        "factor_pool_pass": "",
+    }
+    assert updater._sync_cached_runtime_snapshot("global", runtime_kwargs, reason="startup") is True
+    assert updater._sync_cached_runtime_snapshot("global", runtime_kwargs, reason="failure") is True
+    assert len(calls) == 1
+    assert any("略過重送" in msg for msg in logs)
+
+
+def test_runtime_snapshot_html_405_retries_without_password_fallback(monkeypatch):
+    module = _load_live_trader_module()
+    logs = []
+    module.log = logs.append
+
+    class _DummyText:
+        def get(self, *_args):
+            return "[]"
+
+    class _DummyUI:
+        multi_json_text = _DummyText()
+
+    updater = module.FactorPoolUpdater(_DummyUI())
+
+    token_calls = {"count": 0}
+    calls = []
+
+    class _Resp:
+        def __init__(self, status_code, *, text="", payload=None, content_type="text/html"):
+            self.status_code = status_code
+            self.text = text
+            self._payload = payload or {}
+            self.headers = {"content-type": content_type}
+
+        def json(self):
+            return self._payload
+
+    def _fake_http_request(_session, method, url, timeout=None, verify=None, json=None, headers=None, **_kwargs):
+        if method == "GET":
+            return _Resp(200, payload={"ok": True}, content_type="application/json")
+        assert method == "POST"
+        calls.append({"url": url, "json": dict(json or {}), "headers": dict(headers or {})})
+        if "Authorization" not in (headers or {}):
+            raise AssertionError("password fallback should not be used for transient 405 html errors")
+        token_calls["count"] += 1
+        if token_calls["count"] < 3:
+            return _Resp(
+                405,
+                text="<html><head><title>405 Not Allowed</title></head><body><center>nginx/1.25.5</center></body></html>",
+            )
+        return _Resp(200, payload={"ok": True, "snapshot": {"strategy_count": 1}}, content_type="application/json")
+
+    monkeypatch.setattr(module, "http_request", _fake_http_request)
+    monkeypatch.setattr(module.time, "sleep", lambda _s: None)
+
+    ok = updater._post_runtime_snapshot(
+        "global",
+        {"scope": "global", "items": [], "summary": {}, "updated_at": "2026-03-25T00:00:00+00:00"},
+        {
+            "factor_pool_url": "https://example.com",
+            "factor_pool_token": "runtime-token",
+            "factor_pool_user": "user",
+            "factor_pool_pass": "pass",
+        },
+    )
+
+    assert ok is True
+    assert token_calls["count"] == 3
+    assert all("Authorization" in call["headers"] for call in calls)
+    assert all("username" not in call["json"] for call in calls)
+    assert any("HTTP 405" in msg for msg in logs)
+
+
+def test_runtime_snapshot_token_401_falls_back_to_password(monkeypatch):
+    module = _load_live_trader_module()
+    logs = []
+    module.log = logs.append
+
+    class _DummyText:
+        def get(self, *_args):
+            return "[]"
+
+    class _DummyUI:
+        multi_json_text = _DummyText()
+
+    updater = module.FactorPoolUpdater(_DummyUI())
+    calls = []
+
+    class _Resp:
+        def __init__(self, status_code, *, payload=None, content_type="application/json"):
+            self.status_code = status_code
+            self._payload = payload or {}
+            self.text = json.dumps(self._payload, ensure_ascii=False)
+            self.headers = {"content-type": content_type}
+
+        def json(self):
+            return self._payload
+
+    def _fake_http_request(_session, method, url, timeout=None, verify=None, json=None, headers=None, **_kwargs):
+        if method == "GET":
+            return _Resp(200, payload={"ok": True})
+        assert method == "POST"
+        calls.append({"json": dict(json or {}), "headers": dict(headers or {})})
+        if "Authorization" in (headers or {}):
+            return _Resp(401, payload={"ok": False, "detail": "unauthorized"})
+        return _Resp(200, payload={"ok": True, "snapshot": {"strategy_count": 1}})
+
+    monkeypatch.setattr(module, "http_request", _fake_http_request)
+
+    ok = updater._post_runtime_snapshot(
+        "global",
+        {"scope": "global", "items": [], "summary": {}, "updated_at": "2026-03-25T00:00:00+00:00"},
+        {
+            "factor_pool_url": "https://example.com",
+            "factor_pool_token": "runtime-token",
+            "factor_pool_user": "user",
+            "factor_pool_pass": "pass",
+        },
+    )
+
+    assert ok is True
+    assert len(calls) == 2
+    assert "Authorization" in calls[0]["headers"]
+    assert "Authorization" not in calls[1]["headers"]
+    assert calls[1]["json"]["username"] == "user"
+    assert any("改用帳密重試同步" in msg for msg in logs)
 
 
 def test_factor_pool_updater_runtime_payload_includes_live_position_items():
@@ -472,6 +1031,12 @@ def test_factor_pool_updater_runtime_payload_includes_live_position_items():
         global_stake_pct_var = _DummyVar(95.0)
         multi_json_text = _DummyText()
         active_trader = _DummyTrader()
+        _ui_perf_state = {
+            "last_backlog": 12,
+            "last_drain_ms": 8.5,
+            "animation_mode": "low",
+            "ui_perf_degraded": True,
+        }
 
     updater = module.FactorPoolUpdater(_DummyUI())
     payload = updater._runtime_sync_payload("global", _Result(), {})
@@ -483,6 +1048,8 @@ def test_factor_pool_updater_runtime_payload_includes_live_position_items():
     assert position_items[0]["direction"] == "long"
     assert position_items[0]["position_usdt"] > 0
     assert position_items[0]["unrealized_pnl_usdt"] > 0
+    assert payload["summary"]["ui_perf"]["ui_animation_mode"] == "low"
+    assert payload["summary"]["telegram_stats"]["telegram_sent"] >= 0
 
 
 def test_live_trader_accepts_wrapped_multi_strategy_json():
@@ -639,6 +1206,157 @@ def test_trader_startup_gate_blocks_new_entry_before_consuming_signal(monkeypatc
 
     assert pos_data.get("last_attempted_bar_ts") is None
     assert any("bootstrap_pending" in msg for msg in logs)
+
+
+def test_symbol_net_target_is_absolute_notional_qty():
+    module = _load_live_trader_module()
+
+    trader = module.Trader.__new__(module.Trader)
+    trader.global_symbol = "BTCUSDT"
+    trader.global_interval = "1h"
+    trader.symbol_info = {"BTCUSDT": {"qty_step": 0.001, "min_qty": 0.001}}
+    trader.system_leverage = 5.0
+    trader.system_capital_usdt = 1000.0
+    trader.state_lock = module.threading.RLock()
+    trader.symbol_states = {}
+    trader.positions = {
+        "LONG_1": {
+            "cfg": {"symbol": "BTCUSDT", "interval": "15m", "stake_pct": 20.0, "strategy_key": "long-1"},
+            "desired_state": "long",
+        },
+        "SHORT_1": {
+            "cfg": {"symbol": "BTCUSDT", "interval": "4h", "stake_pct": 10.0, "strategy_key": "short-1"},
+            "desired_state": "short",
+        },
+    }
+
+    state = module.Trader._recompute_symbol_target_locked(trader, "BTCUSDT", mark_price=50000.0, total_capital=1000.0)
+    assert state["target_notional_usdt"] == pytest.approx(500.0)
+    assert state["target_qty"] == pytest.approx(0.01)
+
+    state_repeat = module.Trader._recompute_symbol_target_locked(trader, "BTCUSDT", mark_price=50000.0, total_capital=1000.0)
+    assert state_repeat["target_notional_usdt"] == pytest.approx(500.0)
+    assert state_repeat["target_qty"] == pytest.approx(0.01)
+
+
+def test_apply_strategy_desired_state_dedupes_same_bar():
+    module = _load_live_trader_module()
+
+    trader = module.Trader.__new__(module.Trader)
+    trader.state_lock = module.threading.RLock()
+    trader.positions = {
+        "S1": {
+            "strategy_id": "S1",
+            "strategy_key": "S1",
+            "cfg": {"symbol": "BTCUSDT", "interval": "1h", "direction": "long", "stake_pct": 20.0},
+            "symbol": "BTCUSDT",
+            "interval": "1h",
+            "configured_direction": "long",
+            "desired_state": "flat",
+            "last_closed_bar_ts": None,
+            "last_transition_ts": None,
+        }
+    }
+    dirty_calls = []
+    trader._mark_symbol_dirty = lambda *args, **kwargs: dirty_calls.append((args, kwargs))
+    trader._persist_symbol_executor_state = lambda: None
+
+    changed_first = module.Trader._apply_strategy_desired_state(trader, "S1", "long", 123456)
+    changed_dup = module.Trader._apply_strategy_desired_state(trader, "S1", "long", 123456)
+    changed_next = module.Trader._apply_strategy_desired_state(trader, "S1", "flat", 123457)
+
+    assert changed_first is True
+    assert changed_dup is False
+    assert changed_next is True
+    assert len(dirty_calls) == 2
+    assert dirty_calls[0][0][0] == "BTCUSDT"
+    assert dirty_calls[0][0][3] == "long"
+    assert dirty_calls[1][0][3] == "flat"
+
+
+def test_symbol_net_reconcile_uses_delta_qty_and_flip_flow():
+    module = _load_live_trader_module()
+
+    trader = module.Trader.__new__(module.Trader)
+    trader.symbol_info = {"BTCUSDT": {"qty_step": 0.001, "min_qty": 0.001}}
+
+    opens = []
+    closes = []
+    actual_after_close = {"qty": 0.0}
+
+    async def _open(symbol, position_side, qty):
+        opens.append((symbol, position_side, qty))
+
+    async def _close(symbol, position_side, qty):
+        closes.append((symbol, position_side, qty))
+        actual_after_close["qty"] = 0.0
+
+    trader._submit_open_qty_async = _open
+    trader._submit_reduce_qty_async = _close
+    trader._refresh_symbol_actual_state = lambda _symbol: {"actual_qty": actual_after_close["qty"]}
+
+    ok, err = asyncio.run(module.Trader._drive_symbol_qty_to_target_async(trader, "BTCUSDT", 0.01, 0.015))
+    assert ok is True
+    assert err == ""
+    assert closes == []
+    assert len(opens) == 1
+    assert opens[0][0] == "BTCUSDT"
+    assert opens[0][1] == "LONG"
+    assert opens[0][2] == pytest.approx(0.005)
+
+    opens.clear()
+    closes.clear()
+    actual_after_close["qty"] = 0.0
+
+    ok, err = asyncio.run(module.Trader._drive_symbol_qty_to_target_async(trader, "BTCUSDT", 0.01, -0.005))
+    assert ok is True
+    assert err == ""
+    assert len(closes) == 1
+    assert closes[0][0] == "BTCUSDT"
+    assert closes[0][1] == "LONG"
+    assert closes[0][2] == pytest.approx(0.01)
+    assert len(opens) == 1
+    assert opens[0][0] == "BTCUSDT"
+    assert opens[0][1] == "SHORT"
+    assert opens[0][2] == pytest.approx(0.005)
+
+
+def test_symbol_net_runtime_position_items_are_symbol_level():
+    module = _load_live_trader_module()
+
+    trader = module.Trader.__new__(module.Trader)
+    trader.state_lock = module.threading.RLock()
+    trader.execution_mode = "symbol_net_executor"
+    trader.symbol_states = {
+        "BTCUSDT": {
+            "symbol": "BTCUSDT",
+            "actual_qty": 0.01,
+            "actual_entry_price": 70000.0,
+            "actual_mark_price": 70500.0,
+            "actual_notional_usdt": 705.0,
+            "actual_margin_usdt": 141.0,
+            "actual_margin_ratio_pct": 3.2,
+            "actual_liquidation_price": None,
+            "actual_unrealized_pnl_usdt": 5.0,
+            "actual_unrealized_pnl_roe_pct": 3.546099290780142,
+            "target_qty": 0.015,
+            "target_notional_usdt": 1057.5,
+            "intervals": ["15m", "4h"],
+            "pending_dirty": False,
+            "offboarding": False,
+        }
+    }
+
+    items = module.Trader.collect_runtime_position_items(trader)
+    assert len(items) == 1
+    item = items[0]
+    assert item["strategy_key"] == "BTCUSDT"
+    assert item["family"] == "SYMBOL_NET"
+    assert item["position_qty"] == pytest.approx(0.01)
+    assert item["target_qty"] == pytest.approx(0.015)
+    assert item["target_notional_usdt"] == pytest.approx(1057.5)
+    assert item["interval"] == "15m,4h"
+    assert item["executor_mode"] == "symbol_net_executor"
 
 
 def test_runtime_position_items_preserve_real_exchange_fields_and_null_missing_values(monkeypatch):
@@ -1261,3 +1979,80 @@ def test_leaderboard_python_fallback_prefers_larger_timestamp_elapsed(monkeypatc
 
     assert stats["time"], stats
     assert float(stats["time"][0]["total_seconds"]) >= (8 * 3600), stats
+
+
+def test_telegram_notifier_dedupes_and_sends_recovery(monkeypatch):
+    module = _load_live_trader_module()
+
+    sent_payloads = []
+
+    class _FakeResp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"ok": True}
+
+    class _FakeSession:
+        def __init__(self):
+            self.headers = {}
+
+        def post(self, url, json=None, timeout=None):
+            sent_payloads.append({"url": url, "json": dict(json or {}), "timeout": timeout})
+            return _FakeResp()
+
+    monkeypatch.setattr(module.requests, "Session", lambda: _FakeSession())
+    notifier = module.TelegramNotifier()
+    notifier.configure(
+        enabled=True,
+        bot_token="test-bot-token",
+        chat_id="6071244154",
+        dedupe_sec=900,
+        scope="critical_and_trade",
+    )
+
+    try:
+        assert notifier.emit(
+            event_type="runtime_sync_failed",
+            severity="error",
+            subsystem="runtime_sync_global",
+            message="global runtime 快照更新失敗。",
+            reason="HTTP 502",
+            dedupe_key="runtime_sync:global",
+        )
+        assert notifier.emit(
+            event_type="runtime_sync_failed",
+            severity="error",
+            subsystem="runtime_sync_global",
+            message="global runtime 快照更新失敗。",
+            reason="HTTP 502",
+            dedupe_key="runtime_sync:global",
+        ) is False
+        assert notifier.flush(timeout=1.0) is True
+        assert len(sent_payloads) == 1
+        assert notifier.stats["telegram_suppressed_dedupe"] >= 1
+
+        assert notifier.emit(
+            event_type="runtime_sync_recovered",
+            severity="info",
+            subsystem="runtime_sync_global",
+            message="global runtime 快照已更新。",
+            dedupe_key="runtime_sync:global",
+            recovery_of="runtime_sync:global",
+        )
+        assert notifier.flush(timeout=1.0) is True
+        assert len(sent_payloads) == 2
+    finally:
+        notifier.shutdown()
+
+
+def test_ui_perf_helpers_choose_lower_impact_modes():
+    module = _load_live_trader_module()
+
+    assert module.AnimatedUI._next_log_drain_delay_ms(0, 1.0) == 120
+    assert module.AnimatedUI._next_log_drain_delay_ms(250, 5.0) == 35
+    assert module.AnimatedUI._next_log_drain_delay_ms(600, 5.0) == 20
+    assert module.AnimatedUI._determine_animation_mode("auto", backlog=0, trader_running=False, holy_grail_busy=False) == "normal"
+    assert module.AnimatedUI._determine_animation_mode("auto", backlog=120, trader_running=True, holy_grail_busy=False) == "low"
+    assert module.AnimatedUI._determine_animation_mode("auto", backlog=450, trader_running=False, holy_grail_busy=True) == "paused"
+    assert module.AnimatedUI._determine_animation_mode("minimal", backlog=0, trader_running=False, holy_grail_busy=False) == "paused"

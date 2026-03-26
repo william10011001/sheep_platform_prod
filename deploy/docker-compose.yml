@@ -35,7 +35,7 @@ services:
 
   migrate:
     <<: *app-image
-    command: ["sh", "-lc", "python -c 'import sheep_platform_db; sheep_platform_db.init_db()'"]
+    command: ["python", "sheep_platform_bootstrap.py", "init-and-bootstrap"]
     depends_on:
       db:
         condition: service_healthy
@@ -66,6 +66,8 @@ services:
       SHEEP_GIT_SHA: ${SHEEP_GIT_SHA}
       SHEEP_RUN_SCHEDULER: "0"
       SHEEP_REBUILD_REVIEW_STATE_ON_BOOT: "0"
+      SHEEP_RUNTIME_DIR: /runtime/realtime
+      SHEEP_ALLOW_RUNTIME_PASSWORD_AUTH: "0"
       # 確保 FastAPI 穩定綁定全域介面
       HOST: "0.0.0.0"
       PORT: "8000"
@@ -80,6 +82,7 @@ services:
         condition: service_healthy
     volumes:
       - ${SHEEP_HOST_DATA_DIR:-../app/data}:/app/data
+      - ${SHEEP_HOST_RUNTIME_DIR:-../runtime/realtime}:/runtime/realtime
     restart: always
     cpus: "${SHEEP_API_CPUS:-1.5}"
     mem_limit: "${SHEEP_API_MEM_LIMIT:-1536m}"
@@ -159,6 +162,38 @@ services:
         max-size: "10m"
         max-file: "5"
     command: ["python", "-u", "sheep_compute_daemon.py"]
+
+  realtime:
+    <<: *app-image
+    environment:
+      SHEEP_DB_URL: "${DO_PG_URL}"
+      SHEEP_DB_PATH: ""
+      SHEEP_GIT_SHA: ${SHEEP_GIT_SHA:-unknown}
+      SHEEP_RUNTIME_DIR: /runtime/realtime
+      SHEEP_REALTIME_MODE: shadow
+      SHEEP_ALLOW_RUNTIME_PASSWORD_AUTH: "0"
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      api:
+        condition: service_healthy
+    volumes:
+      - ${SHEEP_HOST_DATA_DIR:-../app/data}:/app/data
+      - ${SHEEP_HOST_RUNTIME_DIR:-../runtime/realtime}:/runtime/realtime
+    restart: always
+    cpus: "1.25"
+    mem_limit: "1536m"
+    pids_limit: 256
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    command: ["python", "-u", "sheep_realtime_daemon.py", "run", "--mode", "shadow"]
+    healthcheck:
+      test: ["CMD", "python", "sheep_realtime_daemon.py", "healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
 
   nginx:
     image: nginx:1.25-alpine

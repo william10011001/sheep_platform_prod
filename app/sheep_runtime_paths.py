@@ -68,7 +68,20 @@ def data_search_dirs() -> List[Path]:
 
 
 def realtime_dir() -> Path:
+    runtime_cfg_dir = str(os.environ.get("SHEEP_REALTIME_CONFIG_DIR", "") or "").strip()
+    if runtime_cfg_dir:
+        path = _resolve_env_path("SHEEP_REALTIME_CONFIG_DIR", project_root(), anchor=project_root())
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+    runtime_root = str(os.environ.get("SHEEP_RUNTIME_DIR", "") or "").strip()
+    if runtime_root:
+        path = _resolve_env_path("SHEEP_RUNTIME_DIR", project_root(), anchor=project_root())
+        path.mkdir(parents=True, exist_ok=True)
+        return path
     root = project_root()
+    explicit_dir = root / "實盤程式"
+    if explicit_dir.is_dir():
+        return explicit_dir.resolve()
     for child in root.iterdir():
         if not child.is_dir():
             continue
