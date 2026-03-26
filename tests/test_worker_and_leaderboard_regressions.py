@@ -1838,6 +1838,40 @@ def test_postgres_leaderboard_falls_back_when_aggregate_fails(monkeypatch, tmp_p
     assert stats["time"][0]["username"] == "miner-b"
 
 
+def test_postgres_leaderboard_can_force_python_fallback(monkeypatch, tmp_path):
+    db_path = tmp_path / "leaderboard-postgres-force-python.sqlite3"
+    monkeypatch.setenv("SHEEP_DB_URL", "")
+    monkeypatch.setenv("SHEEP_DB_PATH", str(db_path))
+    monkeypatch.setenv("SHEEP_LEADERBOARD_FORCE_PYTHON_FALLBACK", "1")
+    _reset_db_module()
+    import sheep_platform_db as db
+
+    db.init_db()
+    db.ensure_cycle_rollover()
+    real_conn = db._conn()
+
+    monkeypatch.setattr(db, "_db_kind", lambda: "postgres")
+    monkeypatch.setattr(db, "_conn", lambda: real_conn)
+    monkeypatch.setattr(
+        db,
+        "_leaderboard_postgres_recent_agg",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("postgres aggregate should be bypassed")),
+    )
+    monkeypatch.setattr(
+        db,
+        "_leaderboard_python_fallback",
+        lambda conn, cutoff_iso, window_end_iso: {
+            "combos": [{"username": "miner-force", "total_done": 2468.0}],
+            "time": [{"username": "miner-force", "total_seconds": 1357.0}],
+        },
+    )
+
+    stats = db.get_leaderboard_stats(period_hours=720)
+
+    assert stats["combos"][0]["username"] == "miner-force"
+    assert stats["time"][0]["username"] == "miner-force"
+
+
 def test_postgres_recent_aggregate_runs_split_queries(monkeypatch, tmp_path):
     db_path = tmp_path / "leaderboard-postgres-split.sqlite3"
     monkeypatch.setenv("SHEEP_DB_URL", "")

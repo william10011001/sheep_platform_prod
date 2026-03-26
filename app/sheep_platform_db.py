@@ -5769,6 +5769,11 @@ def _leaderboard_task_scan_max_rows() -> int:
     return max(_leaderboard_task_scan_limit(), min(200000, value))
 
 
+def _leaderboard_force_python_fallback() -> bool:
+    raw = str(os.environ.get("SHEEP_LEADERBOARD_FORCE_PYTHON_FALLBACK", "") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 def _leaderboard_pg_agg_backoff_seconds() -> float:
     try:
         value = float(os.environ.get("SHEEP_LEADERBOARD_PG_AGG_BACKOFF_SECONDS", "300") or "300")
@@ -6129,7 +6134,10 @@ def get_leaderboard_stats(period_hours: int = 720) -> dict:
         db_kind = _db_kind()
         if db_kind == "postgres":
             try:
-                recent_rows = _leaderboard_postgres_recent_agg(conn, cutoff_iso, window_end_iso)
+                if _leaderboard_force_python_fallback():
+                    recent_rows = _leaderboard_python_fallback(conn, cutoff_iso, window_end_iso)
+                else:
+                    recent_rows = _leaderboard_postgres_recent_agg(conn, cutoff_iso, window_end_iso)
                 results["combos"] = recent_rows.get("combos") or []
                 results["time"] = recent_rows.get("time") or []
             except Exception as agg_error:
