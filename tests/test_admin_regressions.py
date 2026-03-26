@@ -1281,6 +1281,75 @@ def test_runtime_portfolio_sync_preserves_raw_strategy_id_without_active_match(a
     assert item["max_drawdown_pct"] == pytest.approx(3.37)
 
 
+def test_password_login_can_issue_system_sync_token_without_captcha_for_admin(admin_client):
+    client = admin_client["client"]
+    db_module = admin_client["db"]
+    user_id = admin_client["user_id"]
+
+    issued = client.post(
+        "/token",
+        json={
+            "username": "sheep",
+            "password": "@@Wm105020",
+            "name": "system_sync",
+            "ttl_seconds": 7200,
+        },
+    )
+    assert issued.status_code == 200, issued.text
+    body = issued.json()
+    assert body["role"] == "admin"
+
+    system_tokens = db_module.list_api_tokens_for_user(user_id, name="system_sync")
+    assert any(int(row["id"]) == int(body["token_id"]) for row in system_tokens)
+
+    sync_resp = client.post(
+        "/runtime/portfolio/sync",
+        headers={"Authorization": f"Bearer {body['token']}"},
+        json={
+            "scope": "global",
+            "summary": {"portfolio_metrics": {"sharpe": 1.23}},
+            "items": [
+                {
+                    "strategy_id": 1001,
+                    "strategy_key": "runtime-token-regression",
+                    "family": "TEMA_RSI",
+                    "symbol": "ETH_USDT",
+                    "direction": "long",
+                    "interval": "1h",
+                    "family_params": {"fast_len": 12, "slow_len": 50},
+                    "stake_pct": 50.0,
+                    "sharpe": 1.23,
+                    "total_return_pct": 12.5,
+                    "max_drawdown_pct": 3.4,
+                }
+            ],
+        },
+    )
+    assert sync_resp.status_code == 200, sync_resp.text
+
+
+def test_password_login_rejects_system_sync_token_for_non_admin(admin_client):
+    client = admin_client["client"]
+    db_module = admin_client["db"]
+
+    from sheep_platform_security import hash_password
+
+    worker_user_id = db_module.create_user("runtimeuser", hash_password("pw123456"), role="user")
+
+    issued = client.post(
+        "/token",
+        json={
+            "username": "runtimeuser",
+            "password": "pw123456",
+            "name": "system_sync",
+            "ttl_seconds": 7200,
+        },
+    )
+    assert issued.status_code == 403, issued.text
+    assert "admin_required" in issued.text
+    assert db_module.list_api_tokens_for_user(worker_user_id, name="system_sync") == []
+
+
 def test_runtime_portfolio_strategy_id_lookup_recovers_owner_identity(admin_client):
     client = admin_client["client"]
     headers = admin_client["headers"]

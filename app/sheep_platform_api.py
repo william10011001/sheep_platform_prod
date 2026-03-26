@@ -2980,13 +2980,13 @@ async def ws_chat(ws: WebSocket):
 def issue_token(req: Request, body: TokenRequest):
     ip = _client_ip(req) or "ip"
     requested_name = str(body.name or "web_session").strip().lower() or "web_session"
-    if requested_name not in {"compute", "worker", "web_session"}:
+    if requested_name not in {"compute", "worker", "web_session", "system_sync"}:
         requested_name = "web_session"
     try:
         allowed, retry_after = _token_issue_limiter.check(ip, cost=1.0)
         
         # [專家級防護] 滑動驗證碼嚴格校驗 (針對網頁端請求)
-        if requested_name != "compute":
+        if requested_name not in {"compute", "system_sync"}:
             from sheep_platform_security import verify_slider_captcha
             is_valid, err_msg = verify_slider_captcha(body.captcha_token, body.captcha_offset, body.captcha_tracks, ip)
             if not is_valid:
@@ -3047,6 +3047,10 @@ def issue_token(req: Request, body: TokenRequest):
         if int(user.get("disabled") or 0) != 0:
             db.log_sys_event("LOGIN_FAIL", user["id"], f"帳號已被停用: '{uname_norm}'", {"ip": ip})
             raise HTTPException(status_code=403, detail="user_disabled")
+
+        if requested_name == "system_sync" and str(user.get("role") or "").strip().lower() != "admin":
+            db.log_sys_event("LOGIN_FAIL", user["id"], f"runtime sync token denied for non-admin: '{uname_norm}'", {"ip": ip})
+            raise HTTPException(status_code=403, detail="admin_required")
 
         token = db.create_api_token(int(user["id"]), ttl_seconds=int(body.ttl_seconds), name=requested_name)
         db.log_sys_event("LOGIN_SUCCESS", user["id"], f"登入成功: '{uname_norm}'", {"ip": ip})
