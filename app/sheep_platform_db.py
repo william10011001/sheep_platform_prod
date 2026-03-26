@@ -70,6 +70,7 @@ _LEADERBOARD_PG_AGG_BACKOFF: Dict[str, Any] = {
     "until": 0.0,
     "reason": "",
     "lock": threading.Lock(),
+    "query_lock": threading.Lock(),
 }
 
 _GLOBAL_COUNTER_TOTAL_POOL_COMBOS = "dashboard_total_strategy_pool_combo_count"
@@ -5802,126 +5803,137 @@ def _leaderboard_postgres_recent_agg(conn: Any, cutoff_iso: str, window_end_iso:
     if _leaderboard_pg_agg_backoff_until() > time.time():
         return _leaderboard_python_fallback(conn, cutoff_iso, window_end_iso)
 
-    default_avatar_url = _default_avatar_url_from_conn(conn)
-    results: Dict[str, List[Dict[str, Any]]] = {"combos": [], "time": []}
-    combos_error: Optional[Exception] = None
-    time_error: Optional[Exception] = None
+    query_lock = _LEADERBOARD_PG_AGG_BACKOFF.get("query_lock")
+    if query_lock is not None and not query_lock.acquire(blocking=False):
+        return _leaderboard_python_fallback(conn, cutoff_iso, window_end_iso)
 
-    sql_combos = """
-        WITH recent_combo_tasks AS MATERIALIZED (
-            SELECT
-                t.user_id,
-                GREATEST(COALESCE(t.progress_combos_done, 0)::double precision, 0.0) AS combos_done
-            FROM mining_tasks t
-            WHERE COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
-              AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <= ?
-              AND t.status IN ('running', 'completed')
-              AND COALESCE(t.progress_combos_done, 0) > 0
-        )
-        SELECT
-            u.username,
-            u.nickname,
-            u.avatar_url,
-            COUNT(*) AS task_count,
-            SUM(recent_combo_tasks.combos_done) AS total_done
-        FROM recent_combo_tasks
-        JOIN users u ON u.id = recent_combo_tasks.user_id
-        GROUP BY u.id, u.username, u.nickname, u.avatar_url
-        HAVING SUM(recent_combo_tasks.combos_done) > 0
-        ORDER BY total_done DESC, u.username ASC
-        LIMIT 300
-    """
-    sql_time = """
-        WITH direct_elapsed_tasks AS MATERIALIZED (
-            SELECT
-                t.user_id,
-                GREATEST(COALESCE(t.progress_elapsed_s, 0.0), 0.0) AS elapsed_s
-            FROM mining_tasks t
-            WHERE COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
-              AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <= ?
-              AND t.status IN ('running', 'completed')
-              AND COALESCE(t.progress_elapsed_s, 0.0) > 0.0
-        ),
-        derived_elapsed_tasks AS MATERIALIZED (
-            SELECT
-                recent.user_id,
-                GREATEST(
-                    EXTRACT(
-                        EPOCH FROM (
-                            NULLIF(recent.activity_at, '')::timestamptz - NULLIF(recent.created_at, '')::timestamptz
-                        )
-                    ),
-                    0.0
-                ) AS elapsed_s
-            FROM (
+    try:
+        default_avatar_url = _default_avatar_url_from_conn(conn)
+        results: Dict[str, List[Dict[str, Any]]] = {"combos": [], "time": []}
+        combos_error: Optional[Exception] = None
+        time_error: Optional[Exception] = None
+
+        sql_combos = """
+            WITH recent_combo_tasks AS MATERIALIZED (
                 SELECT
                     t.user_id,
-                    COALESCE(t.last_heartbeat, t.updated_at, t.created_at) AS activity_at,
-                    t.created_at
+                    GREATEST(COALESCE(t.progress_combos_done, 0)::double precision, 0.0) AS combos_done
                 FROM mining_tasks t
                 WHERE COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
                   AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <= ?
                   AND t.status IN ('running', 'completed')
-                  AND COALESCE(t.progress_elapsed_s, 0.0) <= 0.0
-                  AND NULLIF(t.created_at, '') IS NOT NULL
-                  AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <> t.created_at
-            ) recent
-        ),
-        aggregated_time AS (
+                  AND COALESCE(t.progress_combos_done, 0) > 0
+            )
             SELECT
-                elapsed_union.user_id,
-                SUM(elapsed_union.elapsed_s) AS total_seconds
-            FROM (
-                SELECT user_id, elapsed_s FROM direct_elapsed_tasks
-                UNION ALL
-                SELECT user_id, elapsed_s FROM derived_elapsed_tasks
-            ) elapsed_union
-            GROUP BY elapsed_union.user_id
-        )
-        SELECT
-            u.username,
-            u.nickname,
-            u.avatar_url,
-            aggregated_time.total_seconds
-        FROM aggregated_time
-        JOIN users u ON u.id = aggregated_time.user_id
-        WHERE aggregated_time.total_seconds > 0
-        ORDER BY aggregated_time.total_seconds DESC, u.username ASC
-        LIMIT 300
-    """
+                u.username,
+                u.nickname,
+                u.avatar_url,
+                COUNT(*) AS task_count,
+                SUM(recent_combo_tasks.combos_done) AS total_done
+            FROM recent_combo_tasks
+            JOIN users u ON u.id = recent_combo_tasks.user_id
+            GROUP BY u.id, u.username, u.nickname, u.avatar_url
+            HAVING SUM(recent_combo_tasks.combos_done) > 0
+            ORDER BY total_done DESC, u.username ASC
+            LIMIT 300
+        """
+        sql_time = """
+            WITH direct_elapsed_tasks AS MATERIALIZED (
+                SELECT
+                    t.user_id,
+                    GREATEST(COALESCE(t.progress_elapsed_s, 0.0), 0.0) AS elapsed_s
+                FROM mining_tasks t
+                WHERE COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
+                  AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <= ?
+                  AND t.status IN ('running', 'completed')
+                  AND COALESCE(t.progress_elapsed_s, 0.0) > 0.0
+            ),
+            derived_elapsed_tasks AS MATERIALIZED (
+                SELECT
+                    recent.user_id,
+                    GREATEST(
+                        EXTRACT(
+                            EPOCH FROM (
+                                NULLIF(recent.activity_at, '')::timestamptz - NULLIF(recent.created_at, '')::timestamptz
+                            )
+                        ),
+                        0.0
+                    ) AS elapsed_s
+                FROM (
+                    SELECT
+                        t.user_id,
+                        COALESCE(t.last_heartbeat, t.updated_at, t.created_at) AS activity_at,
+                        t.created_at
+                    FROM mining_tasks t
+                    WHERE COALESCE(t.last_heartbeat, t.updated_at, t.created_at) >= ?
+                      AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <= ?
+                      AND t.status IN ('running', 'completed')
+                      AND COALESCE(t.progress_elapsed_s, 0.0) <= 0.0
+                      AND NULLIF(t.created_at, '') IS NOT NULL
+                      AND COALESCE(t.last_heartbeat, t.updated_at, t.created_at) <> t.created_at
+                ) recent
+            ),
+            aggregated_time AS (
+                SELECT
+                    elapsed_union.user_id,
+                    SUM(elapsed_union.elapsed_s) AS total_seconds
+                FROM (
+                    SELECT user_id, elapsed_s FROM direct_elapsed_tasks
+                    UNION ALL
+                    SELECT user_id, elapsed_s FROM derived_elapsed_tasks
+                ) elapsed_union
+                GROUP BY elapsed_union.user_id
+            )
+            SELECT
+                u.username,
+                u.nickname,
+                u.avatar_url,
+                aggregated_time.total_seconds
+            FROM aggregated_time
+            JOIN users u ON u.id = aggregated_time.user_id
+            WHERE aggregated_time.total_seconds > 0
+            ORDER BY aggregated_time.total_seconds DESC, u.username ASC
+            LIMIT 300
+        """
 
-    try:
-        combo_rows = conn.execute(sql_combos, (cutoff_iso, window_end_iso)).fetchall()
-        results["combos"] = [
-            _decorate_user_row(dict(row), default_avatar_url=default_avatar_url)
-            for row in combo_rows or []
-            if float((dict(row) if not isinstance(row, dict) else row).get("total_done") or 0.0) > 0.0
-        ]
-    except Exception as exc:
-        combos_error = exc
-        _arm_leaderboard_pg_agg_backoff(exc)
-        print(f"[DB WARN] Leaderboard combos aggregate failed: {exc}")
+        try:
+            combo_rows = conn.execute(sql_combos, (cutoff_iso, window_end_iso)).fetchall()
+            results["combos"] = [
+                _decorate_user_row(dict(row), default_avatar_url=default_avatar_url)
+                for row in combo_rows or []
+                if float((dict(row) if not isinstance(row, dict) else row).get("total_done") or 0.0) > 0.0
+            ]
+        except Exception as exc:
+            combos_error = exc
+            _arm_leaderboard_pg_agg_backoff(exc)
+            print(f"[DB WARN] Leaderboard combos aggregate failed: {exc}")
 
-    try:
-        time_rows = conn.execute(sql_time, (cutoff_iso, window_end_iso, cutoff_iso, window_end_iso)).fetchall()
-        results["time"] = [
-            _decorate_user_row(dict(row), default_avatar_url=default_avatar_url)
-            for row in time_rows or []
-            if float((dict(row) if not isinstance(row, dict) else row).get("total_seconds") or 0.0) > 0.0
-        ]
-    except Exception as exc:
-        time_error = exc
-        _arm_leaderboard_pg_agg_backoff(exc)
-        print(f"[DB WARN] Leaderboard time aggregate failed: {exc}")
+        try:
+            time_rows = conn.execute(sql_time, (cutoff_iso, window_end_iso, cutoff_iso, window_end_iso)).fetchall()
+            results["time"] = [
+                _decorate_user_row(dict(row), default_avatar_url=default_avatar_url)
+                for row in time_rows or []
+                if float((dict(row) if not isinstance(row, dict) else row).get("total_seconds") or 0.0) > 0.0
+            ]
+        except Exception as exc:
+            time_error = exc
+            _arm_leaderboard_pg_agg_backoff(exc)
+            print(f"[DB WARN] Leaderboard time aggregate failed: {exc}")
 
-    if combos_error is not None or time_error is not None:
-        fallback = _leaderboard_python_fallback(conn, cutoff_iso, window_end_iso)
-        if combos_error is not None and not results["combos"]:
-            results["combos"] = fallback.get("combos") or []
-        if time_error is not None and not results["time"]:
-            results["time"] = fallback.get("time") or []
+        if combos_error is not None or time_error is not None:
+            fallback = _leaderboard_python_fallback(conn, cutoff_iso, window_end_iso)
+            if combos_error is not None and not results["combos"]:
+                results["combos"] = fallback.get("combos") or []
+            if time_error is not None and not results["time"]:
+                results["time"] = fallback.get("time") or []
 
-    return results
+        return results
+    finally:
+        if query_lock is not None and getattr(query_lock, "locked", lambda: False)():
+            try:
+                query_lock.release()
+            except Exception:
+                pass
 
 
 def _leaderboard_python_fallback(conn: Any, cutoff_iso: str, window_end_iso: str) -> Dict[str, List[Dict[str, Any]]]:
@@ -7030,28 +7042,57 @@ def get_admin_active_strategies_page(
             params,
         ).fetchone()
         total = int((dict(total_row) if total_row is not None else {}).get("c") or 0)
-        rows = conn.execute(
+        base_rows = conn.execute(
             f"""
             SELECT st.id as strategy_id, st.status, st.allocation_pct, st.created_at, st.direction, st.params_json, st.external_key,
+                   st.submission_id, st.pool_id,
                    u.id as owner_user_id, u.username, u.nickname, u.avatar_url,
-                   p.name as pool_name, p.symbol, p.timeframe_min,
-                   c.metrics_json, c.score,
-                   t.progress_json
+                   p.name as pool_name, p.symbol, p.timeframe_min
             FROM strategies st
             LEFT JOIN users u ON st.user_id = u.id
             LEFT JOIN factor_pools p ON st.pool_id = p.id
-            LEFT JOIN submissions su ON st.submission_id = su.id
-            LEFT JOIN candidates c ON su.candidate_id = c.id
-            LEFT JOIN mining_tasks t ON c.task_id = t.id
             WHERE {where_sql}
             ORDER BY st.id DESC
             LIMIT ? OFFSET ?
             """,
             [*params, size, offset],
         ).fetchall()
+        submission_ids = [
+            int(dict(row or {}).get("submission_id") or 0)
+            for row in base_rows or []
+            if int(dict(row or {}).get("submission_id") or 0) > 0
+        ]
+        extra_by_submission_id: Dict[int, Dict[str, Any]] = {}
+        if submission_ids:
+            placeholders = ", ".join(["?"] * len(submission_ids))
+            extra_rows = conn.execute(
+                f"""
+                SELECT
+                    su.id as submission_id,
+                    c.id as candidate_id,
+                    c.task_id,
+                    c.metrics_json,
+                    c.score,
+                    t.progress_json
+                FROM submissions su
+                LEFT JOIN candidates c ON su.candidate_id = c.id
+                LEFT JOIN mining_tasks t ON c.task_id = t.id
+                WHERE su.id IN ({placeholders})
+                """,
+                submission_ids,
+            ).fetchall()
+            extra_by_submission_id = {
+                int(dict(row or {}).get("submission_id") or 0): dict(row or {})
+                for row in extra_rows or []
+                if int(dict(row or {}).get("submission_id") or 0) > 0
+            }
         items = []
-        for row in rows:
-            item = _normalize_strategy_row(row)
+        for row in base_rows:
+            item = dict(row or {})
+            extra = extra_by_submission_id.get(int(item.get("submission_id") or 0), {})
+            if extra:
+                item.update(extra)
+            item = _normalize_strategy_row(item)
             try:
                 item["metrics"] = json.loads(item.get("metrics_json") or "{}")
             except Exception:

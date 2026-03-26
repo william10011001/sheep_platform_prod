@@ -1986,6 +1986,41 @@ def test_postgres_recent_aggregate_enters_backoff_after_timeout(monkeypatch, tmp
     assert fake_conn.calls == 2
 
 
+def test_postgres_recent_aggregate_uses_fallback_when_query_lock_busy(monkeypatch, tmp_path):
+    db_path = tmp_path / "leaderboard-postgres-lock.sqlite3"
+    monkeypatch.setenv("SHEEP_DB_URL", "")
+    monkeypatch.setenv("SHEEP_DB_PATH", str(db_path))
+    _reset_db_module()
+    import sheep_platform_db as db
+
+    fallback_calls = []
+
+    class _FakeConn:
+        def execute(self, sql, params=None):
+            raise AssertionError(f"query lock should skip SQL execution: {sql}")
+
+    def _fake_fallback(conn, cutoff_iso, window_end_iso):
+        fallback_calls.append((cutoff_iso, window_end_iso))
+        return {
+            "combos": [{"username": "fallback-combo", "total_done": 123.0}],
+            "time": [{"username": "fallback-time", "total_seconds": 456.0}],
+        }
+
+    monkeypatch.setattr(db, "_leaderboard_python_fallback", _fake_fallback)
+
+    lock = db._LEADERBOARD_PG_AGG_BACKOFF["query_lock"]
+    acquired = lock.acquire(blocking=False)
+    assert acquired is True
+    try:
+        stats = db._leaderboard_postgres_recent_agg(_FakeConn(), "2026-03-01T00:00:00+00:00", "2026-03-25T00:00:00+00:00")
+    finally:
+        lock.release()
+
+    assert len(fallback_calls) == 1
+    assert stats["combos"][0]["username"] == "fallback-combo"
+    assert stats["time"][0]["username"] == "fallback-time"
+
+
 def test_leaderboard_python_fallback_prefers_larger_timestamp_elapsed(monkeypatch, tmp_path):
     db_path = tmp_path / "leaderboard-elapsed-regression.sqlite3"
     monkeypatch.setenv("SHEEP_DB_URL", "")
