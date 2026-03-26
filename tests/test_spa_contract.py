@@ -27,6 +27,7 @@ def test_spa_index_contains_mobile_rating_and_leaderboard_contracts():
     html = (ROOT / "deploy" / "nginx" / "html" / "index.html").read_text(encoding="utf-8", errors="replace")
 
     required_snippets = [
+        "const currentTab = ref(localStorage.getItem('sheep_token') ? 'tasks' : 'dashboard');",
         "personal_review_pipeline_hint",
         "personal_runtime_portfolio_count",
         "personal_runtime_portfolio_items",
@@ -52,6 +53,8 @@ def test_spa_index_contains_mobile_rating_and_leaderboard_contracts():
         "downloadAdminErrors",
         "adminStratFilters",
         "devtoolsTripped",
+        "loadDashboardData().catch(err => console.error('[dashboard init failed]', err));",
+        "loadLeaderboardData({ silent: true, preserveExisting: true }).catch(err => console.error('[leaderboard init failed]', err));",
         "hidden sm:block",
         "sm:hidden",
         "overflow-x-auto",
@@ -70,6 +73,9 @@ def test_nginx_conf_exposes_json_health_aliases():
     assert "location = /api/" in conf
     assert "location = /api/healthz" in conf
     assert "location /api/" in conf
+    assert "location = /sheep123 {" in conf
+    assert "location = /sheep123/ {" in conf
+    assert "location = /sheep123/index.html {" in conf
     assert "proxy_pass http://$api_host:8000/manifest;" in conf
     assert "rewrite ^/api/(.*)$ /$1 break;" in conf
     assert "location = /app/_stcore/health" in conf

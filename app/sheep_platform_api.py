@@ -3317,6 +3317,95 @@ def web_leaderboard(period_hours: int = 720):
 
 @app.get("/dashboard")
 def web_dashboard(request: Request, authorization: Optional[str] = Header(None)):
+    if not authorization:
+        cache_key = _live_cache_key("public")
+
+        def _load_public_dashboard() -> Dict[str, Any]:
+            def _dashboard_section(label: str, default: Any, loader):
+                try:
+                    return loader()
+                except Exception as section_exc:
+                    logger.error(f"Public dashboard {label} load failed: {section_exc}")
+                    return default
+
+            cycle_id = _get_active_cycle_id()
+            try:
+                global_counters = dict(db.get_global_dashboard_counters() or {})
+            except Exception as counter_exc:
+                logger.error(f"Public dashboard global counter load failed: {counter_exc}")
+                global_counters = {
+                    "total_strategy_pool_combo_count": 0,
+                    "global_mined_combo_count": 0,
+                }
+            try:
+                latest_announcements = [_announcement_payload(row) for row in db.list_announcements(limit=6, offset=0, include_drafts=False)]
+            except Exception as announcement_exc:
+                logger.error(f"Public dashboard announcement load failed: {announcement_exc}")
+                latest_announcements = []
+
+            global_reviewed_strategy_count = int(
+                _dashboard_section("global_review_ready_count", 0, lambda: db.count_review_ready_tasks())
+            )
+            global_runtime_snapshot = _dashboard_section("global_runtime_snapshot", {}, lambda: db.get_runtime_portfolio_snapshot("global") or {})
+            global_runtime_items = list(global_runtime_snapshot.get("items") or [])
+            runtime_position_items_raw = list((global_runtime_snapshot.get("summary") or {}).get("position_items") or [])
+            runtime_lookup = _dashboard_section(
+                "runtime_lookup",
+                {},
+                lambda: (
+                    _active_strategy_runtime_lookup_for_items(
+                        list(global_runtime_items) + list(runtime_position_items_raw),
+                        limit=500,
+                    )
+                    if (global_runtime_items or runtime_position_items_raw)
+                    else {}
+                ),
+            )
+            enriched_global_runtime_items = _enrich_runtime_items(global_runtime_items, strategy_lookup=runtime_lookup)
+            runtime_position_items = _enrich_runtime_position_items(
+                runtime_position_items_raw,
+                strategy_lookup=runtime_lookup,
+            )
+            global_runtime_updated_at = str(global_runtime_snapshot.get("updated_at") or "")
+            global_runtime_status = _runtime_snapshot_status(global_runtime_snapshot)
+            global_live_strategy_count = int(global_runtime_snapshot.get("strategy_count") or len(global_runtime_items))
+
+            return {
+                "ok": True,
+                "cycle_id": cycle_id,
+                "total_strategy_pool_combo_count": int(global_counters.get("total_strategy_pool_combo_count") or 0),
+                "global_mined_combo_count": int(global_counters.get("global_mined_combo_count") or 0),
+                "global_live_strategies_reviewed_label": "全域過審策略",
+                "global_reviewed_strategy_count": global_reviewed_strategy_count,
+                "global_live_strategy_count": global_live_strategy_count,
+                "global_runtime_portfolio_count": global_live_strategy_count,
+                "global_runtime_portfolio_updated_at": global_runtime_updated_at,
+                "global_runtime_portfolio_items": enriched_global_runtime_items[:20],
+                "global_runtime_portfolio_stale": bool(global_runtime_status.get("stale")),
+                "global_runtime_portfolio_age_seconds": global_runtime_status.get("age_seconds"),
+                "runtime_position_items": runtime_position_items[:50],
+                "runtime_sync": {
+                    "global": {**global_runtime_status, **_runtime_sync_event_detail("global")},
+                    "global_active_strategy_mismatch": bool(global_runtime_status.get("count_mismatch")),
+                },
+                "announcements": latest_announcements,
+                "announcement_version": _live_versions["announcement"],
+                "dashboard_version": _live_versions["dashboard"],
+            }
+
+        try:
+            payload = _cached_live_payload("dashboard", cache_key, _load_public_dashboard)
+            _remember_live_snapshot("dashboard", cache_key, payload)
+            return payload
+        except Exception as exc:
+            preserved = dict((_live_last_nonempty.get("dashboard") or {}).get(cache_key) or {})
+            if preserved:
+                preserved["_preserved_last_nonempty"] = True
+                preserved["dashboard_warning"] = "stale_fallback"
+                return preserved
+            logger.error(f"Public dashboard error: {exc}")
+            raise HTTPException(status_code=500, detail="fetch_dashboard_failed")
+
     ctx = _auth_ctx(request, authorization)
     uid = int(ctx["user"]["id"])
     cache_key = _live_cache_key("user_id", uid)

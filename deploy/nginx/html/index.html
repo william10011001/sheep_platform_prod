@@ -1422,7 +1422,7 @@
                 const user = ref(null);
                 const isLoading = ref(true);
                 const isLoginMode = ref(true);
-                const currentTab = ref('tasks');
+                const currentTab = ref(localStorage.getItem('sheep_token') ? 'tasks' : 'dashboard');
                 const errorMsg = ref('');
                 const pingMs = ref(0);
                 let pollTimer = null;
@@ -2662,7 +2662,7 @@
 
                 const scheduleLeaderboardRetry = () => {
                     clearLeaderboardRetry();
-                    if (!user.value || devtoolsTripped.value) return;
+                    if (devtoolsTripped.value) return;
                     const delay = Math.min(30000, 3000 * Math.max(1, leaderboardState.consecutiveFailures));
                     leaderboardRetryTimer = setTimeout(() => {
                         loadLeaderboardData({ silent: true, preserveExisting: true }).catch(() => {});
@@ -3036,6 +3036,7 @@
                     localStorage.removeItem(workerTokenOwnerKey);
                     userToken.value = ''; 
                     user.value = null; 
+                    currentTab.value = 'dashboard';
                     clearInterval(pollTimer); 
                     stopLiveVersionPolling();
                     
@@ -3268,7 +3269,7 @@
                 });
 
                 watch(currentTab, async (nextTab) => {
-                    if (nextTab === 'leaderboard' && user.value && !leaderboardState.hasLoaded) {
+                    if (nextTab === 'leaderboard' && !leaderboardState.hasLoaded) {
                         try {
                             await loadLeaderboardData({ silent: true, preserveExisting: true });
                         } catch (_err) {
@@ -3290,6 +3291,8 @@
 
                 onMounted(() => {
                     checkAuth();
+                    loadDashboardData().catch(err => console.error('[dashboard init failed]', err));
+                    loadLeaderboardData({ silent: true, preserveExisting: true }).catch(err => console.error('[leaderboard init failed]', err));
                     loadPublicAnnouncements().catch(err => console.error('[announcements init failed]', err));
                     connectAnnouncementFeed();
                     pollTimer = setInterval(safePoll, 3000);

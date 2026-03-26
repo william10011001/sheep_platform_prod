@@ -481,6 +481,56 @@ def test_dashboard_exposes_global_combo_counters(admin_client):
     assert body["global_mined_combo_count"] == 42
 
 
+def test_public_dashboard_exposes_global_runtime_and_announcements_without_auth(admin_client):
+    client = admin_client["client"]
+    db_module = admin_client["db"]
+    user_id = admin_client["user_id"]
+
+    updated_at = "2026-03-26T13:20:27+00:00"
+    db_module.save_runtime_portfolio_snapshot(
+        scope="global",
+        published_by=int(user_id),
+        source="holy_grail_cached_in_progress",
+        updated_at=updated_at,
+        items=[
+            {
+                "rank": 1,
+                "strategy_key": "public-btc-runtime",
+                "strategy_id": 9001,
+                "family": "EMA_Cross",
+                "symbol": "BTC_USDT",
+                "direction": "long",
+                "interval": "30m",
+                "stake_pct": 12.5,
+                "sharpe": 1.84,
+                "total_return_pct": 32.1,
+                "max_drawdown_pct": 8.4,
+            }
+        ],
+        summary={"position_items": []},
+    )
+    db_module.create_announcement(
+        title="公開首頁公告",
+        preview_text="公開 dashboard 應可直接讀到這則公告。",
+        body_markdown="公開 dashboard 應可直接讀到這則公告。",
+        body_html="<p>公開 dashboard 應可直接讀到這則公告。</p>",
+        author_user_id=int(user_id),
+        status="published",
+        slug="public-dashboard-announcement",
+    )
+
+    dashboard = client.get("/dashboard")
+    assert dashboard.status_code == 200, dashboard.text
+    body = dashboard.json()
+    assert body["global_live_strategy_count"] == 1
+    assert body["global_runtime_portfolio_count"] == 1
+    assert body["global_runtime_portfolio_updated_at"] == updated_at
+    assert body["global_runtime_portfolio_items"][0]["strategy_id"] == 9001
+    assert body["announcements"][0]["slug"] == "public-dashboard-announcement"
+    assert body["dashboard_version"]
+    assert body["announcement_version"]
+
+
 def test_task_progress_summary_backfill_populates_columns_in_batches(admin_client):
     db_module = admin_client["db"]
     user_id = admin_client["user_id"]
