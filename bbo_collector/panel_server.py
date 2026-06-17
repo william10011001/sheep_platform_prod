@@ -103,22 +103,32 @@ def make_app(state: LiveState, writer: ParquetWriter, token: str = ""):
 
     @web.middleware
     async def auth_mw(request, handler):
-        if token:
-            supplied = (request.headers.get("X-Auth-Token")
-                        or request.cookies.get("bbo_token")
-                        or request.query.get("token"))
-            if not supplied or not hmac.compare_digest(supplied, token):
-                return web.json_response({"error": "unauthorized"}, status=401)
-        return await handler(request)
+        if not token or request.path == "/login":
+            return await handler(request)
+        supplied = request.headers.get("X-Auth-Token") or request.cookies.get("bbo_token")
+        if supplied and hmac.compare_digest(supplied, token):
+            return await handler(request)
+        # browser navigations -> login page; API -> 401 (token never in URL)
+        if request.method == "GET" and "text/html" in request.headers.get("Accept", ""):
+            raise web.HTTPFound("/login")
+        return web.json_response({"error": "unauthorized"}, status=401)
 
     app = web.Application(middlewares=[auth_mw])
 
-    async def index(request):
-        resp = web.Response(text=HTML, content_type="text/html")
-        if token and request.query.get("token") == token:
-            # browser logged in via ?token=... -> drop a cookie so the URL can be clean
+    async def index(_):
+        return web.Response(text=HTML, content_type="text/html")
+
+    async def login_get(request):
+        err = "<p style='color:#ff6b6b'>wrong token</p>" if request.query.get("e") else ""
+        return web.Response(text=LOGIN_HTML.replace("<!--ERR-->", err), content_type="text/html")
+
+    async def login_post(request):
+        data = await request.post()
+        if token and hmac.compare_digest(data.get("token", ""), token):
+            resp = web.HTTPFound("/")
             resp.set_cookie("bbo_token", token, httponly=True, samesite="Lax", max_age=2592000)
-        return resp
+            return resp
+        raise web.HTTPFound("/login?e=1")
 
     async def overview(_):
         return web.json_response({
@@ -150,7 +160,8 @@ def make_app(state: LiveState, writer: ParquetWriter, token: str = ""):
             return web.json_response({"ok": False, "err": str(e)}, status=400)
 
     app.add_routes([
-        web.get("/", index), web.get("/api/overview", overview),
+        web.get("/", index), web.get("/login", login_get), web.post("/login", login_post),
+        web.get("/api/overview", overview),
         web.get("/api/book", book), web.get("/api/symbols", symbols),
         web.get("/api/devices", devices), web.post("/api/ingest", ingest),
     ])
@@ -210,21 +221,37 @@ def main():
     ap.add_argument("--port", type=int, default=8800)
     ap.add_argument("--max-symbols", type=int, default=0)
     ap.add_argument("--node-id", default="local")
-    ap.add_argument("--token", default=os.environ.get("BBO_PANEL_TOKEN", ""),
-                    help="shared auth token (or env BBO_PANEL_TOKEN); empty = no auth")
+    ap.add_argument("--token-file", default=os.environ.get("BBO_PANEL_TOKEN_FILE", ""),
+                    help="path to a file containing the auth token (preferred — keeps it out of cmdline/URL)")
+    ap.add_argument("--token", default="", help="auth token (avoid on cmdline; prefer --token-file or env BBO_PANEL_TOKEN)")
     ap.add_argument("--hub-url", default="", help="if set, push this node's metrics to that hub")
     ap.add_argument("--push-every", type=float, default=5.0)
     a = ap.parse_args()
+    token = a.token or os.environ.get("BBO_PANEL_TOKEN", "")
+    if a.token_file:
+        token = open(a.token_file, encoding="utf-8").read().strip()
     names = list(REGISTRY) if a.exchanges == "all" else [x.strip() for x in a.exchanges.split(",")]
     bad = [n for n in names if n not in REGISTRY]
     if bad:
         raise SystemExit(f"unknown: {bad}")
     try:
         asyncio.run(serve(names, a.out, a.host, a.port, a.max_symbols or None, a.node_id,
-                          a.token, a.hub_url, a.push_every))
+                          token, a.hub_url, a.push_every))
     except KeyboardInterrupt:
         print("\nstopped.")
 
+
+LOGIN_HTML = r"""<!doctype html><html><head><meta charset=utf-8><title>BBO Panel — login</title>
+<style>body{background:#0b0e14;color:#cdd6e4;font:14px ui-monospace,monospace;display:flex;
+height:100vh;margin:0;align-items:center;justify-content:center}
+form{background:#0e1320;border:1px solid #1c2330;padding:28px;border-radius:8px;text-align:center}
+input{background:#0b0e14;color:#cdd6e4;border:1px solid #1c2330;padding:8px;width:260px;font-family:inherit}
+button{background:#5aa9ff;color:#06101f;border:0;padding:8px 16px;margin-top:10px;cursor:pointer;border-radius:4px}
+h2{color:#5aa9ff;margin:0 0 14px}</style></head><body>
+<form method=post action=/login>
+<h2>📡 BBO Panel</h2><!--ERR-->
+<input type=password name=token placeholder="enter token" autofocus autocomplete=current-password>
+<br><button>unlock</button></form></body></html>"""
 
 HTML = r"""<!doctype html><html><head><meta charset=utf-8>
 <title>BBO Panel</title><style>

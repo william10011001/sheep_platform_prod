@@ -33,11 +33,12 @@ python node_agent.py --panel-url http://<面板機IP>:8800 --node-id 5090-home
 面板「Device comparison」表會逐交易所以綠底標出 RTT 最低的裝置。
 完整多機部署(hub 放 5090 + 網域 + 隧道 + token 認證 + Parquet 彙整 R2/S3):見 [../deploy/DEPLOY.md](../deploy/DEPLOY.md)。
 
-跑全套(hub + spoke + 認證):
+跑全套(hub + spoke + 認證)。token 放檔案(repo 外),不進指令/網址:
 ```bash
-# 5090 = hub:  set BBO_PANEL_TOKEN=<TOKEN>;  python -m bbo_collector.panel_server --exchanges all --node-id 5090-home
-# 5050/AWS = spoke:  python -m bbo_collector.panel_server --exchanges all --node-id aws-tokyo --hub-url https://panel.<域名> --token <TOKEN>
-# 看板:  https://panel.<域名>/?token=<TOKEN>
+# 0) 每台寫同一把 token 到檔案:  python -c "import secrets;print(secrets.token_urlsafe(32))" > C:\SheepNode\panel_token.txt
+# 5090 = hub:    python -m bbo_collector.panel_server --exchanges all --node-id 5090-home --token-file C:\SheepNode\panel_token.txt
+# 5050/AWS=spoke: python -m bbo_collector.panel_server --exchanges all --node-id aws-tokyo --hub-url https://panel.<域名> --token-file ~/panel_token.txt
+# 看板:  開 https://panel.<域名> → /login 登入頁貼 token(POST,不進網址)
 # 彙整:  python sync_parquet.py --root data/bbo --bucket bbo-archive --prefix node=5090 --endpoint-url https://<ACCT>.r2.cloudflarestorage.com --interval 300
 ```
 > 註:`feed-lag`(交易所事件時間→本地)對某些全市場feed(如 KuCoin ticker:all 的 time=最後成交時間)會被冷門幣的舊時間戳灌大;**衡量機器延遲請看 RTT 與 proc µs 這兩個乾淨指標**。

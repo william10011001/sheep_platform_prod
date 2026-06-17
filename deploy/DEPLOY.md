@@ -6,14 +6,18 @@
 
 ---
 
-## 0) 先產生一把 token(三台共用同一把)
+## 0) 產生 token 並「存進檔案」(不放進指令或網址)
 
-這把 token 就是面板的「鑰匙」。隨便產一串長亂碼,三台都用它:
+token 是面板鑰匙。**它不該出現在指令參數、shell 歷史或網址**,所以我們把它寫進一個檔案,
+放在 repo 外面(git 看不到),三台各放一份**相同內容**的檔。
 
-```bash
-python -c "import secrets; print(secrets.token_urlsafe(32))"
-# 例: 7Qн...（複製這串,以下用 <TOKEN> 代表）
+```powershell
+# 在每台機器(這裡示範 5090):把同一把 token 寫到 repo 外的檔案
+python -c "import secrets; print(secrets.token_urlsafe(32))" | Out-File -Encoding ascii C:\SheepNode\panel_token.txt
+# 第一次在 5090 產生後,把這檔的內容複製到 5050 / AWS 各自的 panel_token.txt(內容要一樣)
+# Linux(AWS): echo '貼上同一串' > ~/panel_token.txt && chmod 600 ~/panel_token.txt
 ```
+> 指令裡只會出現「檔案路徑」(`C:\SheepNode\panel_token.txt`),那不是祕密;真正的 token 只在檔案裡。
 
 ---
 
@@ -22,8 +26,7 @@ python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```powershell
 # 在 5090(Windows)
 pip install aiohttp pyarrow
-$env:BBO_PANEL_TOKEN="<TOKEN>"
-python -m bbo_collector.panel_server --exchanges all --out data\bbo --port 8800 --node-id 5090-home
+python -m bbo_collector.panel_server --exchanges all --out data\bbo --port 8800 --node-id 5090-home --token-file C:\SheepNode\panel_token.txt
 ```
 
 接著把面板接上網域(用你**既有**的隧道,不要新開):
@@ -42,28 +45,29 @@ python -m bbo_collector.panel_server --exchanges all --out data\bbo --port 8800 
 兩台都這樣跑(換 `--node-id`),它們會**各自直連交易所、各自在本地錄 Parquet**,同時每 5 秒把延遲/健康摘要推回 5090 面板:
 
 ```bash
-# 5050 筆電
-set BBO_PANEL_TOKEN=<TOKEN>   &  python -m bbo_collector.panel_server --exchanges all --out data/bbo --node-id 5050-laptop --hub-url https://panel.<你的網域> --token <TOKEN>
+# 5050 筆電(token 從檔案讀,不進指令)
+python -m bbo_collector.panel_server --exchanges all --out data/bbo --node-id 5050-laptop --hub-url https://panel.<你的網域> --token-file C:\SheepNode\panel_token.txt
 
 # AWS 東京(Linux)
-BBO_PANEL_TOKEN=<TOKEN> python3 -m bbo_collector.panel_server --exchanges all --out ~/data/bbo --node-id aws-tokyo --hub-url https://panel.<你的網域> --token <TOKEN>
+python3 -m bbo_collector.panel_server --exchanges all --out ~/data/bbo --node-id aws-tokyo --hub-url https://panel.<你的網域> --token-file ~/panel_token.txt
 ```
 
-> 只想比延遲、不想在那台跑採集器?改用零依賴的 latency 探針:
-> `python node_agent.py --panel-url https://panel.<你的網域> --node-id aws-tokyo --token <TOKEN>`
+> 只想比延遲、不想在那台跑採集器?改用零依賴的 latency 探針(一樣讀檔):
+> `python node_agent.py --panel-url https://panel.<你的網域> --node-id aws-tokyo --token-file ~/panel_token.txt`
 
 AWS 設成常駐(systemd)範例見本專案 README;5090/5050 用你既有看門狗或 NSSM。
 
 ---
 
-## 3) 看面板
+## 3) 看面板(登入頁,網址不帶 token)
 
-瀏覽器開:`https://panel.<你的網域>/?token=<TOKEN>`
-→ 第一次帶 `?token=` 會自動種 cookie,之後直接開 `https://panel.<你的網域>` 即可。
-→ 「Device comparison」會逐交易所綠底標出 **RTT 最低的機器**,並顯示每台的 updates/s、live、uptime、drops。
+瀏覽器開:`https://panel.<你的網域>`
+→ 沒登入會自動導到 `/login`,在密碼欄貼上你的 token(用 POST 送出,**不會進網址/歷史**),按 unlock。
+→ 之後靠 cookie 自動登入(30 天),直接開 `https://panel.<你的網域>` 即可。
+→ 「Device comparison」逐交易所綠底標出 **RTT 最低的機器**,並顯示每台 updates/s、live、uptime、drops。
 
-(進階)想再加一層登入頁:Cloudflare Zero Trust → Access → 對 `panel.<你的網域>` 建 policy。
-**但要把 `/api/ingest` 這條路徑排除**(或改用 service token),否則 5050/AWS 推不進來。app 層的 token 已經保護了所有路徑,所以 CF Access 是「可選的額外一層」。
+(進階)想用 Email/SSO 登入而不用記 token:Cloudflare Zero Trust → Access → 對 `panel.<你的網域>` 建 policy。
+**但要把 `/api/ingest` 設成 Bypass**(否則 5050/AWS 推不進來);app 層 token 仍保護它,所以 CF Access 是可選的額外一層。
 
 ---
 
@@ -95,8 +99,10 @@ python sync_parquet.py --root data/bbo --bucket bbo-archive --prefix node=5090 \
 ---
 
 ## 安全檢查清單(對外前必看)
-- [ ] 三台都帶 `--token <TOKEN>`(或 `BBO_PANEL_TOKEN`),面板啟動訊息要顯示 `Auth: ON`。
+- [ ] 三台都用 `--token-file`(token 在檔案、**不在指令也不在網址**),面板啟動訊息顯示 `Auth: ON`。
+- [ ] `panel_token.txt` 放在 repo 外、別 `git add`;Linux 設 `chmod 600`。
+- [ ] 瀏覽器走 `/login` 登入頁(token 用 POST 送、不進網址/歷史)。
 - [ ] 未設 token 時**只准綁 localhost**,別對外。
-- [ ] `/api/ingest` 已被 token 保護(別讓任何人灌假資料)。
+- [ ] `/api/ingest` 已被 token header 保護(別讓任何人灌假資料)。
 - [ ] R2/S3 金鑰只放需要的機器,別進 git。
-- [ ] (可選)Cloudflare Access 加在瀏覽器路徑、排除 `/api/ingest`。
+- [ ] (可選)Cloudflare Access 加在瀏覽器路徑、把 `/api/ingest` 設 Bypass。

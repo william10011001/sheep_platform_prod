@@ -9,6 +9,7 @@ running BBO panel for side-by-side device comparison. No aiohttp/pyarrow needed.
 """
 import argparse
 import json
+import os
 import socket
 import time
 import urllib.request
@@ -72,13 +73,18 @@ def main():
     ap.add_argument("--node-id", required=True)
     ap.add_argument("--interval", type=float, default=15.0)
     ap.add_argument("--samples", type=int, default=8)
-    ap.add_argument("--token", default="", help="panel auth token (if the hub requires one)")
+    ap.add_argument("--token-file", default=os.environ.get("BBO_PANEL_TOKEN_FILE", ""),
+                    help="path to a file with the token (preferred — keeps it off the cmdline)")
+    ap.add_argument("--token", default="", help="token (avoid on cmdline; prefer --token-file or env BBO_PANEL_TOKEN)")
     ap.add_argument("--once", action="store_true")
     a = ap.parse_args()
+    token = a.token or os.environ.get("BBO_PANEL_TOKEN", "")
+    if a.token_file:
+        token = open(a.token_file, encoding="utf-8").read().strip()
     url = a.panel_url.rstrip("/") + "/api/ingest"
     headers = {"Content-Type": "application/json"}
-    if a.token:
-        headers["X-Auth-Token"] = a.token
+    if token:
+        headers["X-Auth-Token"] = token
     started = time.time()
     while True:
         rtt = measure(a.samples)
