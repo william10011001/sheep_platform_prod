@@ -1,0 +1,25 @@
+# Cloudflared ingress for the BBO panel on the 5090.
+#
+# Your 5090 ALREADY runs a cloudflared tunnel for the SheepNode site. DO NOT make
+# a new tunnel — just ADD the panel hostname to the EXISTING tunnel's config.yml
+# (usually  C:\Users\<you>\.cloudflared\config.yml ), keeping all existing
+# entries and leaving the catch-all 404 LAST.
+#
+# Then map DNS once:
+#     cloudflared tunnel route dns <TUNNEL_ID> panel.<your-domain>
+# and restart the tunnel service.
+
+tunnel: <TUNNEL_ID>
+credentials-file: C:\Users\<you>\.cloudflared\<TUNNEL_ID>.json
+
+ingress:
+  # --- NEW: the BBO panel ---
+  - hostname: panel.<your-domain>
+    service: http://localhost:8800
+
+  # --- keep your existing SheepNode entries here, unchanged ---
+  # - hostname: <existing-sheepnode-host>
+  #   service: http://localhost:<existing-port>
+
+  # catch-all MUST stay last
+  - service: http_status:404
