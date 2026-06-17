@@ -91,10 +91,14 @@ class LiveState:
             c[sym] += 1
         return [s for s, _ in sorted(c.items(), key=lambda kv: -kv[1])[:n]]
 
-    def book(self, symbol, fresh_ms=2000.0):
-        """Cross-exchange top-of-book. The arb edge is computed ONLY from venues
-        whose quote is fresh (age <= fresh_ms); stale quotes produce phantom
-        edges (e.g. a 48s-old thin quote) and must never drive a signal."""
+    def book(self, symbol, fresh_ms=2000.0, dev_bps=5.0):
+        """Cross-exchange top-of-book with TWO staleness guards:
+          - receive staleness: age (since we last got a message) > fresh_ms
+          - content staleness: mid deviates from the cross-venue consensus
+            (median) by more than dev_bps — catches a venue that keeps
+            re-sending an old price (e.g. 30s-lagged feed) which age can't see.
+        The headline edge uses only venues that pass BOTH (fresh & in-consensus),
+        so a laggy outlier can't fabricate a phantom edge."""
         now_ns = time.time_ns()
         venues = []
         for (ex, sym), v in self.latest.items():
@@ -108,17 +112,25 @@ class LiveState:
                 })
         venues.sort(key=lambda r: r["bid"], reverse=True)
         fresh = [v for v in venues if not v["stale"]]
+        mids = sorted(((x["bid"] + x["ask"]) / 2) for x in fresh)
+        consensus = mids[len(mids) // 2] if mids else None
+        for v in venues:
+            mid = (v["bid"] + v["ask"]) / 2
+            v["dev_bps"] = round(1e4 * (mid - consensus) / consensus, 2) if consensus else None
+            v["off"] = bool(consensus and not v["stale"]
+                            and v["dev_bps"] is not None and abs(v["dev_bps"]) > dev_bps)
+        good = [v for v in fresh if not v["off"]]
         edge = None
-        if len(fresh) >= 2:
-            best_bid = max(fresh, key=lambda r: r["bid"])
-            best_ask = min(fresh, key=lambda r: r["ask"])
+        if len(good) >= 2:
+            best_bid = max(good, key=lambda r: r["bid"])
+            best_ask = min(good, key=lambda r: r["ask"])
             e = best_bid["bid"] - best_ask["ask"]
             edge = {"best_bid_ex": best_bid["exchange"], "best_bid": best_bid["bid"],
                     "best_ask_ex": best_ask["exchange"], "best_ask": best_ask["ask"],
-                    "edge": e, "edge_bps": round(1e4 * e / best_ask["ask"], 2) if best_ask["ask"] else None,
-                    "fresh_venues": len(fresh)}
-        return {"symbol": symbol, "venues": venues, "edge": edge,
-                "fresh_ms": fresh_ms, "fresh_venues": len(fresh)}
+                    "edge": e, "edge_bps": round(1e4 * e / best_ask["ask"], 2) if best_ask["ask"] else None}
+        return {"symbol": symbol, "venues": venues, "edge": edge, "fresh_ms": fresh_ms,
+                "dev_bps": dev_bps, "consensus": consensus,
+                "fresh_venues": len(fresh), "in_consensus": len(good)}
 
     # ---- multi-device ----
     def self_report(self) -> dict:
