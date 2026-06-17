@@ -91,27 +91,34 @@ class LiveState:
             c[sym] += 1
         return [s for s, _ in sorted(c.items(), key=lambda kv: -kv[1])[:n]]
 
-    def book(self, symbol):
+    def book(self, symbol, fresh_ms=2000.0):
+        """Cross-exchange top-of-book. The arb edge is computed ONLY from venues
+        whose quote is fresh (age <= fresh_ms); stale quotes produce phantom
+        edges (e.g. a 48s-old thin quote) and must never drive a signal."""
         now_ns = time.time_ns()
         venues = []
         for (ex, sym), v in self.latest.items():
             if sym == symbol and v[0] and v[1]:
+                age = (now_ns - v[5]) / 1e6
                 venues.append({
                     "exchange": ex, "bid": v[0], "ask": v[1], "bidq": v[2], "askq": v[3],
-                    "age_ms": round((now_ns - v[5]) / 1e6, 1),
+                    "age_ms": round(age, 1), "stale": age > fresh_ms,
                     "x_ms": round(v[6], 2),
                     "feed_lag_ms": round((v[5] - v[4]) / 1e6, 1) if v[4] and v[4] > _NS_2001 else None,
                 })
         venues.sort(key=lambda r: r["bid"], reverse=True)
+        fresh = [v for v in venues if not v["stale"]]
         edge = None
-        if len(venues) >= 2:
-            best_bid = max(venues, key=lambda r: r["bid"])
-            best_ask = min(venues, key=lambda r: r["ask"])
+        if len(fresh) >= 2:
+            best_bid = max(fresh, key=lambda r: r["bid"])
+            best_ask = min(fresh, key=lambda r: r["ask"])
             e = best_bid["bid"] - best_ask["ask"]
             edge = {"best_bid_ex": best_bid["exchange"], "best_bid": best_bid["bid"],
                     "best_ask_ex": best_ask["exchange"], "best_ask": best_ask["ask"],
-                    "edge": e, "edge_bps": round(1e4 * e / best_ask["ask"], 2) if best_ask["ask"] else None}
-        return {"symbol": symbol, "venues": venues, "edge": edge}
+                    "edge": e, "edge_bps": round(1e4 * e / best_ask["ask"], 2) if best_ask["ask"] else None,
+                    "fresh_venues": len(fresh)}
+        return {"symbol": symbol, "venues": venues, "edge": edge,
+                "fresh_ms": fresh_ms, "fresh_venues": len(fresh)}
 
     # ---- multi-device ----
     def self_report(self) -> dict:

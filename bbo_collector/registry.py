@@ -281,7 +281,7 @@ reg(Adapter(
 # ================================= XT ===============================
 reg(Adapter(
     name="xt", ws_url="wss://stream.xt.com/public", mode="per_symbol",
-    parse=json_parser("data", "s", "b[0][0]", "b[0][1]", "a[0][0]", "a[0][1]", "t", 1e6),
+    parse=json_parser("data", "s", "b[0][0]", "b[0][1]", "a[0][0]", "a[0][1]", "none"),  # XT depth 't' is not push time
     subscribe=lambda syms: [_sub({"method": "subscribe", "params": [f"depth@{s},5" for s in syms], "id": "1"})],
     symbol_rest="https://sapi.xt.com/v4/public/symbol",
     symbol_extract=lambda j: [(make_canon("underscore")(s["symbol"]), s["symbol"])

@@ -130,7 +130,11 @@ def make_app(state: LiveState, writer: ParquetWriter, token: str = ""):
         })
 
     async def book(req):
-        return web.json_response(state.book(req.query.get("symbol", "BTC/USDT")))
+        try:
+            fresh = float(req.query.get("fresh_ms", 2000))
+        except ValueError:
+            fresh = 2000.0
+        return web.json_response(state.book(req.query.get("symbol", "BTC/USDT"), fresh))
 
     async def symbols(_):
         return web.json_response({"symbols": state.top_symbols()})
@@ -233,7 +237,7 @@ table{width:calc(100% - 24px);margin:0 12px;border-collapse:collapse}
 th,td{text-align:right;padding:3px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
 th{color:var(--mut);font-weight:400}td:first-child,th:first-child{text-align:left}
 .live{color:var(--grn)}.dead{color:var(--red)}.mut{color:var(--mut)}.grn{color:var(--grn)}.red{color:var(--red)}.warn{color:var(--warn)}
-.best{background:rgba(57,217,138,.14)}select{background:#0e1320;color:var(--fg);border:1px solid var(--line);padding:4px;font-family:inherit}
+.best{background:rgba(57,217,138,.14)}.stale{opacity:.4}select{background:#0e1320;color:var(--fg);border:1px solid var(--line);padding:4px;font-family:inherit}
 .bar{height:6px;background:var(--acc);border-radius:3px;display:inline-block;vertical-align:middle}
 </style></head><body>
 <header>
@@ -284,18 +288,19 @@ async function book(){const d=await j('/api/book?symbol='+encodeURIComponent(cur
   const bb=d.edge?d.edge.best_bid:null, ba=d.edge?d.edge.best_ask:null;
   $('#booktbl tbody').innerHTML=d.venues.map(v=>{
     const sp=v.ask&&v.bid?1e4*(v.ask-v.bid)/v.ask:null;
-    return `<tr>
-    <td>${v.exchange}</td>
-    <td class=${d.edge&&v.exchange==d.edge.best_bid_ex?'best grn':''}>${fmt(v.bid,8)}</td>
+    return `<tr class=${v.stale?'stale':''}>
+    <td>${v.exchange}${v.stale?' <span class=red>stale</span>':''}</td>
+    <td class=${!v.stale&&d.edge&&v.exchange==d.edge.best_bid_ex?'best grn':''}>${fmt(v.bid,8)}</td>
     <td class=mut>${fmt(v.bidq,4)}</td>
-    <td class=${d.edge&&v.exchange==d.edge.best_ask_ex?'best red':''}>${fmt(v.ask,8)}</td>
+    <td class=${!v.stale&&d.edge&&v.exchange==d.edge.best_ask_ex?'best red':''}>${fmt(v.ask,8)}</td>
     <td class=mut>${fmt(v.askq,4)}</td>
     <td>${fmt(sp,2)}</td><td class=mut>${fmt(v.x_ms,1)}</td>
-    <td class=${v.age_ms>2000?'warn':'mut'}>${fmt(v.age_ms)}</td><td>${fmt(v.feed_lag_ms)}</td></tr>`}).join('');
+    <td class=${v.stale?'red':'mut'}>${fmt(v.age_ms)}</td><td>${fmt(v.feed_lag_ms)}</td></tr>`}).join('');
   $('#edge').innerHTML=d.edge?`&nbsp; best bid <b class=grn>${d.edge.best_bid_ex} ${fmt(d.edge.best_bid,2)}</b>`
     +` · best ask <b class=red>${d.edge.best_ask_ex} ${fmt(d.edge.best_ask,2)}</b>`
     +` · edge <b class=${d.edge.edge>0?'grn':'mut'}>${fmt(d.edge.edge,4)} (${fmt(d.edge.edge_bps,2)} bps)</b>`
-    +` · ${d.venues.length} venues`:'';}
+    +` · <span class=mut>${d.edge.fresh_venues} fresh / ${d.venues.length} venues (age&lt;${d.fresh_ms}ms)</span>`
+    :`&nbsp;<span class=mut>no edge — only ${d.fresh_venues}/${d.venues.length} venues fresh (age&lt;${d.fresh_ms}ms)</span>`;}
 async function devices(){const d=await j('/api/devices');if(!d)return;
   const ids=d.nodes.map(n=>n.node_id);
   $('#devtbl thead tr').innerHTML='<th>exchange</th>'+d.nodes.map(n=>
