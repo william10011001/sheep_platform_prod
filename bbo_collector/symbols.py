@@ -75,7 +75,7 @@ def make_allow(bases: set, quotes):
         else set(q.strip().upper() for q in qlist if q.strip())
 
     def allow(canonical: str) -> bool:
-        if "/" not in canonical:
+        if not canonical or "/" not in canonical:
             return False
         b, q = canonical.split("/", 1)
         if b not in bset:
