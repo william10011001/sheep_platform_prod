@@ -22,7 +22,7 @@ from .schema import BBO_SCHEMA, COLUMNS
 
 
 class ParquetWriter:
-    def __init__(self, root: str, flush_rows: int = 50_000, flush_secs: float = 2.0,
+    def __init__(self, root: str, flush_rows: int = 1_000_000, flush_secs: float = 30.0,
                  compression: str = "zstd"):
         self.root = root
         self.flush_rows = flush_rows
