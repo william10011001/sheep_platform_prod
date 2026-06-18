@@ -148,13 +148,13 @@ def main():
              f"~ {time.strftime('%m-%d %H:%M:%S', time.localtime(gmax/NS))}   共 {span/60:.1f} 分鐘")
     emit(f"幣種總數: {len(sym_ex):,}")
 
-    emit("\n--- 各交易所(每秒筆為平均) ---")
-    emit(f"{'交易所':<11}{'估算筆數':>12}{'幣種':>7}{'每秒筆':>9}{'交叉異常':>9}{'中位feedlag(ms)':>16}")
+    emit("\n--- 各交易所(每秒筆=真實估算;交叉異常=資料壞掉的筆數,越少越好) ---")
+    emit(f"{'交易所':<11}{'估算筆數':>14}{'幣種':>7}{'每秒筆':>10}{'交叉異常':>12}{'中位feedlag(ms)':>16}")
     for ex in sorted(ex_rows, key=lambda e: -ex_rows[e]):
         exspan = (ex_tmax[ex] - ex_tmin[ex]) / NS or 1
         lagm = med(ex_lag[ex])
-        emit(f"{ex:<11}{int(ex_rows[ex]*scale):>12,}{len(ex_syms[ex]):>7}{ex_rows[ex]/exspan:>9.1f}"
-             f"{int(ex_crossed[ex]*scale):>9,}{(f'{lagm:.0f}' if lagm is not None else '-'):>16}")
+        emit(f"{ex:<11}{int(ex_rows[ex]*scale):>14,}{len(ex_syms[ex]):>7}{ex_rows[ex]*scale/exspan:>10.0f}"
+             f"{int(ex_crossed[ex]*scale):>12,}{(f'{lagm:.0f}' if lagm is not None else '-'):>16}")
 
     tot_cross, tot_both = sum(ex_crossed.values()), sum(ex_both.values())
     emit(f"\n資料品質: 取樣中有買賣價 {tot_both:,} 筆, 交叉(買>賣)異常 {tot_cross} 筆 "

@@ -132,6 +132,24 @@ def poloniex_parse(obj, outer=None, state=None):
             continue
         bb = max(bk["bids"], key=float)
         ba = min(bk["asks"], key=float)
+        # Repair a crossed book (best_bid >= best_ask) caused by a missed level
+        # removal over a long-lived delta feed: a stale ask sitting at/below the
+        # best bid can't be real, so drop those; if still crossed the bid was the
+        # stale one, so drop bids at/above the best ask. Mutates bk so it self-heals.
+        if float(bb) >= float(ba):
+            for p in [p for p in bk["asks"] if float(p) <= float(bb)]:
+                bk["asks"].pop(p, None)
+            if not bk["asks"]:
+                continue
+            ba = min(bk["asks"], key=float)
+            if float(bb) >= float(ba):
+                for p in [p for p in bk["bids"] if float(p) >= float(ba)]:
+                    bk["bids"].pop(p, None)
+                if not bk["bids"]:
+                    continue
+                bb = max(bk["bids"], key=float)
+            if float(bb) >= float(ba):
+                continue  # still crossed -> skip this tick rather than record garbage
         ts = r.get("ts")
         out.append({
             "raw_symbol": sym,
