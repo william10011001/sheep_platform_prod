@@ -47,6 +47,45 @@ def split_nosep(raw: str) -> Optional[str]:
     return None
 
 
+def load_bases(bases_arg: str = "", bases_file: str = "") -> set:
+    """Collect base assets from a comma list and/or a file (one per line; '#'
+    comments and full 'BTC/USDT' lines allowed — only the base is taken)."""
+    out = set()
+    if bases_file:
+        with open(bases_file, encoding="utf-8") as f:
+            for line in f:
+                s = line.strip().upper()
+                if s and not s.startswith("#"):
+                    out.add(s.split("/")[0])
+    for b in (bases_arg or "").split(","):
+        b = b.strip().upper()
+        if b:
+            out.add(b)
+    return out
+
+
+def make_allow(bases: set, quotes):
+    """Build a (canonical 'BASE/QUOTE') -> bool allowlist. Returns None (record
+    everything) when no bases are given. quotes=None/['ALL'] means any quote."""
+    if not bases:
+        return None
+    bset = set(bases)
+    qlist = quotes if isinstance(quotes, (list, set, tuple)) else (quotes or "").split(",")
+    qset = None if (not qlist or any(q.strip().upper() == "ALL" for q in qlist)) \
+        else set(q.strip().upper() for q in qlist if q.strip())
+
+    def allow(canonical: str) -> bool:
+        if "/" not in canonical:
+            return False
+        b, q = canonical.split("/", 1)
+        if b not in bset:
+            return False
+        if qset is not None and q not in qset:
+            return False
+        return True
+    return allow
+
+
 def make_canon(kind: str):
     """kind: 'dash' (BTC-USDT), 'underscore' (BTC_USDT), 'slash' (BTC/USDT),
     'nosep' (BTCUSDT), 'nosep_lower' (btcusdt)."""

@@ -23,6 +23,7 @@ from aiohttp import web
 from .collector import Metrics, run_exchange
 from .live_state import LiveState
 from .registry import REGISTRY
+from .symbols import load_bases, make_allow
 from .writer import ParquetWriter
 
 PROBE_EVERY = 30.0
@@ -170,7 +171,8 @@ def make_app(state: LiveState, writer: ParquetWriter, token: str = ""):
     return app
 
 
-async def serve(exchanges, out, host, port, max_symbols, node_id, token="", hub_url="", push_every=5.0):
+async def serve(exchanges, out, host, port, max_symbols, node_id, token="", hub_url="",
+                push_every=5.0, allow=None):
     state = LiveState(node_id)
     adapters = [REGISTRY[n] for n in exchanges]
     state.metrics = {a.name: Metrics() for a in adapters}
@@ -203,7 +205,7 @@ async def serve(exchanges, out, host, port, max_symbols, node_id, token="", hub_
     for a in adapters:
         tasks.append(asyncio.create_task(
             run_exchange(a, queue, stop, session, state.metrics[a.name],
-                         symbol_cap=max_symbols, live=state)))
+                         symbol_cap=max_symbols, live=state, allow=allow)))
     try:
         await stop.wait()
     finally:
@@ -228,17 +230,23 @@ def main():
     ap.add_argument("--token", default="", help="auth token (avoid on cmdline; prefer --token-file or env BBO_PANEL_TOKEN)")
     ap.add_argument("--hub-url", default="", help="if set, push this node's metrics to that hub")
     ap.add_argument("--push-every", type=float, default=5.0)
+    ap.add_argument("--bases", default="", help="comma list of base coins to record (e.g. BTC,ETH,SOL); empty = all")
+    ap.add_argument("--bases-file", default="", help="file with one base coin per line (e.g. coins_liquid.txt)")
+    ap.add_argument("--quotes", default="USDT,USDC,USD,BTC,ETH", help="quote currencies to keep, or ALL")
     a = ap.parse_args()
     token = a.token or os.environ.get("BBO_PANEL_TOKEN", "")
     if a.token_file:
         token = open(a.token_file, encoding="utf-8").read().strip()
+    allow = make_allow(load_bases(a.bases, a.bases_file), a.quotes)
     names = list(REGISTRY) if a.exchanges == "all" else [x.strip() for x in a.exchanges.split(",")]
     bad = [n for n in names if n not in REGISTRY]
     if bad:
         raise SystemExit(f"unknown: {bad}")
+    if allow:
+        print(f"  Symbol filter: bases={sorted(load_bases(a.bases, a.bases_file))[:8]}... quotes={a.quotes}")
     try:
         asyncio.run(serve(names, a.out, a.host, a.port, a.max_symbols or None, a.node_id,
-                          token, a.hub_url, a.push_every))
+                          token, a.hub_url, a.push_every, allow))
     except KeyboardInterrupt:
         print("\nstopped.")
 

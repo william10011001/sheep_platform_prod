@@ -13,6 +13,7 @@ import aiohttp
 
 from .collector import Metrics, run_exchange
 from .registry import REGISTRY
+from .symbols import load_bases, make_allow
 from .writer import ParquetWriter
 
 
@@ -31,7 +32,7 @@ async def _stats(metrics: dict, writer: ParquetWriter, stop: asyncio.Event, ever
               f"files={writer.files_written}")
 
 
-async def run(exchanges, duration, max_symbols, out, stats_every, queue_max):
+async def run(exchanges, duration, max_symbols, out, stats_every, queue_max, allow=None):
     adapters = [REGISTRY[name] for name in exchanges]
     queue: asyncio.Queue = asyncio.Queue(maxsize=queue_max)
     stop = asyncio.Event()
@@ -44,7 +45,7 @@ async def run(exchanges, duration, max_symbols, out, stats_every, queue_max):
         writer_task = asyncio.create_task(writer.run(queue, stop))
         stats_task = asyncio.create_task(_stats(metrics, writer, stop, stats_every))
         ex_tasks = [asyncio.create_task(
-            run_exchange(a, queue, stop, session, metrics[a.name], symbol_cap=max_symbols))
+            run_exchange(a, queue, stop, session, metrics[a.name], symbol_cap=max_symbols, allow=allow))
             for a in adapters]
 
         if duration:
@@ -84,13 +85,17 @@ def main():
     ap.add_argument("--out", default="data/bbo")
     ap.add_argument("--stats-every", type=float, default=5.0)
     ap.add_argument("--queue-max", type=int, default=500_000)
+    ap.add_argument("--bases", default="", help="comma list of base coins to record; empty = all")
+    ap.add_argument("--bases-file", default="", help="file with one base coin per line")
+    ap.add_argument("--quotes", default="USDT,USDC,USD,BTC,ETH", help="quote currencies to keep, or ALL")
     a = ap.parse_args()
     names = list(REGISTRY) if a.exchanges == "all" else [x.strip() for x in a.exchanges.split(",")]
     bad = [n for n in names if n not in REGISTRY]
     if bad:
         raise SystemExit(f"unknown exchanges: {bad}. known: {list(REGISTRY)}")
-    print(f"exchanges: {names}")
-    asyncio.run(run(names, a.duration, a.max_symbols or None, a.out, a.stats_every, a.queue_max))
+    allow = make_allow(load_bases(a.bases, a.bases_file), a.quotes)
+    print(f"exchanges: {names}" + (f"  (filtered to {len(load_bases(a.bases, a.bases_file))} coins)" if allow else ""))
+    asyncio.run(run(names, a.duration, a.max_symbols or None, a.out, a.stats_every, a.queue_max, allow))
 
 
 if __name__ == "__main__":

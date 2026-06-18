@@ -74,7 +74,7 @@ async def discover_symbols(adapter, session) -> list[tuple[str, str]]:
 
 
 class Connection:
-    def __init__(self, adapter, raw_symbols, queue, stop, metrics, shard=0, live=None):
+    def __init__(self, adapter, raw_symbols, queue, stop, metrics, shard=0, live=None, allow=None):
         self.a = adapter
         self.raw_symbols = raw_symbols       # list of raw ws symbols (per_symbol/list); [] for all
         self.queue = queue
@@ -82,6 +82,7 @@ class Connection:
         self.m = metrics
         self.shard = shard
         self.live = live                     # optional LiveState tap (panel)
+        self.allow = allow                   # optional (canonical) -> bool symbol allowlist
         self.state = {}                      # per-connection state for stateful adapters
 
     async def run(self, session):
@@ -213,6 +214,8 @@ class Connection:
             canonical = a.canon(rawsym) if a.canon else None
             if canonical is None:
                 continue
+            if self.allow is not None and not self.allow(canonical):
+                continue
             if r["bid_px"] is None and r["ask_px"] is None:
                 continue
             if self.live is not None:
@@ -241,10 +244,11 @@ class Connection:
 
 
 async def run_exchange(adapter, queue, stop, session, metrics, symbol_cap=None,
-                       symbol_filter=None, live=None):
+                       symbol_filter=None, live=None, allow=None):
     """Discover symbols, shard, and run all connections for one exchange.
     symbol_cap: keep at most N symbols (smoke testing). symbol_filter: keep only
-    symbols whose canonical id is in this set. live: optional LiveState tap."""
+    symbols whose canonical id is in this set. allow: (canonical)->bool allowlist
+    (also drops non-allowed symbols before subscribing). live: optional LiveState tap."""
     raw_syms = []
     if adapter.mode != "all":
         try:
@@ -252,6 +256,8 @@ async def run_exchange(adapter, queue, stop, session, metrics, symbol_cap=None,
         except Exception:  # noqa
             metrics.errors += 1
             pairs = []
+        if allow is not None:
+            pairs = [(c, r) for c, r in pairs if allow(c)]
         if symbol_filter is not None:
             pairs = [(c, r) for c, r in pairs if c in symbol_filter]
         if symbol_cap:
@@ -266,10 +272,10 @@ async def run_exchange(adapter, queue, stop, session, metrics, symbol_cap=None,
     # shard
     conns = []
     if adapter.mode == "all":
-        conns = [Connection(adapter, [], queue, stop, metrics, 0, live)]
+        conns = [Connection(adapter, [], queue, stop, metrics, 0, live, allow)]
     else:
         cap = adapter.max_symbols_per_conn
         shards = [raw_syms[i:i + cap] for i in range(0, len(raw_syms), cap)] or [[]]
-        conns = [Connection(adapter, sh, queue, stop, metrics, i, live) for i, sh in enumerate(shards)]
+        conns = [Connection(adapter, sh, queue, stop, metrics, i, live, allow) for i, sh in enumerate(shards)]
 
     await asyncio.gather(*(c.run(session) for c in conns))
