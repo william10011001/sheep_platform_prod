@@ -1,10 +1,11 @@
+import gc
 import socket
 import ssl
 import sys
 import time
 import urllib.request
 
-TCP_SAMPLES = 20
+TCP_SAMPLES = 25
 READ_SAMPLES = 6
 TCP_TIMEOUT = 5.0
 READ_TIMEOUT = 8.0
@@ -52,18 +53,27 @@ def resolve(host):
 
 def tcp_rtt(ip, port):
     out = []
-    for _ in range(TCP_SAMPLES):
-        t = time.perf_counter()
-        try:
-            s = socket.create_connection((ip, port), timeout=TCP_TIMEOUT)
-            out.append((time.perf_counter() - t) * 1000.0)
+    try:
+        w = socket.create_connection((ip, port), timeout=TCP_TIMEOUT)
+        w.close()
+    except Exception:
+        pass
+    gc.disable()
+    try:
+        for _ in range(TCP_SAMPLES):
+            t = time.perf_counter()
             try:
-                s.close()
+                s = socket.create_connection((ip, port), timeout=TCP_TIMEOUT)
+                out.append((time.perf_counter() - t) * 1000.0)
+                try:
+                    s.close()
+                except Exception:
+                    pass
             except Exception:
                 pass
-        except Exception:
-            pass
-        time.sleep(0.05)
+            time.sleep(0.05)
+    finally:
+        gc.enable()
     return out
 
 
@@ -93,8 +103,9 @@ def pctl(xs, q):
 def main():
     print("latency_test host=%s tcp_samples=%d read_samples=%d time=%s"
           % (socket.gethostname(), TCP_SAMPLES, READ_SAMPLES, time.strftime("%Y-%m-%d %H:%M:%S")))
-    print("%-11s%-34s%9s%9s%9s%10s%6s" % ("exchange", "host", "rtt_p50", "rtt_p99", "jitter", "read_p50", "ok"))
-    print("-" * 92)
+    print("%-11s%-34s%9s%9s%9s%9s%10s%6s"
+          % ("exchange", "host", "rtt_min", "rtt_p50", "rtt_p99", "jitter", "read_p50", "ok"))
+    print("-" * 101)
     rows = []
     for name, host, port, url in VENUES:
         ip = resolve(host)
@@ -106,24 +117,25 @@ def main():
         if not tcp:
             print("%-11s%-34s%9s" % (name, host, "UNREACH"))
             continue
+        mn = min(tcp)
         p50 = pctl(tcp, 0.50)
         p99 = pctl(tcp, 0.99)
-        jit = p99 - p50
+        jit = p99 - mn
         rp = pctl(rd, 0.50) if rd else float("nan")
-        rows.append((name, host, p50, p99, jit, rp, len(rd)))
+        rows.append((name, host, mn, p50, p99, jit, rp, len(rd)))
     rows.sort(key=lambda r: r[2])
-    for name, host, p50, p99, jit, rp, okn in rows:
+    for name, host, mn, p50, p99, jit, rp, okn in rows:
         star = "*" if name in TIER1 else " "
         rps = ("%.1f" % rp) if rp == rp else "-"
-        print("%-11s%-34s%9.1f%9.1f%9.1f%10s%6d" % (name + star, host, p50, p99, jit, rps, okn))
-    print("-" * 92)
+        print("%-11s%-34s%9.1f%9.1f%9.1f%9.1f%10s%6d" % (name + star, host, mn, p50, p99, jit, rps, okn))
+    print("-" * 101)
     t1 = [r[2] for r in rows if r[0] in TIER1]
     if t1:
-        print("TIER1 venues(*) rtt_p50  best=%.1f  worst=%.1f  mean=%.1f ms"
+        print("TIER1 venues(*) rtt_min  best=%.1f  worst=%.1f  mean=%.1f ms"
               % (min(t1), max(t1), sum(t1) / len(t1)))
-    print("rtt = TCP round-trip to the live data host (network latency, lower=better).")
-    print("read = full HTTPS price-read round-trip. jitter = rtt_p99 - rtt_p50 (stability).")
-    print("Run the same script on each machine and compare.")
+    print("rtt_min = true network floor (use this to compare machines). rtt_p50/p99 include OS jitter.")
+    print("jitter = rtt_p99 - rtt_min. read_p50 = full HTTPS price-read round-trip. lower=better.")
+    print("Run the same script on each machine and compare rtt_min.")
 
 
 if __name__ == "__main__":
