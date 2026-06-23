@@ -43,7 +43,7 @@ After=network-online.target
 Wants=network-online.target
 [Service]
 WorkingDirectory=$APP
-ExecStart=$APP/venv/bin/python -m bbo_collector.main --exchanges $EXCHANGES --bases-file $APP/coins_liquid.txt --quotes $QUOTES --out $DATA
+ExecStart=$APP/venv/bin/python -m bbo_collector.main --exchanges $EXCHANGES --bases-file $APP/coins_liquid.txt --quotes $QUOTES --out $DATA --flush-secs 300
 Restart=always
 RestartSec=5
 [Install]

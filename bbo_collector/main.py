@@ -32,12 +32,13 @@ async def _stats(metrics: dict, writer: ParquetWriter, stop: asyncio.Event, ever
               f"files={writer.files_written}")
 
 
-async def run(exchanges, duration, max_symbols, out, stats_every, queue_max, allow=None):
+async def run(exchanges, duration, max_symbols, out, stats_every, queue_max, allow=None,
+              flush_secs=30.0, flush_rows=1_000_000):
     adapters = [REGISTRY[name] for name in exchanges]
     queue: asyncio.Queue = asyncio.Queue(maxsize=queue_max)
     stop = asyncio.Event()
     metrics = {a.name: Metrics() for a in adapters}
-    writer = ParquetWriter(out)
+    writer = ParquetWriter(out, flush_rows=flush_rows, flush_secs=flush_secs)
 
     connector = aiohttp.TCPConnector(limit=0, ttl_dns_cache=300)
     timeout = aiohttp.ClientTimeout(total=None, sock_connect=30)
@@ -88,6 +89,8 @@ def main():
     ap.add_argument("--bases", default="", help="comma list of base coins to record; empty = all")
     ap.add_argument("--bases-file", default="", help="file with one base coin per line")
     ap.add_argument("--quotes", default="USDT,USDC,USD,BTC,ETH", help="quote currencies to keep, or ALL")
+    ap.add_argument("--flush-secs", type=float, default=30.0, help="parquet flush interval (bigger=fewer files)")
+    ap.add_argument("--flush-rows", type=int, default=1_000_000)
     a = ap.parse_args()
     names = list(REGISTRY) if a.exchanges == "all" else [x.strip() for x in a.exchanges.split(",")]
     bad = [n for n in names if n not in REGISTRY]
@@ -95,7 +98,8 @@ def main():
         raise SystemExit(f"unknown exchanges: {bad}. known: {list(REGISTRY)}")
     allow = make_allow(load_bases(a.bases, a.bases_file), a.quotes)
     print(f"exchanges: {names}" + (f"  (filtered to {len(load_bases(a.bases, a.bases_file))} coins)" if allow else ""))
-    asyncio.run(run(names, a.duration, a.max_symbols or None, a.out, a.stats_every, a.queue_max, allow))
+    asyncio.run(run(names, a.duration, a.max_symbols or None, a.out, a.stats_every, a.queue_max, allow,
+                    a.flush_secs, a.flush_rows))
 
 
 if __name__ == "__main__":
